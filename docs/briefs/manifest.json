@@ -1,0 +1,28 @@
+{
+  "version": "0.2.0",
+  "product": "Visual data analysis through visual, coding and notebook workflows",
+  "scope": "Replacement audience summaries only; previous full handoff not regenerated",
+  "source_basis": [
+    "Current user correction",
+    "Visible conversation",
+    "Retrieved memory references cite:136, cite:138, cite:139"
+  ],
+  "files": [
+    {
+      "path": "designer_summary.md",
+      "purpose": "designer summary"
+    },
+    {
+      "path": "developer_summary.md",
+      "purpose": "developer summary"
+    },
+    {
+      "path": "executive_summary.md",
+      "purpose": "executive summary"
+    },
+    {
+      "path": "visual_analysis_summaries.md",
+      "purpose": "Combined briefs"
+    }
+  ]
+}
