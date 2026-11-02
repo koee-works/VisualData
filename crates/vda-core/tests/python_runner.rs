@@ -94,3 +94,22 @@ fn works_with_a_relative_work_directory() {
     assert_eq!(out, input());
     let _ = std::fs::remove_dir_all(rel);
 }
+
+#[test]
+fn types_survive_the_python_boundary() {
+    // Integers and booleans with missing values must not come back as floats.
+    let t = read_table("id,count,flag,label\n1,3,true,a\n2,,,\n3,7,false,c\n").unwrap();
+    let out = runner("types").run("result = df", &t, Duration::from_secs(30), &AtomicBool::new(false)).unwrap();
+    assert_eq!(out, t);
+    let code = "result = df.assign(double=df['count'] * 2)";
+    let out = runner("types2").run(code, &t, Duration::from_secs(30), &AtomicBool::new(false)).unwrap();
+    assert_eq!(out.schema.field("double").unwrap().dtype, DataType::Int);
+    assert_eq!(out.rows[1][4], Value::Null);
+}
+
+#[test]
+fn reports_results_that_cannot_be_saved() {
+    let code = "result = pd.DataFrame({'mixed': [1, 'a', None]})";
+    let err = runner("unsaveable").run(code, &input(), Duration::from_secs(30), &AtomicBool::new(false)).unwrap_err();
+    assert!(err.to_string().contains("could not be saved as a table"), "{err}");
+}

@@ -9,9 +9,10 @@ An integrated workspace for exploring, transforming, analyzing and visualizing d
 ## Layout
 
 ```
-crates/vda-core/          Rust core: model, compiler, planner, sessions, Python runner
+crates/vda-core/          Rust core: model, compiler, planner, sessions, DuckDB engine, Python runner
   src/                    see STATUS.md for a module map
-  tests/acceptance.rs     the 7-step shared acceptance scenario
+  tests/acceptance.rs     the 7-step shared acceptance scenario (DuckDB engine)
+  tests/equivalence.rs    visual ops: reference engine vs DuckDB, and displayed SQL vs step results
   tests/python_runner.rs  timeout, cancel, memory cap, env isolation, exactness
   examples/slice.rs       runs the slice end to end and writes a project folder
 examples/regional-revenue/sales.csv   sample dataset (60 orders, with missing values)
@@ -20,7 +21,8 @@ docs/adr/                 architecture decision records
 
 ## Run it
 
-Requirements: stable Rust (built with 1.97) and `python3` with pandas on `PATH`.
+Requirements: stable Rust (built with 1.97), a C++ compiler, and `python3` with pandas and pyarrow on `PATH`.
+The first build compiles DuckDB from source (the `bundled` feature), which takes several minutes.
 
 ```sh
 cargo test

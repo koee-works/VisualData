@@ -5,6 +5,11 @@ use crate::model::{AggFunc, Analysis, Step, StepKind, SOURCE_ID};
 use crate::table::{DataType, Field, Schema, Value};
 use crate::Error;
 
+/// CSV import options shared by the DuckDB engine and the inspectable SQL.
+/// Type inference is restricted to the types the core models, so both engines
+/// agree; dates stay text until the core has a date type.
+pub const CSV_OPTIONS: &str = "auto_type_candidates = ['BOOLEAN', 'BIGINT', 'DOUBLE', 'VARCHAR'], header = true";
+
 pub fn quote_ident(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
@@ -167,7 +172,7 @@ pub fn pipeline_sql(analysis: &Analysis, step_id: &str) -> Result<String, Error>
     loop {
         if cursor == SOURCE_ID {
             base = format!(
-                "SELECT * FROM read_csv_auto({})",
+                "SELECT * FROM read_csv({}, {CSV_OPTIONS})",
                 quote_literal(&Value::Text(analysis.source.path.clone()))
             );
             break;
@@ -196,21 +201,40 @@ pub fn pipeline_sql(analysis: &Analysis, step_id: &str) -> Result<String, Error>
         cursor = &step.input;
     }
     chain.reverse();
+    let (last, earlier) = chain.split_last().expect("chain is never empty here");
+    let label = |s: &Step| if s.kind.is_visual() { "visual" } else { "custom SQL" };
     let mut ctes = vec![format!("input_0 AS ({base})")];
-    for (i, step) in chain.iter().enumerate() {
+    for (i, step) in earlier.iter().enumerate() {
         let body = step_sql(&step.kind).expect("chain holds only SQL steps");
         // Each step reads the previous CTE as `input`. The body is wrapped as a
         // subquery so custom SQL with its own WITH clause stays valid.
         let body = format!("WITH input AS (SELECT * FROM input_{i}) SELECT * FROM ({body})");
-        let label = if step.kind.is_visual() { "visual" } else { "custom SQL" };
         ctes.push(format!(
-            "-- step `{}` ({}, {label})\ninput_{} AS ({body})",
+            "-- step `{}` ({}, {})\ninput_{} AS ({body})",
             step.id,
             step.kind.type_name(),
+            label(step),
             i + 1
         ));
     }
-    Ok(format!("WITH\n{}\nSELECT * FROM input_{}", ctes.join(",\n"), chain.len()))
+    ctes.push(format!(
+        "-- step `{}` ({}, {})\ninput AS (SELECT * FROM input_{})",
+        last.id,
+        last.kind.type_name(),
+        label(last),
+        earlier.len()
+    ));
+    // The final step stays at the top level so its ORDER BY is honoured.
+    let body = step_sql(&last.kind).expect("chain holds only SQL steps");
+    let head = ctes.join(",\n");
+    let upper = body.to_ascii_uppercase();
+    Ok(if upper.starts_with("WITH RECURSIVE") {
+        format!("WITH\n{head}\nSELECT * FROM ({body})")
+    } else if upper.starts_with("WITH") && body[4..].starts_with(char::is_whitespace) {
+        format!("WITH\n{head},\n{}", body[4..].trim_start())
+    } else {
+        format!("WITH\n{head}\n{body}")
+    })
 }
 
 #[cfg(test)]

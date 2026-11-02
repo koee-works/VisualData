@@ -8,11 +8,10 @@
 //! Contract with user code: the upstream result is available as `df`
 //! (a pandas DataFrame); the code must assign a DataFrame to `result`.
 //!
-//! TEMPORARY: data crosses the boundary as CSV, which loses types (e.g. an
-//! integer column with NULLs comes back as float). Switch to Parquet when
-//! pyarrow is available; the runner API does not change.
+//! Data crosses the boundary as Parquet. Python reads it with pandas'
+//! nullable dtypes, so an integer column with missing values stays integer.
 
-use crate::csv;
+use crate::duck;
 use crate::table::Table;
 use crate::Error;
 use std::fs;
@@ -25,9 +24,9 @@ const WRAPPER: &str = r#"
 import sys
 inp, out, code_path = sys.argv[1], sys.argv[2], sys.argv[3]
 import pandas as pd
-# round_trip: pandas' default fast float parser is not exact, which would
-# silently change values crossing the boundary.
-df = pd.read_csv(inp, float_precision="round_trip")
+# Nullable dtypes keep integers with missing values as integers (Int64)
+# instead of silently turning them into floats.
+df = pd.read_parquet(inp, dtype_backend="numpy_nullable")
 with open(code_path, encoding="utf-8") as f:
     code = f.read()
 ns = {"df": df, "pd": pd, "__name__": "__vda_step__"}
@@ -36,7 +35,11 @@ result = ns.get("result")
 if not isinstance(result, pd.DataFrame):
     sys.stderr.write("VDA_CONTRACT: the step must assign a pandas DataFrame to `result` (got %s)\n" % type(result).__name__)
     sys.exit(3)
-result.to_csv(out, index=False)
+try:
+    result.to_parquet(out, index=False)
+except Exception as e:
+    sys.stderr.write("VDA_CONTRACT: `result` could not be saved as a table: %s: %s\n" % (type(e).__name__, e))
+    sys.exit(3)
 "#;
 
 #[derive(Debug, Clone)]
@@ -58,7 +61,7 @@ impl PythonRunner {
     /// and recorded in run records for replay.
     pub fn fingerprint(&self) -> Result<String, Error> {
         let out = Command::new(&self.interpreter)
-            .args(["-I", "-c", "import sys, pandas; print('python', sys.version.split()[0], '| pandas', pandas.__version__)"])
+            .args(["-I", "-c", "import sys, pandas, pyarrow; print('python', sys.version.split()[0], '| pandas', pandas.__version__, '| pyarrow', pyarrow.__version__)"])
             .env_clear()
             .output()
             .map_err(|e| Error::Python(format!("cannot start interpreter {:?}: {e}", self.interpreter)))?;
@@ -84,13 +87,13 @@ impl PythonRunner {
 
     fn run_in(&self, dir: &Path, code: &str, input: &Table, timeout: Duration, cancel: &AtomicBool) -> Result<Table, Error> {
         let (inp, out, code_path, wrapper, err_path) = (
-            dir.join("input.csv"),
-            dir.join("output.csv"),
+            dir.join("input.parquet"),
+            dir.join("output.parquet"),
             dir.join("step.py"),
             dir.join("wrapper.py"),
             dir.join("stderr.txt"),
         );
-        fs::write(&inp, csv::write_table(input))?;
+        duck::write_parquet(input, &inp)?;
         fs::write(&code_path, code)?;
         fs::write(&wrapper, WRAPPER)?;
         let stderr_file = fs::File::create(&err_path)?;
@@ -147,8 +150,7 @@ impl PythonRunner {
         if !status.success() {
             return Err(Error::Python(summarize_error(&stderr, status.code())));
         }
-        let text = fs::read_to_string(&out)?;
-        csv::read_table(&text)
+        duck::read_parquet(&out)
     }
 }
 

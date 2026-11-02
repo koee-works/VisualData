@@ -4,6 +4,6 @@ version = "0.1.0"
 edition = "2021"
 description = "Analysis model, planning, staleness and execution orchestration for the visual data analysis app"
 
-# Intentionally std-only for now: crates.io was unreachable when this slice was built.
-# Planned dependencies (see STATUS.md): duckdb, serde/serde_json, sha2, csv.
+# The in-house JSON and SHA-256 modules are still TEMPORARY (see STATUS.md).
 [dependencies]
+duckdb = { version = "=1.20000.1", features = ["bundled", "parquet"] }

@@ -1,5 +1,5 @@
 //! The shared team acceptance scenario from the v0.2.0 briefs, steps 1–7,
-//! run against the reference engine and a real Python interpreter.
+//! run against the DuckDB engine and a real Python interpreter.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -8,7 +8,8 @@ use std::time::{Duration, Instant};
 use vda_core::compile::pipeline_sql;
 use vda_core::csv::read_table;
 use vda_core::demo::regional_revenue;
-use vda_core::engine::ReferenceEngine;
+use vda_core::duck::DuckDbEngine;
+use vda_core::engine::{Engine, ReferenceEngine};
 use vda_core::model::{CmpOp, Predicate, StepKind};
 use vda_core::persist::{load_analysis, save_analysis};
 use vda_core::python::PythonRunner;
@@ -30,8 +31,12 @@ fn python(dir: &Path) -> Option<PythonRunner> {
     Some(PythonRunner::new("python3", dir.join(".work")))
 }
 
+fn engine() -> Box<dyn Engine> {
+    Box::new(DuckDbEngine::new().unwrap())
+}
+
 fn session(dir: &Path) -> Session {
-    Session::new(regional_revenue("sales.csv"), dir, Box::new(ReferenceEngine), python(dir))
+    Session::new(regional_revenue("sales.csv"), dir, engine(), python(dir))
 }
 
 fn state(s: &Session, id: &str) -> StepState {
@@ -60,7 +65,7 @@ fn step2_visual_transform_has_inspectable_sql_and_matches_pandas() {
     assert!(run.succeeded(), "{run:#?}");
 
     let sql = pipeline_sql(&s.analysis, "by_region").unwrap();
-    assert!(sql.contains("read_csv_auto('sales.csv')"), "{sql}");
+    assert!(sql.contains("read_csv('sales.csv'"), "{sql}");
     assert!(sql.contains("WHERE \"region\" IS NOT NULL AND \"revenue\" >= 20"), "{sql}");
     assert!(sql.contains("GROUP BY \"region\""), "{sql}");
 
@@ -141,7 +146,7 @@ fn step5_save_reopen_and_clean_replay() {
     assert_eq!(recorded, run);
 
     // Replay in a fresh session with no cached results.
-    let report = replay(&dir, &recorded, Box::new(ReferenceEngine), python(&dir)).unwrap();
+    let report = replay(&dir, &recorded, engine(), python(&dir)).unwrap();
     assert!(report.environment_changes.is_empty(), "{:?}", report.environment_changes);
     assert!(report.fully_reproduced(), "{:?}", report.steps);
     assert!(report.replay_run.steps.iter().all(|r| r.status == RunStatus::Succeeded { cached: false }));
@@ -184,7 +189,7 @@ fn step6_upstream_change_marks_downstream_stale_until_rerun() {
 
     // Replaying the first recording now reports changed inputs, not divergence.
     save_analysis(&s.analysis, &dir).unwrap();
-    let report = replay(&dir, &first, Box::new(ReferenceEngine), python(&dir)).unwrap();
+    let report = replay(&dir, &first, engine(), python(&dir)).unwrap();
     assert!(report.steps.iter().all(|(_, o)| *o == ReplayOutcome::InputsChanged), "{:?}", report.steps);
 
     // Changing the source file also invalidates everything.
@@ -254,21 +259,69 @@ fn step7_cancel_a_long_running_step() {
 }
 
 #[test]
-fn custom_sql_is_an_explicit_unimplemented_boundary() {
+fn custom_sql_step_runs_on_duckdb() {
     let dir = project("sql");
     let mut s = session(&dir);
     s.analysis.steps.push(vda_core::model::Step {
         id: "top".into(),
+        input: "share".into(),
+        label: Some("Top two regions".into()),
+        kind: StepKind::Sql {
+            sql: "WITH ranked AS (SELECT *, row_number() OVER (ORDER BY revenue DESC) AS rank FROM input)\n\
+                  SELECT region, revenue, revenue_share, rank FROM ranked WHERE rank <= 2 ORDER BY rank"
+                .into(),
+        },
+    });
+    let run = s.run_all().unwrap();
+    assert!(run.succeeded(), "{run:#?}");
+    let top = s.output("top").unwrap().as_table().unwrap();
+    assert_eq!(top.rows.len(), 2);
+    assert_eq!(top.rows[0][0], Value::Text("East".into()));
+    assert_eq!(top.schema.field("rank").unwrap().dtype, DataType::Int);
+    // Custom SQL after a Python step: the inspectable SQL starts from the
+    // Python step's materialized output and labels the step as custom.
+    let sql = pipeline_sql(&s.analysis, "top").unwrap();
+    assert!(sql.contains("materialized output of Python step `share`") && sql.contains("custom SQL"), "{sql}");
+
+    // A broken query fails that step with DuckDB's diagnosis, nothing else.
+    if let StepKind::Sql { sql } = &mut s.analysis.step_mut("top").unwrap().kind {
+        *sql = "SELECT regoin FROM input".into();
+    }
+    let run = s.run_all().unwrap();
+    match &run.step("top").unwrap().status {
+        RunStatus::Failed { error } => assert!(error.contains("regoin") && error.contains("step `top`"), "{error}"),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(state(&s, "share_chart"), StepState::Fresh);
+}
+
+#[test]
+fn reference_engine_still_rejects_custom_sql() {
+    let dir = project("sql-ref");
+    let mut s = Session::new(regional_revenue("sales.csv"), &dir, Box::new(ReferenceEngine), python(&dir));
+    s.analysis.steps.push(vda_core::model::Step {
+        id: "top".into(),
         input: "by_region".into(),
         label: None,
-        kind: StepKind::Sql { sql: "SELECT * FROM input ORDER BY revenue DESC LIMIT 2".into() },
+        kind: StepKind::Sql { sql: "SELECT * FROM input LIMIT 2".into() },
     });
     let run = s.run_all().unwrap();
     match &run.step("top").unwrap().status {
         RunStatus::Failed { error } => assert!(error.contains("needs the DuckDB engine"), "{error}"),
         other => panic!("{other:?}"),
     }
-    // Its inspectable SQL still composes with the visual steps before it.
-    let sql = pipeline_sql(&s.analysis, "top").unwrap();
-    assert!(sql.contains("custom SQL") && sql.contains("LIMIT 2"), "{sql}");
+}
+
+#[test]
+fn switching_engines_marks_results_stale() {
+    let dir = project("engine-switch");
+    let mut s = session(&dir);
+    let run = s.run_all().unwrap();
+    assert!(run.succeeded());
+    // The engine version is part of every key, so a run record from one engine
+    // replayed on another reports changed inputs rather than a false match.
+    save_analysis(&s.analysis, &dir).unwrap();
+    let report = replay(&dir, &run, Box::new(ReferenceEngine), python(&dir)).unwrap();
+    assert!(report.environment_changes.iter().any(|c| c.starts_with("engine:")), "{:?}", report.environment_changes);
+    assert!(report.steps.iter().all(|(_, o)| *o == ReplayOutcome::InputsChanged));
 }

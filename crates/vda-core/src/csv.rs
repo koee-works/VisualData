@@ -1,10 +1,7 @@
 //! Minimal RFC 4180 CSV reading (with type inference) and writing.
 //!
-//! TEMPORARY in two roles:
-//! - Source import for the reference engine. The DuckDB engine will use
-//!   `read_csv_auto`, whose inference rules are richer (dates, timestamps).
-//! - Python interchange. CSV loses type information across the boundary;
-//!   it is replaced by Parquet once pyarrow is available (see STATUS.md).
+//! Used by the reference engine only. The DuckDB engine imports with
+//! `read_csv`, restricted to the same candidate types so both engines agree.
 
 use crate::table::{DataType, Field, Schema, Table, Value};
 use crate::Error;

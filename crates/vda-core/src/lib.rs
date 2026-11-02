@@ -6,6 +6,7 @@ pub mod chart;
 pub mod compile;
 pub mod csv;
 pub mod demo;
+pub mod duck;
 pub mod engine;
 pub mod hash;
 pub mod json;

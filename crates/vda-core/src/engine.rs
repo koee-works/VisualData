@@ -4,11 +4,11 @@
 //! desktop app can use embedded DuckDB and a future server can use workers.
 //!
 //! Status:
-//! - `ReferenceEngine`: implemented. Interprets visual steps directly; custom
-//!   SQL is reported as unsupported.
-//! - `DuckDbEngine`: NOT IMPLEMENTED in this slice (crates.io unreachable).
-//!   It will register the upstream result as `input`, run `compile::step_sql`
-//!   (or the user's SQL), and read CSV sources with `read_csv_auto`.
+//! - `duck::DuckDbEngine`: the production engine. Registers the upstream
+//!   result as `input`, runs `compile::step_sql` or the user's SQL.
+//! - `ReferenceEngine`: interprets visual steps directly. It is the
+//!   correctness oracle for DuckDB (see tests/equivalence.rs); custom SQL is
+//!   reported as unsupported.
 
 use crate::compile;
 use crate::csv;

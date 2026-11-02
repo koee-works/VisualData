@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 use vda_core::compile::pipeline_sql;
 use vda_core::demo::regional_revenue;
-use vda_core::engine::ReferenceEngine;
+use vda_core::duck::DuckDbEngine;
 use vda_core::persist::{load_analysis, save_analysis};
 use vda_core::python::PythonRunner;
 use vda_core::session::{replay, Output, Session};
@@ -19,8 +19,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::copy(sample, out.join("sales.csv"))?;
     let python = || Some(PythonRunner::new("python3", out.join(".work")));
 
-    let mut session = Session::new(regional_revenue("sales.csv"), &out, Box::new(ReferenceEngine), python());
-    println!("engine: reference | python: {}", session.python_fingerprint().unwrap_or("unavailable"));
+    let mut session = Session::new(regional_revenue("sales.csv"), &out, Box::new(DuckDbEngine::new()?), python());
+    println!("engine: duckdb {} | python: {}", DuckDbEngine::new()?.version(), session.python_fingerprint().unwrap_or("unavailable"));
 
     let run = session.run_all()?;
     for s in &run.steps {
@@ -38,7 +38,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Reopen from disk and replay in a clean session.
     assert_eq!(load_analysis(&out)?, session.analysis);
-    let report = replay(&out, &run, Box::new(ReferenceEngine), python())?;
+    let report = replay(&out, &run, Box::new(DuckDbEngine::new()?), python())?;
     println!("replay of {}: {}", run_path.display(), if report.fully_reproduced() { "all steps reproduced" } else { "differences found" });
     for (id, outcome) in &report.steps {
         println!("  {id:<12} {outcome:?}");
