@@ -28,7 +28,7 @@ fn project(name: &str) -> PathBuf {
 }
 
 fn python(dir: &Path) -> Option<PythonRunner> {
-    Some(PythonRunner::new("python3", dir.join(".work")))
+    Some(PythonRunner::new(vda_core::python::default_interpreter(), dir.join(".work")))
 }
 
 fn engine() -> Box<dyn Engine> {
@@ -70,7 +70,7 @@ fn step2_visual_transform_has_inspectable_sql_and_matches_pandas() {
     assert!(sql.contains("GROUP BY \"region\""), "{sql}");
 
     // Independent oracle: the same transformation written directly in pandas.
-    let oracle = Command::new("python3")
+    let oracle = Command::new(vda_core::python::default_interpreter())
         .arg("-I")
         .arg("-c")
         .arg(
@@ -324,4 +324,92 @@ fn switching_engines_marks_results_stale() {
     let report = replay(&dir, &run, Box::new(ReferenceEngine), python(&dir)).unwrap();
     assert!(report.environment_changes.iter().any(|c| c.starts_with("engine:")), "{:?}", report.environment_changes);
     assert!(report.steps.iter().all(|(_, o)| *o == ReplayOutcome::InputsChanged));
+}
+
+fn set_min_revenue(s: &mut Session, min: i64) {
+    if let StepKind::Filter { predicates } = &mut s.analysis.step_mut("valid_orders").unwrap().kind {
+        predicates[1] = Predicate { column: "revenue".into(), op: CmpOp::Ge, value: Value::Int(min) };
+    }
+}
+
+#[test]
+fn reopening_a_project_shows_saved_results_without_rerunning() {
+    let dir = project("reopen");
+    let mut s = session(&dir);
+    assert!(s.run_all().unwrap().succeeded());
+    save_analysis(&s.analysis, &dir).unwrap();
+
+    let mut reopened = Session::open(&dir, engine(), python(&dir)).unwrap();
+    for id in ALL {
+        assert_eq!(state(&reopened, id), StepState::Fresh, "{id}");
+        // Identical content after the round trip through Parquet, dates included.
+        assert_eq!(reopened.output(id), s.output(id), "{id}");
+    }
+    let valid = reopened.output("valid_orders").unwrap().as_table().unwrap();
+    assert_eq!(valid.schema.field("order_date").unwrap().dtype, DataType::Date);
+    let run = reopened.run_all().unwrap();
+    assert!(run.steps.iter().all(|r| r.status == RunStatus::Succeeded { cached: true }), "{run:#?}");
+    assert!(run.warnings.is_empty());
+}
+
+#[test]
+fn undoing_an_edit_reuses_the_earlier_saved_results() {
+    let dir = project("undo");
+    let mut s = session(&dir);
+    s.run_all().unwrap();
+    set_min_revenue(&mut s, 100);
+    assert!(s.run_all().unwrap().steps.iter().all(|r| r.status == RunStatus::Succeeded { cached: false }));
+    // Back to the original definition: the results in memory are now stale,
+    // but the earlier ones are on disk and are reused, Python included.
+    set_min_revenue(&mut s, 20);
+    assert_eq!(state(&s, "share"), StepState::Stale);
+    let t0 = Instant::now();
+    let run = s.run_all().unwrap();
+    assert!(run.steps.iter().all(|r| r.status == RunStatus::Succeeded { cached: true }), "{run:#?}");
+    assert!(t0.elapsed() < Duration::from_secs(5));
+}
+
+#[test]
+fn unreadable_saved_result_is_recomputed() {
+    let dir = project("corrupt");
+    let mut s = session(&dir);
+    let first = s.run_all().unwrap();
+    save_analysis(&s.analysis, &dir).unwrap();
+    let key = &first.step("by_region").unwrap().cache_key;
+    std::fs::write(dir.join("artifacts").join(format!("{key}.parquet")), b"not parquet").unwrap();
+
+    let mut reopened = Session::open(&dir, engine(), python(&dir)).unwrap();
+    assert_eq!(state(&reopened, "by_region"), StepState::NotRun);
+    assert_eq!(state(&reopened, "share"), StepState::Fresh);
+    let run = reopened.run_all().unwrap();
+    assert_eq!(run.step("by_region").unwrap().status, RunStatus::Succeeded { cached: false });
+    assert_eq!(run.step("by_region").unwrap().content_hash, first.step("by_region").unwrap().content_hash);
+    assert_eq!(run.step("share").unwrap().status, RunStatus::Succeeded { cached: true });
+}
+
+#[test]
+fn pruning_keeps_only_current_results() {
+    let dir = project("prune");
+    let mut s = session(&dir);
+    s.run_all().unwrap();
+    set_min_revenue(&mut s, 100);
+    s.run_all().unwrap();
+    let files = || std::fs::read_dir(dir.join("artifacts")).unwrap().count();
+    assert_eq!(files(), 8);
+    assert_eq!(s.prune_saved_results().unwrap(), 4);
+    assert_eq!(files(), 4);
+    for id in ALL {
+        assert_eq!(state(&s, id), StepState::Fresh);
+    }
+}
+
+#[test]
+fn replay_ignores_saved_results() {
+    let dir = project("replay-clean");
+    let mut s = session(&dir);
+    let run = s.run_all().unwrap();
+    save_analysis(&s.analysis, &dir).unwrap();
+    let report = replay(&dir, &run, engine(), python(&dir)).unwrap();
+    assert!(report.fully_reproduced());
+    assert!(report.replay_run.steps.iter().all(|r| r.status == RunStatus::Succeeded { cached: false }));
 }

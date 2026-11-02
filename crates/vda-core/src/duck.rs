@@ -1,9 +1,10 @@
 //! Embedded DuckDB engine (ADR-0001) and Parquet I/O for the Python boundary.
 //!
-//! Every query result is normalized to the four value types the core models
-//! (BOOLEAN, BIGINT, DOUBLE, VARCHAR) with explicit casts, so results from the
-//! reference engine and from DuckDB are directly comparable. Types outside
-//! that set (DATE, TIMESTAMP, LIST, …) are cast to VARCHAR; see STATUS.md.
+//! Every query result is normalized to the value types the core models
+//! (BOOLEAN, BIGINT, DOUBLE, VARCHAR, DATE, TIMESTAMP) with explicit casts, so
+//! results from the reference engine and from DuckDB are directly comparable.
+//! Other types (TIMESTAMPTZ, TIME, INTERVAL, LIST, …) are cast to VARCHAR;
+//! see STATUS.md.
 
 use crate::compile::{self, quote_ident, quote_literal, CSV_OPTIONS};
 use crate::engine::Engine;
@@ -11,7 +12,7 @@ use crate::model::{Step, StepKind};
 use crate::table::{DataType, Field, Schema, Table, Value};
 use crate::Error;
 use duckdb::appender_params_from_iter;
-use duckdb::types::{Value as DValue, ValueRef};
+use duckdb::types::{TimeUnit, Value as DValue, ValueRef};
 use duckdb::Connection;
 use std::path::Path;
 
@@ -97,6 +98,10 @@ fn normalize(duck_type: &str) -> (DataType, &'static str) {
         | "HUGEINT" | "UHUGEINT" => (DataType::Int, "BIGINT"),
         "FLOAT" | "DOUBLE" => (DataType::Float, "DOUBLE"),
         _ if t.starts_with("DECIMAL") => (DataType::Float, "DOUBLE"),
+        "DATE" => (DataType::Date, "DATE"),
+        // Sub-microsecond precision is truncated; zone-aware timestamps are
+        // not modelled yet and fall through to VARCHAR.
+        "TIMESTAMP" | "DATETIME" | "TIMESTAMP_S" | "TIMESTAMP_MS" | "TIMESTAMP_NS" => (DataType::Timestamp, "TIMESTAMP"),
         _ => (DataType::Text, "VARCHAR"),
     }
 }
@@ -144,6 +149,13 @@ fn read_result(conn: &Connection) -> Result<Table, Error> {
                 ValueRef::BigInt(n) => Value::Int(n),
                 ValueRef::Double(f) => Value::Float(f),
                 ValueRef::Text(bytes) => Value::Text(String::from_utf8_lossy(bytes).into_owned()),
+                ValueRef::Date32(d) => Value::Date(d),
+                ValueRef::Timestamp(unit, t) => Value::Timestamp(match unit {
+                    TimeUnit::Second => t * 1_000_000,
+                    TimeUnit::Millisecond => t * 1_000,
+                    TimeUnit::Microsecond => t,
+                    TimeUnit::Nanosecond => t / 1_000,
+                }),
                 other => return Err(Error::Data(format!("unexpected value after normalization: {other:?}"))),
             });
         }
@@ -169,6 +181,8 @@ pub(crate) fn load_table(conn: &Connection, name: &str, t: &Table) -> Result<(),
             Value::Int(i) => DValue::BigInt(*i),
             Value::Float(f) => DValue::Double(*f),
             Value::Text(s) => DValue::Text(s.clone()),
+            Value::Date(d) => DValue::Date32(*d),
+            Value::Timestamp(t) => DValue::Timestamp(TimeUnit::Microsecond, *t),
         });
         app.append_row(appender_params_from_iter(vals)).map_err(db_err("cannot load input"))?;
     }

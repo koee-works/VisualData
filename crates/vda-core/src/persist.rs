@@ -20,6 +20,8 @@ pub fn value_to_json(v: &Value) -> Json {
         Value::Int(i) => Json::obj(vec![("int", Json::str(i.to_string()))]),
         Value::Float(f) => Json::obj(vec![("float", Json::Num(*f))]),
         Value::Text(s) => Json::str(s.clone()),
+        Value::Date(_) => Json::obj(vec![("date", Json::str(v.to_string()))]),
+        Value::Timestamp(_) => Json::obj(vec![("timestamp", Json::str(v.to_string()))]),
     }
 }
 
@@ -33,6 +35,12 @@ pub fn value_from_json(j: &Json) -> Result<Value, Error> {
                 Value::Int(s.parse().map_err(|_| Error::Format(format!("bad int `{s}`")))?)
             } else if let Some(f) = j.get("float").and_then(Json::as_f64) {
                 Value::Float(f)
+            } else if let Some(d) = j.get("date").and_then(Json::as_str) {
+                Value::Date(crate::table::parse_date(d).ok_or_else(|| Error::Format(format!("bad date `{d}`")))?)
+            } else if let Some(t) = j.get("timestamp").and_then(Json::as_str) {
+                Value::Timestamp(
+                    crate::table::parse_timestamp(t).ok_or_else(|| Error::Format(format!("bad timestamp `{t}`")))?,
+                )
             } else {
                 return Err(Error::Format("unknown value object".into()));
             }

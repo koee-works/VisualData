@@ -20,26 +20,51 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+// Every exit goes through os._exit after flushing stderr. Normal interpreter
+// shutdown can deadlock in pyarrow's thread pool after a MemoryError, which
+// left out-of-memory steps hanging until their timeout.
 const WRAPPER: &str = r#"
-import sys
-inp, out, code_path = sys.argv[1], sys.argv[2], sys.argv[3]
-import pandas as pd
-# Nullable dtypes keep integers with missing values as integers (Int64)
-# instead of silently turning them into floats.
-df = pd.read_parquet(inp, dtype_backend="numpy_nullable")
-with open(code_path, encoding="utf-8") as f:
-    code = f.read()
-ns = {"df": df, "pd": pd, "__name__": "__vda_step__"}
-exec(compile(code, "<python step>", "exec"), ns)
+import os, sys
+
+def finish(code, message=None, show_traceback=False):
+    try:
+        if show_traceback:
+            import traceback
+            traceback.print_exc()
+        if message:
+            sys.stderr.write(message + "\n")
+        sys.stderr.flush()
+    except BaseException:
+        pass
+    os._exit(code)
+
+try:
+    inp, out, code_path = sys.argv[1], sys.argv[2], sys.argv[3]
+    import pandas as pd
+    # Nullable dtypes keep integers with missing values as integers (Int64)
+    # instead of silently turning them into floats.
+    df = pd.read_parquet(inp, dtype_backend="numpy_nullable")
+    with open(code_path, encoding="utf-8") as f:
+        code = f.read()
+    ns = {"df": df, "pd": pd, "__name__": "__vda_step__"}
+except BaseException:
+    finish(4, "VDA_SETUP: could not prepare the Python step", show_traceback=True)
+
+try:
+    exec(compile(code, "<python step>", "exec"), ns)
+except MemoryError:
+    finish(1, "MemoryError")
+except BaseException:
+    finish(1, show_traceback=True)
+
 result = ns.get("result")
 if not isinstance(result, pd.DataFrame):
-    sys.stderr.write("VDA_CONTRACT: the step must assign a pandas DataFrame to `result` (got %s)\n" % type(result).__name__)
-    sys.exit(3)
+    finish(3, "VDA_CONTRACT: the step must assign a pandas DataFrame to `result` (got %s)" % type(result).__name__)
 try:
     result.to_parquet(out, index=False)
-except Exception as e:
-    sys.stderr.write("VDA_CONTRACT: `result` could not be saved as a table: %s: %s\n" % (type(e).__name__, e))
-    sys.exit(3)
+except BaseException as e:
+    finish(3, "VDA_CONTRACT: `result` could not be saved as a table: %s: %s" % (type(e).__name__, e))
+finish(0)
 "#;
 
 #[derive(Debug, Clone)]
@@ -51,6 +76,12 @@ pub struct PythonRunner {
 }
 
 static RUN_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Interpreter to use when the project does not name one: `$VDA_PYTHON`, or
+/// `python3`. (On Windows the launcher is usually `python`.)
+pub fn default_interpreter() -> PathBuf {
+    std::env::var_os("VDA_PYTHON").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("python3"))
+}
 
 impl PythonRunner {
     pub fn new(interpreter: impl Into<PathBuf>, work_root: impl Into<PathBuf>) -> Self {
@@ -159,6 +190,10 @@ impl PythonRunner {
 fn summarize_error(stderr: &str, code: Option<i32>) -> String {
     if let Some(line) = stderr.lines().find(|l| l.starts_with("VDA_CONTRACT: ")) {
         return line.trim_start_matches("VDA_CONTRACT: ").to_string();
+    }
+    if stderr.lines().any(|l| l.starts_with("VDA_SETUP: ")) {
+        let cause = stderr.lines().rev().find(|l| !l.trim().is_empty() && !l.starts_with("VDA_SETUP"));
+        return format!("could not prepare the Python step: {}", cause.unwrap_or("unknown error").trim());
     }
     if stderr.contains("MemoryError") {
         return "ran out of memory (limit reached)".into();

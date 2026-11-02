@@ -7,8 +7,9 @@ use crate::Error;
 
 /// CSV import options shared by the DuckDB engine and the inspectable SQL.
 /// Type inference is restricted to the types the core models, so both engines
-/// agree; dates stay text until the core has a date type.
-pub const CSV_OPTIONS: &str = "auto_type_candidates = ['BOOLEAN', 'BIGINT', 'DOUBLE', 'VARCHAR'], header = true";
+/// agree. Only ISO dates and timestamps are detected.
+pub const CSV_OPTIONS: &str =
+    "auto_type_candidates = ['BOOLEAN', 'BIGINT', 'DOUBLE', 'DATE', 'TIMESTAMP', 'VARCHAR'], header = true";
 
 pub fn quote_ident(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
@@ -21,6 +22,8 @@ pub fn quote_literal(v: &Value) -> String {
         Value::Int(i) => i.to_string(),
         Value::Float(f) => format!("{f:?}::DOUBLE"),
         Value::Text(s) => format!("'{}'", s.replace('\'', "''")),
+        Value::Date(_) => format!("DATE '{v}'"),
+        Value::Timestamp(_) => format!("TIMESTAMP '{v}'"),
     }
 }
 
@@ -86,6 +89,7 @@ fn literal_fits(col: DataType, v: &Value) -> bool {
         (DataType::Int | DataType::Float, Value::Int(_) | Value::Float(_)) => true,
         (DataType::Text, Value::Text(_)) => true,
         (DataType::Bool, Value::Bool(_)) => true,
+        (DataType::Date | DataType::Timestamp, Value::Date(_) | Value::Timestamp(_)) => true,
         _ => false,
     }
 }

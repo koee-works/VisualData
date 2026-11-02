@@ -68,6 +68,14 @@ fn infer(values: &[&str]) -> DataType {
     if present.iter().all(|v| v.parse::<f64>().map(|f| f.is_finite()).unwrap_or(false)) {
         return DataType::Float;
     }
+    // Strict ISO only, like DuckDB with these candidate types. A column that
+    // mixes bare dates and timestamps stays text, as it does in DuckDB.
+    if present.iter().all(|v| crate::table::parse_date(v).is_some()) {
+        return DataType::Date;
+    }
+    if present.iter().all(|v| crate::table::parse_timestamp(v).is_some()) {
+        return DataType::Timestamp;
+    }
     DataType::Text
 }
 
@@ -80,6 +88,8 @@ fn convert(raw: &str, t: DataType) -> Value {
         DataType::Int => Value::Int(raw.parse().unwrap()),
         DataType::Float => Value::Float(raw.parse().unwrap()),
         DataType::Text => Value::Text(raw.to_string()),
+        DataType::Date => Value::Date(crate::table::parse_date(raw).unwrap()),
+        DataType::Timestamp => Value::Timestamp(crate::table::parse_timestamp(raw).unwrap()),
     }
 }
 

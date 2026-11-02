@@ -9,7 +9,7 @@ use vda_core::Error;
 fn runner(name: &str) -> PythonRunner {
     let dir = std::env::temp_dir().join(format!("vda-py-tests-{name}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    PythonRunner::new("python3", dir)
+    PythonRunner::new(vda_core::python::default_interpreter(), dir)
 }
 
 fn input() -> vda_core::table::Table {
@@ -67,16 +67,24 @@ fn enforces_memory_limit() {
     let mut r = runner("mem");
     r.memory_limit_mb = Some(1024);
     let code = "blob = bytearray(4 * 1024 * 1024 * 1024)\nresult = df";
+    let t0 = Instant::now();
     let err = r.run(code, &input(), Duration::from_secs(30), &AtomicBool::new(false)).unwrap_err();
     assert!(err.to_string().contains("out of memory"), "{err}");
+    // Must fail promptly, not hang in interpreter shutdown until the timeout.
+    assert!(t0.elapsed() < Duration::from_secs(10), "took {:?}", t0.elapsed());
 }
 
 #[test]
 fn child_does_not_inherit_environment() {
-    std::env::set_var("VDA_TEST_SECRET", "hunter2");
-    let code = "import os\nresult = pd.DataFrame({'secret': [os.environ.get('VDA_TEST_SECRET', 'absent')]})";
+    // Checks the child's whole environment instead of calling set_var:
+    // changing the environment while other test threads spawn processes is a
+    // data race (it made this suite hang intermittently).
+    let code = "import os\n\
+                allowed = {'PATH', 'HOME', 'PWD', 'SHLVL', '_', 'OLDPWD', 'LC_CTYPE'}\n\
+                extra = sorted(set(os.environ) - allowed)\n\
+                result = pd.DataFrame({'extra': [','.join(extra) or 'none']})";
     let out = runner("env").run(code, &input(), Duration::from_secs(30), &AtomicBool::new(false)).unwrap();
-    assert_eq!(out.rows[0][0], Value::Text("absent".into()));
+    assert_eq!(out.rows[0][0], Value::Text("none".into()));
 }
 
 #[test]
@@ -89,7 +97,7 @@ fn identity_step_preserves_float_values_exactly() {
 #[test]
 fn works_with_a_relative_work_directory() {
     let rel = format!("target/vda-py-rel-{}", std::process::id());
-    let r = PythonRunner::new("python3", &rel);
+    let r = PythonRunner::new(vda_core::python::default_interpreter(), &rel);
     let out = r.run("result = df", &input(), Duration::from_secs(30), &AtomicBool::new(false)).unwrap();
     assert_eq!(out, input());
     let _ = std::fs::remove_dir_all(rel);
@@ -112,4 +120,17 @@ fn reports_results_that_cannot_be_saved() {
     let code = "result = pd.DataFrame({'mixed': [1, 'a', None]})";
     let err = runner("unsaveable").run(code, &input(), Duration::from_secs(30), &AtomicBool::new(false)).unwrap_err();
     assert!(err.to_string().contains("could not be saved as a table"), "{err}");
+}
+
+#[test]
+fn dates_and_timestamps_survive_the_python_boundary() {
+    let t = read_table("d,ts\n2026-07-03,2026-07-03 10:00:00.5\n,\n1969-12-31,1969-12-31 23:59:59\n").unwrap();
+    assert_eq!(t.schema.fields[0].dtype, DataType::Date);
+    let out = runner("dates").run("result = df", &t, Duration::from_secs(30), &AtomicBool::new(false)).unwrap();
+    assert_eq!(out, t);
+    // Timestamps created in pandas (nanosecond precision) come back as TIMESTAMP.
+    let code = "result = pd.DataFrame({'when': pd.to_datetime(['2026-01-02 03:04:05'])})";
+    let out = runner("dates2").run(code, &t, Duration::from_secs(30), &AtomicBool::new(false)).unwrap();
+    assert_eq!(out.schema.fields[0].dtype, DataType::Timestamp);
+    assert_eq!(out.rows[0][0].to_string(), "2026-01-02 03:04:05");
 }

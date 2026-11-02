@@ -1,6 +1,7 @@
 //! A working session on one analysis: runs steps, caches results by key,
 //! reports fresh/stale state, writes run records, and replays them.
 
+use crate::artifacts::ArtifactStore;
 use crate::chart;
 use crate::compile;
 use crate::engine::Engine;
@@ -11,7 +12,7 @@ use crate::plan::{self, Fingerprints, Plan};
 use crate::python::PythonRunner;
 use crate::table::Table;
 use crate::Error;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -90,6 +91,8 @@ pub struct RunRecord {
     pub source_path: String,
     pub source_hash: String,
     pub steps: Vec<StepRun>,
+    /// Problems that did not fail a step, e.g. a result that could not be saved.
+    pub warnings: Vec<String>,
 }
 
 impl RunRecord {
@@ -140,6 +143,7 @@ impl RunRecord {
                         .collect(),
                 ),
             ),
+            ("warnings", Json::Arr(self.warnings.iter().map(|w| Json::str(w.clone())).collect())),
         ])
     }
 
@@ -176,6 +180,11 @@ impl RunRecord {
                     })
                 })
                 .collect::<Result<_, Error>>()?,
+            warnings: j
+                .get("warnings")
+                .and_then(Json::as_arr)
+                .map(|w| w.iter().filter_map(Json::as_str).map(str::to_string).collect())
+                .unwrap_or_default(),
         })
     }
 }
@@ -218,14 +227,17 @@ pub struct Session {
     results: HashMap<String, CachedResult>,
     pub last_run: Option<RunRecord>,
     cancel: Arc<AtomicBool>,
+    artifacts: Option<ArtifactStore>,
 }
 
 impl Session {
     pub fn new(analysis: Analysis, project_dir: impl Into<PathBuf>, engine: Box<dyn Engine>, python: Option<PythonRunner>) -> Self {
         let python_fp = python.as_ref().and_then(|p| p.fingerprint().ok());
+        let project_dir: PathBuf = project_dir.into();
         Session {
             analysis,
-            project_dir: project_dir.into(),
+            artifacts: Some(ArtifactStore::new(project_dir.join("artifacts"))),
+            project_dir,
             engine,
             python,
             python_fp,
@@ -234,6 +246,49 @@ impl Session {
             last_run: None,
             cancel: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// Open a saved project: load `analysis.json` and any saved results that
+    /// are still current, so the analysis is viewable without rerunning.
+    pub fn open(project_dir: impl Into<PathBuf>, engine: Box<dyn Engine>, python: Option<PythonRunner>) -> Result<Self, Error> {
+        let project_dir = project_dir.into();
+        let analysis = crate::persist::load_analysis(&project_dir)?;
+        let mut session = Session::new(analysis, project_dir, engine, python);
+        session.hydrate()?;
+        Ok(session)
+    }
+
+    /// Run without reading or writing saved results (used for clean replay).
+    pub fn without_saved_results(mut self) -> Self {
+        self.artifacts = None;
+        self
+    }
+
+    /// Load saved results whose key matches the current definition. Returns
+    /// how many steps were loaded. Results already in memory are kept.
+    pub fn hydrate(&mut self) -> Result<usize, Error> {
+        let Some(store) = self.artifacts.clone() else { return Ok(0) };
+        let plan = self.plan()?;
+        let mut loaded = 0;
+        for id in &plan.order {
+            let key = &plan.keys[id];
+            if self.results.get(id).map(|r| &r.key) == Some(key) {
+                continue;
+            }
+            let chart = !self.analysis.step(id).unwrap().kind.produces_table();
+            if let Some(output) = store.load(key, chart) {
+                self.results.insert(id.clone(), CachedResult { key: key.clone(), output });
+                loaded += 1;
+            }
+        }
+        Ok(loaded)
+    }
+
+    /// Delete saved results that no step in the current definition uses.
+    pub fn prune_saved_results(&self) -> Result<usize, Error> {
+        let Some(store) = &self.artifacts else { return Ok(0) };
+        let keep: HashSet<String> = self.plan()?.keys.into_values().collect();
+        store.prune(&keep)
     }
 
     /// Handle the UI can use to cancel a running analysis from another thread.
@@ -321,6 +376,7 @@ impl Session {
             source_path: self.analysis.source.path.clone(),
             source_hash,
             steps: Vec::new(),
+            warnings: Vec::new(),
         };
         let mut halted: Option<String> = None;
 
@@ -340,9 +396,19 @@ impl Session {
                 RunStatus::Cancelled
             } else if self.results.get(id).map(|r| &r.key) == Some(&key) {
                 RunStatus::Succeeded { cached: true }
+            } else if let Some(output) =
+                self.artifacts.as_ref().and_then(|a| a.load(&key, !step.kind.produces_table()))
+            {
+                self.results.insert(id.clone(), CachedResult { key: key.clone(), output });
+                RunStatus::Succeeded { cached: true }
             } else {
                 match self.execute(&step.id) {
                     Ok(output) => {
+                        if let Some(store) = &self.artifacts {
+                            if let Err(e) = store.save(&key, &output) {
+                                record.warnings.push(format!("step `{id}`: result not saved to disk: {e}"));
+                            }
+                        }
                         self.results.insert(id.clone(), CachedResult { key: key.clone(), output });
                         RunStatus::Succeeded { cached: false }
                     }
@@ -450,7 +516,8 @@ pub fn replay(
     python: Option<PythonRunner>,
 ) -> Result<ReplayReport, Error> {
     let analysis = crate::persist::load_analysis(project_dir)?;
-    let mut session = Session::new(analysis, project_dir, engine, python);
+    // Clean runtime: nothing cached in memory, saved results neither read nor written.
+    let mut session = Session::new(analysis, project_dir, engine, python).without_saved_results();
     let run = session.run_all()?;
 
     let mut env = Vec::new();

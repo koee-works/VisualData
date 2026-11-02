@@ -212,3 +212,79 @@ fn inspectable_sql_executes_to_the_same_result() {
     // The final ORDER BY (DESC) is honoured, so the last row is rank 1.
     assert_eq!(t.rows.last().unwrap()[2], Value::Int(1));
 }
+
+const DATES_CSV: &str = "\
+id,d,ts,ts_t,mixed,us_style,invalid
+1,2026-07-03,2026-07-03 10:00:00,2026-07-03T10:00:00,2026-07-03,07/03/2026,2026-13-01
+2,2026-12-31,2026-12-31 23:59:59.5,2026-12-31T23:59:59,2026-07-04 01:02:03,12/31/2026,2026-02-30
+3,,,,,,
+4,1969-12-31,1969-12-31 23:59:59.123456,1969-12-31T00:00:00,2026-01-01,01/01/1969,2026-01-01
+5,2026-07-03,2026-07-03 00:00:00,2026-07-03T00:00:01,2026-01-02,07/03/2026,2026-01-02
+";
+
+#[test]
+fn date_and_timestamp_import_agrees() {
+    use vda_core::table::DataType::*;
+    let src = write("dates.csv", DATES_CSV);
+    let r = ReferenceEngine.import_csv(&src).unwrap();
+    let d = DuckDbEngine::new().unwrap().import_csv(&src).unwrap();
+    assert_same("dates import", &r, &d);
+    let types: Vec<_> = d.schema.fields.iter().map(|f| f.dtype).collect();
+    // Bare dates and timestamps mixed in one column, US-style dates and
+    // impossible dates all stay text, in both engines.
+    assert_eq!(types, vec![Int, Date, Timestamp, Timestamp, Text, Text, Text]);
+}
+
+#[test]
+fn visual_ops_agree_on_dates() {
+    use vda_core::table::{parse_date, parse_timestamp};
+    use CmpOp::*;
+    let src = write("dates.csv", DATES_CSV);
+    let date = |s| Value::Date(parse_date(s).unwrap());
+    let ts = |s| Value::Timestamp(parse_timestamp(s).unwrap());
+    let f = |p: Vec<Predicate>| StepKind::Filter { predicates: p };
+    let cases = vec![
+        ("date ge", f(vec![pred("d", Ge, date("2026-07-03"))])),
+        ("date before epoch", f(vec![pred("d", Lt, date("1970-01-01"))])),
+        ("timestamp lt fractional", f(vec![pred("ts", Lt, ts("2026-12-31 23:59:59.5"))])),
+        ("date column vs timestamp literal", f(vec![pred("d", Lt, ts("2026-07-03 00:00:01"))])),
+        ("timestamp column vs date literal", f(vec![pred("ts", Eq, date("2026-07-03"))])),
+        ("date is null", f(vec![pred("d", IsNull, Value::Null)])),
+        (
+            "group by date, min/max timestamp",
+            StepKind::Aggregate {
+                group_by: vec!["d".into()],
+                measures: vec![
+                    m(AggFunc::Count, None, "rows"),
+                    m(AggFunc::Min, Some("ts"), "first"),
+                    m(AggFunc::Max, Some("ts_t"), "last"),
+                ],
+            },
+        ),
+        (
+            "global min/max date",
+            StepKind::Aggregate {
+                group_by: vec![],
+                measures: vec![m(AggFunc::Min, Some("d"), "lo"), m(AggFunc::Max, Some("d"), "hi")],
+            },
+        ),
+    ];
+    for (case, kind) in cases {
+        run_both(&src, case, kind);
+    }
+}
+
+#[test]
+fn sum_of_dates_is_rejected_before_execution() {
+    let src = write("dates.csv", DATES_CSV);
+    let step = Step {
+        id: "s".into(),
+        input: SOURCE_ID.into(),
+        label: None,
+        kind: StepKind::Aggregate { group_by: vec![], measures: vec![m(AggFunc::Sum, Some("d"), "x")] },
+    };
+    let mut duck = DuckDbEngine::new().unwrap();
+    let t = duck.import_csv(&src).unwrap();
+    let err = duck.run_step(&step, &t).unwrap_err().to_string();
+    assert!(err.contains("needs a numeric column") && err.contains("DATE"), "{err}");
+}

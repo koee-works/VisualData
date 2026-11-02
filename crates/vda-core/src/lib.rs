@@ -2,6 +2,7 @@
 //! compilation, planning and cache keys, execution sessions, run records and
 //! replay. No UI or Tauri dependency (see docs/adr/0001-deployment-model.md).
 
+pub mod artifacts;
 pub mod chart;
 pub mod compile;
 pub mod csv;

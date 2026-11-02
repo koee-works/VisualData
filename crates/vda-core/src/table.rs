@@ -1,7 +1,9 @@
 //! In-memory tables, values and column profiles.
 //!
-//! Used by the reference engine and for previews. The DuckDB engine will hold
-//! full results as Parquet artifacts and only materialize bounded previews here.
+//! Used by the reference engine, for previews, and as the in-memory form of
+//! results. Dates are days since 1970-01-01; timestamps are microseconds since
+//! 1970-01-01 00:00:00, without a time zone (matching DuckDB's DATE and
+//! TIMESTAMP).
 
 use std::cmp::Ordering;
 use std::collections::HashSet;
@@ -13,6 +15,8 @@ pub enum DataType {
     Int,
     Float,
     Text,
+    Date,
+    Timestamp,
 }
 
 impl DataType {
@@ -22,6 +26,8 @@ impl DataType {
             DataType::Int => "BIGINT",
             DataType::Float => "DOUBLE",
             DataType::Text => "VARCHAR",
+            DataType::Date => "DATE",
+            DataType::Timestamp => "TIMESTAMP",
         }
     }
 
@@ -31,12 +37,18 @@ impl DataType {
             "BIGINT" => DataType::Int,
             "DOUBLE" => DataType::Float,
             "VARCHAR" => DataType::Text,
+            "DATE" => DataType::Date,
+            "TIMESTAMP" => DataType::Timestamp,
             _ => return None,
         })
     }
 
     pub fn is_numeric(self) -> bool {
         matches!(self, DataType::Int | DataType::Float)
+    }
+
+    pub fn is_temporal(self) -> bool {
+        matches!(self, DataType::Date | DataType::Timestamp)
     }
 }
 
@@ -47,6 +59,10 @@ pub enum Value {
     Int(i64),
     Float(f64),
     Text(String),
+    /// Days since 1970-01-01.
+    Date(i32),
+    /// Microseconds since 1970-01-01 00:00:00 (no time zone).
+    Timestamp(i64),
 }
 
 impl Value {
@@ -70,6 +86,11 @@ impl Value {
             (Value::Int(a), Value::Int(b)) => Some(a.cmp(b)),
             (Value::Bool(a), Value::Bool(b)) => Some(a.cmp(b)),
             (Value::Text(a), Value::Text(b)) => Some(a.as_bytes().cmp(b.as_bytes())),
+            (Value::Date(a), Value::Date(b)) => Some(a.cmp(b)),
+            (Value::Timestamp(a), Value::Timestamp(b)) => Some(a.cmp(b)),
+            // A date compares as midnight of that day, as in SQL.
+            (Value::Date(a), Value::Timestamp(b)) => Some((*a as i64 * MICROS_PER_DAY).cmp(b)),
+            (Value::Timestamp(a), Value::Date(b)) => Some(a.cmp(&(*b as i64 * MICROS_PER_DAY))),
             (a, b) => match (a.as_f64(), b.as_f64()) {
                 (Some(x), Some(y)) => x.partial_cmp(&y),
                 _ => None,
@@ -96,8 +117,98 @@ impl Value {
             Value::Int(i) => format!("i{i}"),
             Value::Float(f) => format!("f{:?}", f),
             Value::Text(s) => format!("t{s}"),
+            Value::Date(d) => format!("d{d}"),
+            Value::Timestamp(t) => format!("s{t}"),
         }
     }
+}
+
+pub const MICROS_PER_DAY: i64 = 86_400_000_000;
+
+/// Days since 1970-01-01 for a proleptic Gregorian date (H. Hinnant's algorithm).
+pub fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let m = m as i64;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d as i64 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+pub fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (yoe + era * 400 + if m <= 2 { 1 } else { 0 }, m, d)
+}
+
+fn digits(s: &str, n: usize) -> Option<u32> {
+    (s.len() == n && s.bytes().all(|b| b.is_ascii_digit())).then(|| s.parse().ok()).flatten()
+}
+
+/// Parse a strict ISO date `YYYY-MM-DD`, rejecting impossible dates.
+pub fn parse_date(s: &str) -> Option<i32> {
+    let mut parts = s.splitn(3, '-');
+    let (y, m, d) = (digits(parts.next()?, 4)?, digits(parts.next()?, 2)?, digits(parts.next()?, 2)?);
+    if !(1..=12).contains(&m) || d == 0 {
+        return None;
+    }
+    let days = days_from_civil(y as i64, m, d);
+    // Round-trip check rejects days past the end of the month (e.g. 02-30).
+    (civil_from_days(days) == (y as i64, m, d)).then_some(days as i32)
+}
+
+/// Parse an ISO timestamp `YYYY-MM-DD HH:MM:SS[.ffffff]` (a `T` separator is
+/// also accepted). A bare date is not a timestamp.
+pub fn parse_timestamp(s: &str) -> Option<i64> {
+    let (date, time) = s.split_once([' ', 'T'])?;
+    let days = parse_date(date)? as i64;
+    let (hms, frac) = match time.split_once('.') {
+        Some((h, f)) => (h, Some(f)),
+        None => (time, None),
+    };
+    let mut parts = hms.splitn(3, ':');
+    let (h, mi, se) = (digits(parts.next()?, 2)?, digits(parts.next()?, 2)?, digits(parts.next()?, 2)?);
+    if h > 23 || mi > 59 || se > 59 {
+        return None;
+    }
+    let micros = match frac {
+        None => 0,
+        Some(f) if (1..=6).contains(&f.len()) && f.bytes().all(|b| b.is_ascii_digit()) => {
+            f.parse::<i64>().ok()? * 10i64.pow(6 - f.len() as u32)
+        }
+        Some(_) => return None,
+    };
+    Some(days * MICROS_PER_DAY + ((h as i64 * 60 + mi as i64) * 60 + se as i64) * 1_000_000 + micros)
+}
+
+pub fn format_date(days: i32) -> String {
+    let (y, m, d) = civil_from_days(days as i64);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// Formats like DuckDB: fractional seconds only when present, trailing zeros trimmed.
+pub fn format_timestamp(micros: i64) -> String {
+    let days = micros.div_euclid(MICROS_PER_DAY);
+    let rem = micros.rem_euclid(MICROS_PER_DAY);
+    let (secs, frac) = (rem / 1_000_000, rem % 1_000_000);
+    let mut out = format!(
+        "{} {:02}:{:02}:{:02}",
+        format_date(days as i32),
+        secs / 3600,
+        secs / 60 % 60,
+        secs % 60
+    );
+    if frac != 0 {
+        out.push_str(format!(".{frac:06}").trim_end_matches('0'));
+    }
+    out
 }
 
 impl fmt::Display for Value {
@@ -114,6 +225,8 @@ impl fmt::Display for Value {
                 }
             }
             Value::Text(s) => write!(f, "{s}"),
+            Value::Date(d) => write!(f, "{}", format_date(*d)),
+            Value::Timestamp(t) => write!(f, "{}", format_timestamp(*t)),
         }
     }
 }
@@ -260,4 +373,41 @@ pub struct ColumnProfile {
     pub distinct: usize,
     pub min: Option<Value>,
     pub max: Option<Value>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn date_round_trips_and_validation() {
+        for s in ["1970-01-01", "2026-07-03", "2000-02-29", "1600-03-01", "0001-01-01", "9999-12-31"] {
+            assert_eq!(format_date(parse_date(s).unwrap()), s);
+        }
+        assert_eq!(parse_date("1970-01-02"), Some(1));
+        assert_eq!(parse_date("1969-12-31"), Some(-1));
+        for bad in ["2026-02-29", "2026-13-01", "2026-04-31", "26-07-03", "2026-7-3", "2026/07/03", ""] {
+            assert_eq!(parse_date(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn timestamp_round_trips_like_duckdb() {
+        for s in ["2026-07-03 10:00:00", "2026-07-03 10:00:00.5", "2026-07-03 10:00:00.123456", "1969-12-31 23:59:59.999999"] {
+            assert_eq!(format_timestamp(parse_timestamp(s).unwrap()), s);
+        }
+        assert_eq!(parse_timestamp("2026-07-03T10:00:00"), parse_timestamp("2026-07-03 10:00:00"));
+        for bad in ["2026-07-03", "2026-07-03 24:00:00", "2026-07-03 10:00", "2026-07-03 10:00:00.1234567"] {
+            assert_eq!(parse_timestamp(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn dates_compare_with_timestamps_as_midnight() {
+        let d = Value::Date(parse_date("2026-07-03").unwrap());
+        let midnight = Value::Timestamp(parse_timestamp("2026-07-03 00:00:00").unwrap());
+        let later = Value::Timestamp(parse_timestamp("2026-07-03 00:00:01").unwrap());
+        assert_eq!(d.sql_cmp(&midnight), Some(Ordering::Equal));
+        assert_eq!(d.sql_cmp(&later), Some(Ordering::Less));
+    }
 }

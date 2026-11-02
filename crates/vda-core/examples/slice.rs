@@ -17,7 +17,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(&out)?;
     let sample = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/regional-revenue/sales.csv");
     std::fs::copy(sample, out.join("sales.csv"))?;
-    let python = || Some(PythonRunner::new("python3", out.join(".work")));
+    let python = || Some(PythonRunner::new(vda_core::python::default_interpreter(), out.join(".work")));
 
     let mut session = Session::new(regional_revenue("sales.csv"), &out, Box::new(DuckDbEngine::new()?), python());
     println!("engine: duckdb {} | python: {}", DuckDbEngine::new()?.version(), session.python_fingerprint().unwrap_or("unavailable"));

@@ -12,6 +12,8 @@ pub const MAX_CHART_ROWS: usize = 5_000;
 fn encoding_type(t: DataType) -> &'static str {
     if t.is_numeric() {
         "quantitative"
+    } else if t.is_temporal() {
+        "temporal"
     } else {
         "nominal"
     }
@@ -21,6 +23,9 @@ fn plain(v: &Value) -> Json {
     match v {
         Value::Int(i) => Json::Num(*i as f64),
         Value::Float(f) => Json::Num(*f),
+        // ISO strings, which Vega-Lite parses for temporal encodings.
+        Value::Date(_) => Json::str(v.to_string()),
+        Value::Timestamp(_) => Json::str(v.to_string().replace(' ', "T")),
         other => value_to_json(other),
     }
 }
