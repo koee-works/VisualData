@@ -21,10 +21,12 @@ Cache at two layers, keep the cached artifacts small, and pin DuckDB.
 
 ### 1. sccache for the C++ objects (everywhere)
 
-Use [sccache](https://github.com/mozilla/sccache) as `RUSTC_WRAPPER` on developer machines and in CI. The `cc` crate (1.11, used by `libduckdb-sys` with parallel compilation) detects `RUSTC_WRAPPER=sccache` and routes **each C++ object file** through it. That makes every re-run of the DuckDB build script (clippy, profile changes, `cargo clean`, a new worktree, another checkout) a cache hit, without depending on Cargo's own fingerprints.
+Use [sccache](https://github.com/mozilla/sccache) as `RUSTC_WRAPPER` on developer machines and in CI. The `cc` crate (1.11, used by `libduckdb-sys` with parallel compilation) detects `RUSTC_WRAPPER=sccache` and routes **each C++ object file** through it. That makes every re-run of the DuckDB build script (clippy, profile changes, `cargo clean`) a cache hit, without depending on Cargo's own fingerprints.
+
+**Path normalization is required for other checkouts.** The DuckDB build script unpacks DuckDB's sources inside the build directory, so the absolute paths in every compile command differ between checkouts. Without normalization, building in a new worktree or clone at another path missed almost the whole cache (measured: about 300 of the C++ compilations missed). Set `SCCACHE_BASEDIRS` to the checkout roots (colon-separated; `;` on Windows), or `basedirs = [...]` in `~/.config/sccache/config`. The sccache server reads it when it starts, so restart it after a change (`sccache --stop-server`).
 
 - Local: disk backend, default `~/.cache/sccache`; set `SCCACHE_CACHE_SIZE=20G` (debug and release objects for each platform add up).
-- CI: GitHub Actions cache backend via `mozilla-actions/sccache-action` with `SCCACHE_GHA_ENABLED=true`.
+- CI: GitHub Actions cache backend via `mozilla-actions/sccache-action` with `SCCACHE_GHA_ENABLED=true`, and `SCCACHE_BASEDIRS` set to the workspace so cache entries don't depend on the runner's checkout path.
 - `CARGO_INCREMENTAL=0` in CI: sccache cannot cache incremental Rust builds, and CI gains nothing from incremental compilation.
 
 ### 2. Target-directory cache in CI
@@ -53,6 +55,8 @@ Without this, one debug build of DuckDB took 4–5 GB, the build directory reach
 | `cargo clippy --all-targets -- -D warnings` right after | **17 s**, clean (previously re-ran the full DuckDB build) |
 | Delete DuckDB's build output (`cargo clean -p libduckdb-sys`), rebuild with warm sccache | **38 s**, 369 of 369 C/C++ compilations served from cache |
 | sccache disk cache size | 1.3 GB (holds objects from both debug-info settings) |
+| Fresh clone at a different path, no `SCCACHE_BASEDIRS` | about 300 C/C++ cache misses: close to a cold build |
+| Two clones at different paths, both listed in `SCCACHE_BASEDIRS`: first build, then second clone | first 945 s (cold); **second 53 s, 385 of 385 C/C++ compilations from cache** |
 
 ## Expected effect in CI
 

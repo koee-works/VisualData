@@ -36,9 +36,11 @@ The first build compiles DuckDB from source, about 17 minutes on two cores. Anyt
 ```sh
 cargo install sccache --locked
 export RUSTC_WRAPPER=sccache SCCACHE_CACHE_SIZE=20G
+# List every checkout or worktree root so they share cache entries:
+export SCCACHE_BASEDIRS="$HOME/code/vda:$HOME/code/vda-wt"
 ```
 
-With a warm cache, rebuilding DuckDB from scratch took 38 seconds instead of 17 minutes.
+With a warm cache, rebuilding DuckDB from scratch took 38 seconds instead of 17 minutes, and a second checkout at another path built in 53 seconds. Without `SCCACHE_BASEDIRS`, a checkout at a new path misses the cache almost entirely. sccache reads that variable when its server starts; run `sccache --stop-server` after changing it.
 
 CI does the same automatically and also caches the compiled dependency tree. See [ADR-0002](docs/adr/0002-build-cache.md).
 
