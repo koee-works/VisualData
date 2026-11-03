@@ -38,14 +38,25 @@ impl Sha256 {
         }
     }
 
-    pub fn update(&mut self, data: &[u8]) {
+    pub fn update(&mut self, mut data: &[u8]) {
         self.len += data.len() as u64;
-        self.buf.extend_from_slice(data);
-        let full = self.buf.len() / 64 * 64;
-        let blocks: Vec<u8> = self.buf.drain(..full).collect();
-        for chunk in blocks.chunks(64) {
-            self.compress(chunk);
+        // Top up a partial block first, then hash whole blocks straight from
+        // the input without copying (this runs over multi-GB files).
+        if !self.buf.is_empty() {
+            let take = (64 - self.buf.len()).min(data.len());
+            self.buf.extend_from_slice(&data[..take]);
+            data = &data[take..];
+            if self.buf.len() == 64 {
+                let block: [u8; 64] = self.buf[..].try_into().unwrap();
+                self.compress(&block);
+                self.buf.clear();
+            }
         }
+        let mut chunks = data.chunks_exact(64);
+        for block in &mut chunks {
+            self.compress(block);
+        }
+        self.buf.extend_from_slice(chunks.remainder());
     }
 
     fn compress(&mut self, block: &[u8]) {
@@ -101,6 +112,22 @@ impl Sha256 {
     pub fn hex_digest(self) -> String {
         self.finalize().iter().map(|b| format!("{b:02x}")).collect()
     }
+}
+
+/// SHA-256 of a file, streamed in 1 MiB chunks.
+pub fn sha256_file(path: &std::path::Path) -> std::io::Result<String> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path)?;
+    let mut h = Sha256::new();
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        let n = f.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+    }
+    Ok(h.hex_digest())
 }
 
 pub fn sha256_hex(data: &[u8]) -> String {

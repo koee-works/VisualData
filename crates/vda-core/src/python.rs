@@ -8,8 +8,11 @@
 //! Contract with user code: the upstream result is available as `df`
 //! (a pandas DataFrame); the code must assign a DataFrame to `result`.
 //!
-//! Data crosses the boundary as Parquet. Python reads it with pandas'
-//! nullable dtypes, so an integer column with missing values stays integer.
+//! Data crosses the boundary as Parquet: the child reads the upstream result
+//! file in place and writes its own. pandas loads the whole input into memory,
+//! so the memory cap bounds how large a Python step's input can be. Python
+//! reads with nullable dtypes, so an integer column with missing values stays
+//! integer.
 
 use crate::duck;
 use crate::table::Table;
@@ -105,26 +108,37 @@ impl PythonRunner {
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     }
 
-    pub fn run(&self, code: &str, input: &Table, timeout: Duration, cancel: &AtomicBool) -> Result<Table, Error> {
+    /// Run `code` with the Parquet file `input` as `df`, writing `result` to
+    /// `output`. The input is read in place; nothing is copied. Paths must be
+    /// absolute (the child runs in its own working directory).
+    pub fn run_files(&self, code: &str, input: &Path, output: &Path, timeout: Duration, cancel: &AtomicBool) -> Result<(), Error> {
         let seq = RUN_SEQ.fetch_add(1, Ordering::SeqCst);
         let dir = self.work_root.join(format!("py-{}-{seq}", std::process::id()));
         fs::create_dir_all(&dir)?;
-        // The child runs inside `dir`, so every path handed to it must be absolute.
         let dir = fs::canonicalize(&dir)?;
-        let result = self.run_in(&dir, code, input, timeout, cancel);
+        let result = self.run_in(&dir, code, input, output, timeout, cancel);
         let _ = fs::remove_dir_all(&dir);
         result
     }
 
-    fn run_in(&self, dir: &Path, code: &str, input: &Table, timeout: Duration, cancel: &AtomicBool) -> Result<Table, Error> {
-        let (inp, out, code_path, wrapper, err_path) = (
-            dir.join("input.parquet"),
-            dir.join("output.parquet"),
-            dir.join("step.py"),
-            dir.join("wrapper.py"),
-            dir.join("stderr.txt"),
+    /// Convenience for small in-memory tables (tests, tools).
+    pub fn run(&self, code: &str, input: &Table, timeout: Duration, cancel: &AtomicBool) -> Result<Table, Error> {
+        fs::create_dir_all(&self.work_root)?;
+        let root = fs::canonicalize(&self.work_root)?;
+        let seq = RUN_SEQ.fetch_add(1, Ordering::SeqCst);
+        let (inp, out) = (
+            root.join(format!("table-in-{}-{seq}.parquet", std::process::id())),
+            root.join(format!("table-out-{}-{seq}.parquet", std::process::id())),
         );
         duck::write_parquet(input, &inp)?;
+        let result = self.run_files(code, &inp, &out, timeout, cancel).and_then(|_| duck::read_parquet(&out));
+        let _ = fs::remove_file(&inp);
+        let _ = fs::remove_file(&out);
+        result
+    }
+
+    fn run_in(&self, dir: &Path, code: &str, inp: &Path, out: &Path, timeout: Duration, cancel: &AtomicBool) -> Result<(), Error> {
+        let (code_path, wrapper, err_path) = (dir.join("step.py"), dir.join("wrapper.py"), dir.join("stderr.txt"));
         fs::write(&code_path, code)?;
         fs::write(&wrapper, WRAPPER)?;
         let stderr_file = fs::File::create(&err_path)?;
@@ -142,8 +156,8 @@ impl PythonRunner {
             c
         };
         cmd.arg(&wrapper)
-            .arg(&inp)
-            .arg(&out)
+            .arg(inp)
+            .arg(out)
             .arg(&code_path)
             .current_dir(dir)
             .env_clear()
@@ -181,7 +195,7 @@ impl PythonRunner {
         if !status.success() {
             return Err(Error::Python(summarize_error(&stderr, status.code())));
         }
-        duck::read_parquet(&out)
+        Ok(())
     }
 }
 

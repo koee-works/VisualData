@@ -8,6 +8,36 @@ use vda_core::engine::{Engine, ReferenceEngine};
 use vda_core::model::{AggFunc, CmpOp, Measure, Predicate, Step, StepKind, SOURCE_ID};
 use vda_core::table::{Table, Value};
 
+/// The engines exchange Parquet datasets; these tests compare small results,
+/// so they adapt that interface to in-memory tables.
+trait TableIo {
+    fn import_table(&mut self, src: &Path) -> Result<Table, vda_core::Error>;
+    fn run_table(&mut self, step: &Step, input: &Table) -> Result<Table, vda_core::Error>;
+}
+
+fn scratch(name: &str) -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static N: AtomicU64 = AtomicU64::new(0);
+    let dir = std::env::temp_dir().join(format!("vda-equiv-io-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir.join(format!("{name}-{}.parquet", N.fetch_add(1, Ordering::SeqCst)))
+}
+
+impl<E: Engine> TableIo for E {
+    fn import_table(&mut self, src: &Path) -> Result<Table, vda_core::Error> {
+        let out = scratch("import");
+        let ds = self.import_csv(src, &out)?;
+        vda_core::duck::read_parquet(&ds.path)
+    }
+    fn run_table(&mut self, step: &Step, input: &Table) -> Result<Table, vda_core::Error> {
+        let (raw, inp, out) = (scratch("raw"), scratch("in"), scratch("out"));
+        vda_core::duck::write_parquet(input, &raw)?;
+        let ds_in = self.adopt_parquet(&raw, &inp)?;
+        let ds = self.run_step(step, &ds_in, &out)?;
+        vda_core::duck::read_parquet(&ds.path)
+    }
+}
+
 const EDGE_CSV: &str = "\
 k,g,flag,n,x,s
 a,1,true,5,1.5,O'Hare
@@ -101,22 +131,22 @@ fn edge_cases() -> Vec<(&'static str, StepKind)> {
 }
 
 fn run_both(source: &Path, case: &str, kind: StepKind) {
-    let mut reference = ReferenceEngine;
+    let mut reference = ReferenceEngine::new();
     let mut duck = DuckDbEngine::new().unwrap();
-    let r_src = reference.import_csv(source).unwrap();
-    let d_src = duck.import_csv(source).unwrap();
+    let r_src = reference.import_table(source).unwrap();
+    let d_src = duck.import_table(source).unwrap();
     assert_same(&format!("{case} (import)"), &r_src, &d_src);
     let step = Step { id: "s".into(), input: SOURCE_ID.into(), label: None, kind };
-    let r = reference.run_step(&step, &r_src).unwrap_or_else(|e| panic!("{case}: reference: {e}"));
-    let d = duck.run_step(&step, &d_src).unwrap_or_else(|e| panic!("{case}: duckdb: {e}"));
+    let r = reference.run_table(&step, &r_src).unwrap_or_else(|e| panic!("{case}: reference: {e}"));
+    let d = duck.run_table(&step, &d_src).unwrap_or_else(|e| panic!("{case}: duckdb: {e}"));
     assert_same(case, &r, &d);
 }
 
 #[test]
 fn csv_import_agrees() {
     for src in [sample(), write("edge.csv", EDGE_CSV)] {
-        let r = ReferenceEngine.import_csv(&src).unwrap();
-        let d = DuckDbEngine::new().unwrap().import_csv(&src).unwrap();
+        let r = ReferenceEngine::new().import_table(&src).unwrap();
+        let d = DuckDbEngine::new().unwrap().import_table(&src).unwrap();
         assert_same(&src.display().to_string(), &r, &d);
     }
 }
@@ -135,12 +165,12 @@ fn visual_ops_agree_on_sample_data() {
     let src = sample();
     for id in ["valid_orders", "by_region"] {
         // Chain: by_region reads valid_orders, so evaluate both engines step by step.
-        let mut reference = ReferenceEngine;
+        let mut reference = ReferenceEngine::new();
         let mut duck = DuckDbEngine::new().unwrap();
-        let (mut r, mut d) = (reference.import_csv(&src).unwrap(), duck.import_csv(&src).unwrap());
+        let (mut r, mut d) = (reference.import_table(&src).unwrap(), duck.import_table(&src).unwrap());
         for step in &demo.steps {
-            r = reference.run_step(step, &r).unwrap();
-            d = duck.run_step(step, &d).unwrap();
+            r = reference.run_table(step, &r).unwrap();
+            d = duck.run_table(step, &d).unwrap();
             assert_same(&step.id, &r, &d);
             if step.id == id {
                 break;
@@ -158,11 +188,11 @@ fn integer_sum_overflow_is_an_error_in_both() {
         label: None,
         kind: StepKind::Aggregate { group_by: vec!["k".into()], measures: vec![m(AggFunc::Sum, Some("n"), "total")] },
     };
-    let r_src = ReferenceEngine.import_csv(&src).unwrap();
-    assert!(ReferenceEngine.run_step(&step, &r_src).is_err());
+    let r_src = ReferenceEngine::new().import_table(&src).unwrap();
+    assert!(ReferenceEngine::new().run_table(&step, &r_src).is_err());
     let mut duck = DuckDbEngine::new().unwrap();
-    let d_src = duck.import_csv(&src).unwrap();
-    let err = duck.run_step(&step, &d_src).unwrap_err().to_string();
+    let d_src = duck.import_table(&src).unwrap();
+    let err = duck.run_table(&step, &d_src).unwrap_err().to_string();
     assert!(err.to_lowercase().contains("out of range") || err.to_lowercase().contains("overflow"), "{err}");
 }
 
@@ -175,10 +205,10 @@ fn validation_messages_match() {
         label: None,
         kind: StepKind::Filter { predicates: vec![pred("missing", CmpOp::Eq, Value::Int(1))] },
     };
-    let r = ReferenceEngine.run_step(&step, &ReferenceEngine.import_csv(&src).unwrap()).unwrap_err().to_string();
+    let r = ReferenceEngine::new().run_table(&step, &ReferenceEngine::new().import_table(&src).unwrap()).unwrap_err().to_string();
     let mut duck = DuckDbEngine::new().unwrap();
-    let d_src = duck.import_csv(&src).unwrap();
-    let d = duck.run_step(&step, &d_src).unwrap_err().to_string();
+    let d_src = duck.import_table(&src).unwrap();
+    let d = duck.run_table(&step, &d_src).unwrap_err().to_string();
     assert_eq!(r, d);
 }
 
@@ -199,9 +229,9 @@ fn inspectable_sql_executes_to_the_same_result() {
         },
     });
     let mut duck = DuckDbEngine::new().unwrap();
-    let mut t = duck.import_csv(&src).unwrap();
+    let mut t = duck.import_table(&src).unwrap();
     for step in &a.steps {
-        t = duck.run_step(step, &t).unwrap();
+        t = duck.run_table(step, &t).unwrap();
         let combined = vda_core::compile::pipeline_sql(&a, &step.id).unwrap();
         let direct = DuckDbEngine::new().unwrap().query(&combined).unwrap_or_else(|e| panic!("{e}\n{combined}"));
         assert_same(&format!("pipeline for {}", step.id), &t, &direct);
@@ -226,8 +256,8 @@ id,d,ts,ts_t,mixed,us_style,invalid
 fn date_and_timestamp_import_agrees() {
     use vda_core::table::DataType::*;
     let src = write("dates.csv", DATES_CSV);
-    let r = ReferenceEngine.import_csv(&src).unwrap();
-    let d = DuckDbEngine::new().unwrap().import_csv(&src).unwrap();
+    let r = ReferenceEngine::new().import_table(&src).unwrap();
+    let d = DuckDbEngine::new().unwrap().import_table(&src).unwrap();
     assert_same("dates import", &r, &d);
     let types: Vec<_> = d.schema.fields.iter().map(|f| f.dtype).collect();
     // Bare dates and timestamps mixed in one column, US-style dates and
@@ -284,7 +314,7 @@ fn sum_of_dates_is_rejected_before_execution() {
         kind: StepKind::Aggregate { group_by: vec![], measures: vec![m(AggFunc::Sum, Some("d"), "x")] },
     };
     let mut duck = DuckDbEngine::new().unwrap();
-    let t = duck.import_csv(&src).unwrap();
-    let err = duck.run_step(&step, &t).unwrap_err().to_string();
+    let t = duck.import_table(&src).unwrap();
+    let err = duck.run_table(&step, &t).unwrap_err().to_string();
     assert!(err.contains("needs a numeric column") && err.contains("DATE"), "{err}");
 }

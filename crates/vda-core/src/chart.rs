@@ -30,13 +30,15 @@ fn plain(v: &Value) -> Json {
     }
 }
 
-pub fn vega_lite(table: &Table, mark: Mark, x: &str, y: &str, title: Option<&str>) -> Result<Json, Error> {
+/// `table` holds the chart's columns for at most [`MAX_CHART_ROWS`] rows;
+/// `total_rows` is the size of the full result, used to label partial charts.
+pub fn vega_lite(table: &Table, total_rows: u64, mark: Mark, x: &str, y: &str, title: Option<&str>) -> Result<Json, Error> {
     let field = |n: &str| {
         table.schema.field(n).ok_or_else(|| Error::Validation(format!("chart column `{n}` not found")))
     };
     let (xf, yf) = (field(x)?, field(y)?);
     let (xi, yi) = (table.schema.index_of(x).unwrap(), table.schema.index_of(y).unwrap());
-    let total = table.rows.len();
+    let total = total_rows;
     let values: Vec<Json> = table
         .rows
         .iter()
@@ -44,7 +46,7 @@ pub fn vega_lite(table: &Table, mark: Mark, x: &str, y: &str, title: Option<&str
         .map(|r| Json::Obj([(x.to_string(), plain(&r[xi])), (y.to_string(), plain(&r[yi]))].into_iter().collect()))
         .collect();
     let mut title = title.map(str::to_string).unwrap_or_else(|| format!("{y} by {x}"));
-    if total > MAX_CHART_ROWS {
+    if total > MAX_CHART_ROWS as u64 {
         title.push_str(&format!(" (first {MAX_CHART_ROWS} of {total} rows)"));
     }
     Ok(Json::obj(vec![

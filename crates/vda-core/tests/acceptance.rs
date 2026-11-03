@@ -36,7 +36,7 @@ fn engine() -> Box<dyn Engine> {
 }
 
 fn session(dir: &Path) -> Session {
-    Session::new(regional_revenue("sales.csv"), dir, engine(), python(dir))
+    Session::new(regional_revenue("sales.csv"), dir, engine(), python(dir)).unwrap()
 }
 
 fn state(s: &Session, id: &str) -> StepState {
@@ -47,9 +47,9 @@ fn state(s: &Session, id: &str) -> StepState {
 fn step1_import_and_profile() {
     let dir = project("profile");
     let mut s = session(&dir);
-    let src = s.source_table().unwrap().clone();
-    assert_eq!(src.rows.len(), 60);
-    let profile = src.profile();
+    let src = s.source_dataset().unwrap();
+    assert_eq!(src.rows, 60);
+    let profile = s.source_profile().unwrap();
     let col = |n: &str| profile.iter().find(|p| p.name == n).unwrap();
     assert_eq!(col("units").dtype, DataType::Int);
     assert_eq!(col("revenue").dtype, DataType::Float);
@@ -85,7 +85,7 @@ fn step2_visual_transform_has_inspectable_sql_and_matches_pandas() {
         .unwrap();
     assert!(oracle.status.success(), "{}", String::from_utf8_lossy(&oracle.stderr));
     let expected = read_table(&String::from_utf8(oracle.stdout).unwrap()).unwrap();
-    let actual = s.output("by_region").unwrap().as_table().unwrap();
+    let actual = &s.table("by_region").unwrap();
     assert_eq!(actual.rows.len(), expected.rows.len());
     for (a, e) in actual.rows.iter().zip(&expected.rows) {
         assert_eq!(a[0], e[0]);
@@ -103,7 +103,7 @@ fn step3_and_4_python_step_chart_and_notebook() {
     let mut s = session(&dir);
     assert!(s.run_all().unwrap().succeeded());
 
-    let share = s.output("share").unwrap().as_table().unwrap();
+    let share = &s.table("share").unwrap();
     let total: f64 = share.column_values(share.schema.index_of("revenue_share").unwrap()).filter_map(Value::as_f64).sum();
     assert!((total - 1.0).abs() < 1e-3, "shares sum to {total}");
 
@@ -274,7 +274,7 @@ fn custom_sql_step_runs_on_duckdb() {
     });
     let run = s.run_all().unwrap();
     assert!(run.succeeded(), "{run:#?}");
-    let top = s.output("top").unwrap().as_table().unwrap();
+    let top = &s.table("top").unwrap();
     assert_eq!(top.rows.len(), 2);
     assert_eq!(top.rows[0][0], Value::Text("East".into()));
     assert_eq!(top.schema.field("rank").unwrap().dtype, DataType::Int);
@@ -298,7 +298,7 @@ fn custom_sql_step_runs_on_duckdb() {
 #[test]
 fn reference_engine_still_rejects_custom_sql() {
     let dir = project("sql-ref");
-    let mut s = Session::new(regional_revenue("sales.csv"), &dir, Box::new(ReferenceEngine), python(&dir));
+    let mut s = Session::new(regional_revenue("sales.csv"), &dir, Box::new(ReferenceEngine::new()), python(&dir)).unwrap();
     s.analysis.steps.push(vda_core::model::Step {
         id: "top".into(),
         input: "by_region".into(),
@@ -321,7 +321,7 @@ fn switching_engines_marks_results_stale() {
     // The engine version is part of every key, so a run record from one engine
     // replayed on another reports changed inputs rather than a false match.
     save_analysis(&s.analysis, &dir).unwrap();
-    let report = replay(&dir, &run, Box::new(ReferenceEngine), python(&dir)).unwrap();
+    let report = replay(&dir, &run, Box::new(ReferenceEngine::new()), python(&dir)).unwrap();
     assert!(report.environment_changes.iter().any(|c| c.starts_with("engine:")), "{:?}", report.environment_changes);
     assert!(report.steps.iter().all(|(_, o)| *o == ReplayOutcome::InputsChanged));
 }
@@ -345,7 +345,7 @@ fn reopening_a_project_shows_saved_results_without_rerunning() {
         // Identical content after the round trip through Parquet, dates included.
         assert_eq!(reopened.output(id), s.output(id), "{id}");
     }
-    let valid = reopened.output("valid_orders").unwrap().as_table().unwrap();
+    let valid = reopened.output("valid_orders").unwrap().as_dataset().unwrap();
     assert_eq!(valid.schema.field("order_date").unwrap().dtype, DataType::Date);
     let run = reopened.run_all().unwrap();
     assert!(run.steps.iter().all(|r| r.status == RunStatus::Succeeded { cached: true }), "{run:#?}");
@@ -394,7 +394,14 @@ fn pruning_keeps_only_current_results() {
     s.run_all().unwrap();
     set_min_revenue(&mut s, 100);
     s.run_all().unwrap();
-    let files = || std::fs::read_dir(dir.join("artifacts")).unwrap().count();
+    // Step results only: not their metadata files, not the converted source.
+    let files = || {
+        std::fs::read_dir(dir.join("artifacts"))
+            .unwrap()
+            .filter_map(|e| e.unwrap().file_name().into_string().ok())
+            .filter(|n| !n.ends_with(".meta.json") && !n.starts_with("source-"))
+            .count()
+    };
     assert_eq!(files(), 8);
     assert_eq!(s.prune_saved_results().unwrap(), 4);
     assert_eq!(files(), 4);

@@ -19,7 +19,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::copy(sample, out.join("sales.csv"))?;
     let python = || Some(PythonRunner::new(vda_core::python::default_interpreter(), out.join(".work")));
 
-    let mut session = Session::new(regional_revenue("sales.csv"), &out, Box::new(DuckDbEngine::new()?), python());
+    let mut session = Session::new(regional_revenue("sales.csv"), &out, Box::new(DuckDbEngine::new()?), python())?;
     println!("engine: duckdb {} | python: {}", DuckDbEngine::new()?.version(), session.python_fingerprint().unwrap_or("unavailable"));
 
     let run = session.run_all()?;

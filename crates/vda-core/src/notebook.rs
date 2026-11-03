@@ -9,17 +9,17 @@ use crate::model::{Cell, StepKind};
 use crate::session::{Output, Session, StepState};
 use crate::Error;
 
-const PREVIEW_ROWS: usize = 10;
+const PREVIEW_ROWS: u64 = 10;
 
 pub fn render_markdown(session: &mut Session) -> Result<String, Error> {
     let analysis = session.analysis.clone();
     let mut out = format!("# {}\n\n", analysis.name);
 
     // Source profile: types and missing values.
-    let source = session.source_table()?.clone();
-    out.push_str(&format!("**Source:** `{}`, {} rows\n\n", analysis.source.path, source.rows.len()));
+    let source = session.source_dataset()?;
+    out.push_str(&format!("**Source:** `{}`, {} rows\n\n", analysis.source.path, source.rows));
     out.push_str("| column | type | missing | distinct | min | max |\n|---|---|---|---|---|---|\n");
-    for p in source.profile() {
+    for p in session.source_profile()? {
         let fmt = |v: &Option<crate::table::Value>| v.as_ref().map(|v| v.to_string()).unwrap_or_default();
         out.push_str(&format!(
             "| {} | {} | {} | {} | {} | {} |\n",
@@ -77,9 +77,10 @@ pub fn render_markdown(session: &mut Session) -> Result<String, Error> {
                         out.push_str("\n```\n\n</details>\n\n");
                     }
                 }
-                match session.output(step_id) {
-                    Some(Output::Table(t)) => {
-                        out.push_str(&t.preview(PREVIEW_ROWS));
+                match session.output(step_id).cloned() {
+                    Some(Output::Table(ds)) => {
+                        let page = session.preview(step_id, 0, PREVIEW_ROWS)?;
+                        out.push_str(&page.preview(ds.rows));
                         out.push('\n');
                     }
                     Some(Output::Chart(_)) => {

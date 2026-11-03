@@ -6,6 +6,7 @@ pub mod artifacts;
 pub mod chart;
 pub mod compile;
 pub mod csv;
+pub mod dataset;
 pub mod demo;
 pub mod duck;
 pub mod engine;

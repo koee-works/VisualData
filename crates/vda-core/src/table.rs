@@ -328,9 +328,9 @@ impl Table {
             .collect()
     }
 
-    /// Plain-text preview, bounded to `limit` rows, labelled when truncated.
-    pub fn preview(&self, limit: usize) -> String {
-        let shown: Vec<&Vec<Value>> = self.rows.iter().take(limit).collect();
+    /// Markdown preview of this table (typically one page of a larger
+    /// result), labelled as partial when `total_rows` is larger.
+    pub fn preview(&self, total_rows: u64) -> String {
         let mut out = String::new();
         out.push_str("| ");
         out.push_str(
@@ -347,18 +347,15 @@ impl Table {
             out.push_str("---|");
         }
         out.push('\n');
-        for r in &shown {
+        for r in &self.rows {
             out.push_str("| ");
             out.push_str(&r.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" | "));
             out.push_str(" |\n");
         }
-        if self.rows.len() > limit {
-            out.push_str(&format!(
-                "\n_Preview: first {limit} of {} rows._\n",
-                self.rows.len()
-            ));
+        if total_rows > self.rows.len() as u64 {
+            out.push_str(&format!("\n_Preview: first {} of {total_rows} rows._\n", self.rows.len()));
         } else {
-            out.push_str(&format!("\n_{} rows (complete)._\n", self.rows.len()));
+            out.push_str(&format!("\n_{total_rows} rows (complete)._\n"));
         }
         out
     }

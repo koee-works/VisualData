@@ -1,17 +1,23 @@
 //! A working session on one analysis: runs steps, caches results by key,
 //! reports fresh/stale state, writes run records, and replays them.
+//!
+//! Results live on disk as Parquet datasets in the project's artifact store.
+//! The session holds only handles to them, so memory use does not grow with
+//! data size; previews are read a page at a time.
 
 use crate::artifacts::ArtifactStore;
 use crate::chart;
-use crate::compile;
+use crate::compile::{self, CSV_OPTIONS};
+use crate::dataset::Dataset;
 use crate::engine::Engine;
-use crate::hash::{sha256_hex, Sha256};
+use crate::hash::{sha256_file, sha256_hex, Sha256};
 use crate::json::Json;
 use crate::model::{Analysis, StepKind, SOURCE_ID};
 use crate::plan::{self, Fingerprints, Plan};
 use crate::python::PythonRunner;
-use crate::table::Table;
+use crate::table::{ColumnProfile, Table};
 use crate::Error;
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -21,26 +27,27 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Output {
-    Table(Table),
+    /// A table result, held on disk.
+    Table(Dataset),
     Chart(Json),
 }
 
 impl Output {
     pub fn content_hash(&self) -> String {
         match self {
-            Output::Table(t) => t.content_hash(),
+            Output::Table(ds) => ds.content_hash.clone(),
             Output::Chart(spec) => sha256_hex(spec.to_string_compact().as_bytes()),
         }
     }
     pub fn rows(&self) -> Option<usize> {
         match self {
-            Output::Table(t) => Some(t.rows.len()),
+            Output::Table(ds) => Some(ds.rows as usize),
             Output::Chart(_) => None,
         }
     }
-    pub fn as_table(&self) -> Option<&Table> {
+    pub fn as_dataset(&self) -> Option<&Dataset> {
         match self {
-            Output::Table(t) => Some(t),
+            Output::Table(ds) => Some(ds),
             Output::Chart(_) => None,
         }
     }
@@ -223,29 +230,39 @@ pub struct Session {
     engine: Box<dyn Engine>,
     python: Option<PythonRunner>,
     python_fp: Option<String>,
-    source_cache: Option<(String, Table)>,
+    /// (size, modified time, hash) of the source file, so the source is not
+    /// rehashed on every state query.
+    source_fp: RefCell<Option<(u64, SystemTime, String)>>,
+    /// The source converted to Parquet, keyed like a step result.
+    source_ds: Option<(String, Dataset)>,
     results: HashMap<String, CachedResult>,
     pub last_run: Option<RunRecord>,
     cancel: Arc<AtomicBool>,
-    artifacts: Option<ArtifactStore>,
+    artifacts: ArtifactStore,
 }
 
 impl Session {
-    pub fn new(analysis: Analysis, project_dir: impl Into<PathBuf>, engine: Box<dyn Engine>, python: Option<PythonRunner>) -> Self {
+    pub fn new(
+        analysis: Analysis,
+        project_dir: impl Into<PathBuf>,
+        engine: Box<dyn Engine>,
+        python: Option<PythonRunner>,
+    ) -> Result<Self, Error> {
         let python_fp = python.as_ref().and_then(|p| p.fingerprint().ok());
         let project_dir: PathBuf = project_dir.into();
-        Session {
+        Ok(Session {
             analysis,
-            artifacts: Some(ArtifactStore::new(project_dir.join("artifacts"))),
+            artifacts: ArtifactStore::new(project_dir.join("artifacts"))?,
             project_dir,
             engine,
             python,
             python_fp,
-            source_cache: None,
+            source_fp: RefCell::new(None),
+            source_ds: None,
             results: HashMap::new(),
             last_run: None,
             cancel: Arc::new(AtomicBool::new(false)),
-        }
+        })
     }
 
     /// Open a saved project: load `analysis.json` and any saved results that
@@ -253,21 +270,23 @@ impl Session {
     pub fn open(project_dir: impl Into<PathBuf>, engine: Box<dyn Engine>, python: Option<PythonRunner>) -> Result<Self, Error> {
         let project_dir = project_dir.into();
         let analysis = crate::persist::load_analysis(&project_dir)?;
-        let mut session = Session::new(analysis, project_dir, engine, python);
+        let mut session = Session::new(analysis, project_dir, engine, python)?;
         session.hydrate()?;
         Ok(session)
     }
 
-    /// Run without reading or writing saved results (used for clean replay).
-    pub fn without_saved_results(mut self) -> Self {
-        self.artifacts = None;
-        self
+    /// Use a throwaway result store instead of the project's, so nothing
+    /// saved earlier is reused (clean replay). It is deleted with the session.
+    pub fn without_saved_results(mut self) -> Result<Self, Error> {
+        self.artifacts = ArtifactStore::ephemeral()?;
+        self.results.clear();
+        self.source_ds = None;
+        Ok(self)
     }
 
-    /// Load saved results whose key matches the current definition. Returns
-    /// how many steps were loaded. Results already in memory are kept.
+    /// Load handles to saved results whose key matches the current
+    /// definition. Returns how many steps were loaded. No data is read.
     pub fn hydrate(&mut self) -> Result<usize, Error> {
-        let Some(store) = self.artifacts.clone() else { return Ok(0) };
         let plan = self.plan()?;
         let mut loaded = 0;
         for id in &plan.order {
@@ -276,7 +295,7 @@ impl Session {
                 continue;
             }
             let chart = !self.analysis.step(id).unwrap().kind.produces_table();
-            if let Some(output) = store.load(key, chart) {
+            if let Some(output) = self.artifacts.load(key, chart) {
                 self.results.insert(id.clone(), CachedResult { key: key.clone(), output });
                 loaded += 1;
             }
@@ -284,11 +303,11 @@ impl Session {
         Ok(loaded)
     }
 
-    /// Delete saved results that no step in the current definition uses.
+    /// Delete saved results that the current definition does not use.
     pub fn prune_saved_results(&self) -> Result<usize, Error> {
-        let Some(store) = &self.artifacts else { return Ok(0) };
-        let keep: HashSet<String> = self.plan()?.keys.into_values().collect();
-        store.prune(&keep)
+        let mut keep: HashSet<String> = self.plan()?.keys.into_values().collect();
+        keep.insert(self.source_key()?);
+        self.artifacts.prune(&keep)
     }
 
     /// Handle the UI can use to cancel a running analysis from another thread.
@@ -313,10 +332,20 @@ impl Session {
         }
     }
 
+    /// SHA-256 of the source file. Streamed, and recomputed only when the
+    /// file's size or modification time changes.
     pub fn source_hash(&self) -> Result<String, Error> {
         let path = self.source_path();
-        let bytes = fs::read(&path).map_err(|e| Error::Data(format!("cannot read source {}: {e}", path.display())))?;
-        Ok(sha256_hex(&bytes))
+        let meta = fs::metadata(&path).map_err(|e| Error::Data(format!("cannot read source {}: {e}", path.display())))?;
+        let stamp = (meta.len(), meta.modified()?);
+        if let Some((len, modified, hash)) = self.source_fp.borrow().as_ref() {
+            if (*len, *modified) == stamp {
+                return Ok(hash.clone());
+            }
+        }
+        let hash = sha256_file(&path).map_err(|e| Error::Data(format!("cannot read source {}: {e}", path.display())))?;
+        *self.source_fp.borrow_mut() = Some((stamp.0, stamp.1, hash.clone()));
+        Ok(hash)
     }
 
     pub fn plan(&self) -> Result<Plan, Error> {
@@ -328,18 +357,61 @@ impl Session {
         )
     }
 
-    /// Source table, imported once per source content hash.
-    pub fn source_table(&mut self) -> Result<&Table, Error> {
-        let hash = self.source_hash()?;
-        if self.source_cache.as_ref().map(|(h, _)| h != &hash).unwrap_or(true) {
-            let t = self.engine.import_csv(&self.source_path())?;
-            self.source_cache = Some((hash, t));
+    fn source_key(&self) -> Result<String, Error> {
+        let mut h = Sha256::new();
+        for part in ["vda-source-v1", &self.source_hash()?, &self.engine.fingerprint(), CSV_OPTIONS] {
+            h.update(part.as_bytes());
+            h.update(b"\n");
         }
-        Ok(&self.source_cache.as_ref().unwrap().1)
+        Ok(format!("source-{}", h.hex_digest()))
+    }
+
+    /// The source as a Parquet dataset: converted once per source content
+    /// and engine version, then reused from the artifact store.
+    pub fn source_dataset(&mut self) -> Result<Dataset, Error> {
+        let key = self.source_key()?;
+        if let Some((k, ds)) = &self.source_ds {
+            if *k == key {
+                return Ok(ds.clone());
+            }
+        }
+        let ds = match self.artifacts.load(&key, false) {
+            Some(Output::Table(ds)) => ds,
+            _ => {
+                let tmp = self.artifacts.temp_path(&key);
+                let ds = self.engine.import_csv(&self.source_path(), &tmp).inspect_err(|_| {
+                    let _ = fs::remove_file(&tmp);
+                })?;
+                self.artifacts.commit_table(&key, ds)?
+            }
+        };
+        self.source_ds = Some((key, ds.clone()));
+        Ok(ds)
+    }
+
+    /// Column types, missing values, distinct counts, min and max of the source.
+    pub fn source_profile(&mut self) -> Result<Vec<ColumnProfile>, Error> {
+        let ds = self.source_dataset()?;
+        self.engine.profile(&ds)
     }
 
     pub fn output(&self, step_id: &str) -> Option<&Output> {
         self.results.get(step_id).map(|r| &r.output)
+    }
+
+    /// A page of a step's held result (fresh or stale; check [`Self::state`]).
+    pub fn preview(&mut self, step_id: &str, offset: u64, limit: u64) -> Result<Table, Error> {
+        let ds = self
+            .output(step_id)
+            .and_then(Output::as_dataset)
+            .cloned()
+            .ok_or_else(|| Error::Validation(format!("step `{step_id}` has no table result")))?;
+        self.engine.preview(&ds, offset, limit)
+    }
+
+    /// The whole held result in memory. Only for results known to be small.
+    pub fn table(&mut self, step_id: &str) -> Result<Table, Error> {
+        self.preview(step_id, 0, u64::MAX >> 1)
     }
 
     pub fn state(&self, step_id: &str) -> Result<StepState, Error> {
@@ -396,19 +468,12 @@ impl Session {
                 RunStatus::Cancelled
             } else if self.results.get(id).map(|r| &r.key) == Some(&key) {
                 RunStatus::Succeeded { cached: true }
-            } else if let Some(output) =
-                self.artifacts.as_ref().and_then(|a| a.load(&key, !step.kind.produces_table()))
-            {
+            } else if let Some(output) = self.artifacts.load(&key, !step.kind.produces_table()) {
                 self.results.insert(id.clone(), CachedResult { key: key.clone(), output });
                 RunStatus::Succeeded { cached: true }
             } else {
-                match self.execute(&step.id) {
+                match self.execute(&step.id, &key) {
                     Ok(output) => {
-                        if let Some(store) = &self.artifacts {
-                            if let Err(e) = store.save(&key, &output) {
-                                record.warnings.push(format!("step `{id}`: result not saved to disk: {e}"));
-                            }
-                        }
                         self.results.insert(id.clone(), CachedResult { key: key.clone(), output });
                         RunStatus::Succeeded { cached: false }
                     }
@@ -435,40 +500,54 @@ impl Session {
         Ok(record)
     }
 
-    fn input_table(&mut self, input: &str) -> Result<Table, Error> {
+    fn input_dataset(&mut self, input: &str) -> Result<Dataset, Error> {
         if input == SOURCE_ID {
-            return Ok(self.source_table()?.clone());
+            return self.source_dataset();
         }
         self.results
             .get(input)
-            .and_then(|r| r.output.as_table().cloned())
+            .and_then(|r| r.output.as_dataset().cloned())
             .ok_or_else(|| Error::Validation(format!("no result for upstream step `{input}`")))
     }
 
-    fn execute(&mut self, step_id: &str) -> Result<Output, Error> {
+    /// Execute one step and save its result under `key`.
+    fn execute(&mut self, step_id: &str, key: &str) -> Result<Output, Error> {
         let step = self.analysis.step(step_id).unwrap().clone();
-        let input = self.input_table(&step.input)?;
-        match &step.kind {
-            StepKind::Filter { .. } | StepKind::Aggregate { .. } | StepKind::Sql { .. } => {
-                Ok(Output::Table(self.engine.run_step(&step, &input)?))
-            }
-            StepKind::Python { code, timeout_ms } => {
-                let runner = self.python.as_ref().ok_or_else(|| {
-                    Error::Python("no Python interpreter is configured for this project".into())
-                })?;
-                if self.python_fp.is_none() {
-                    return Err(Error::Python(format!(
-                        "interpreter {:?} is not usable (it needs pandas)",
-                        runner.interpreter
-                    )));
+        let input = self.input_dataset(&step.input)?;
+        let tmp = self.artifacts.temp_path(key);
+        let result = (|| -> Result<Output, Error> {
+            match &step.kind {
+                StepKind::Filter { .. } | StepKind::Aggregate { .. } | StepKind::Sql { .. } => {
+                    let ds = self.engine.run_step(&step, &input, &tmp)?;
+                    Ok(Output::Table(self.artifacts.commit_table(key, ds)?))
                 }
-                Ok(Output::Table(runner.run(code, &input, Duration::from_millis(*timeout_ms), &self.cancel)?))
+                StepKind::Python { code, timeout_ms } => {
+                    let runner = self.python.as_ref().ok_or_else(|| {
+                        Error::Python("no Python interpreter is configured for this project".into())
+                    })?;
+                    if self.python_fp.is_none() {
+                        return Err(Error::Python(format!(
+                            "interpreter {:?} is not usable (it needs pandas and pyarrow)",
+                            runner.interpreter
+                        )));
+                    }
+                    let raw = self.artifacts.temp_path(key);
+                    let ran = runner.run_files(code, &input.path, &raw, Duration::from_millis(*timeout_ms), &self.cancel);
+                    let adopted = ran.and_then(|_| self.engine.adopt_parquet(&raw, &tmp));
+                    let _ = fs::remove_file(&raw);
+                    Ok(Output::Table(self.artifacts.commit_table(key, adopted?)?))
+                }
+                StepKind::Chart { mark, x, y, title } => {
+                    compile::output_schema(&step, &input.schema)?;
+                    let data = self.engine.columns(&input, &[x, y], chart::MAX_CHART_ROWS as u64)?;
+                    let spec = chart::vega_lite(&data, input.rows, *mark, x, y, title.as_deref())?;
+                    self.artifacts.save_chart(key, &spec)?;
+                    Ok(Output::Chart(spec))
+                }
             }
-            StepKind::Chart { mark, x, y, title } => {
-                compile::output_schema(&step, &input.schema)?;
-                Ok(Output::Chart(chart::vega_lite(&input, *mark, x, y, title.as_deref())?))
-            }
-        }
+        })();
+        let _ = fs::remove_file(&tmp);
+        result
     }
 
     pub fn save_run(&self, record: &RunRecord) -> Result<PathBuf, Error> {
@@ -517,7 +596,7 @@ pub fn replay(
 ) -> Result<ReplayReport, Error> {
     let analysis = crate::persist::load_analysis(project_dir)?;
     // Clean runtime: nothing cached in memory, saved results neither read nor written.
-    let mut session = Session::new(analysis, project_dir, engine, python).without_saved_results();
+    let mut session = Session::new(analysis, project_dir, engine, python)?.without_saved_results()?;
     let run = session.run_all()?;
 
     let mut env = Vec::new();
