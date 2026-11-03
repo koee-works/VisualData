@@ -1,0 +1,15 @@
+[package]
+name = "vda-server"
+version = "0.1.0"
+edition = "2021"
+description = "Exploration: database server sources (PostgreSQL first)."
+
+[dependencies]
+# For the SHA-256 the core already uses for source fingerprints.
+vda-core = { path = "../vda-core" }
+# The synchronous PostgreSQL client (it runs a small tokio runtime inside).
+postgres = { version = "=0.19.10" }
+duckdb = { version = "=1.20000.1", features = ["bundled", "parquet", "json"] }
+
+[dev-dependencies]
+postgres = { version = "=0.19.10" }
