@@ -7,12 +7,12 @@
 
 use crate::artifacts::ArtifactStore;
 use crate::chart;
-use crate::compile::{self, CSV_OPTIONS};
+use crate::compile::{self, CSV_OPTIONS, JSON_OPTIONS};
 use crate::dataset::Dataset;
 use crate::engine::Engine;
 use crate::hash::{sha256_file, sha256_hex, Sha256};
 use crate::json::Json;
-use crate::model::{Analysis, StepKind, SOURCE_ID};
+use crate::model::{Analysis, SourceFormat, StepKind, SOURCE_ID};
 use crate::table::Schema;
 use crate::plan::{self, Fingerprints, Plan};
 use crate::python::PythonRunner;
@@ -453,8 +453,22 @@ impl Session {
         self.analysis.sources.iter().map(|s| Ok((s.id.clone(), self.source_hash(&s.id)?))).collect()
     }
 
+    /// What a step reading a source depends on: its content, and for
+    /// formats other than CSV also how it is read (format, sheet). CSV keeps
+    /// the plain content hash, so keys from earlier versions still match.
+    fn source_fingerprints(&self) -> Result<HashMap<String, String>, Error> {
+        let mut out = self.source_hashes()?;
+        for src in &self.analysis.sources {
+            if src.format != SourceFormat::Csv {
+                let hash = out.get_mut(&src.id).unwrap();
+                *hash = sha256_hex(format!("{hash}\n{}\n{}", src.format.name(), src.sheet.as_deref().unwrap_or("")).as_bytes());
+            }
+        }
+        Ok(out)
+    }
+
     pub fn plan(&self) -> Result<Plan, Error> {
-        let sources = self.source_hashes()?;
+        let sources = self.source_fingerprints()?;
         let engine = self.engine.fingerprint();
         plan::plan(
             &self.analysis,
@@ -463,8 +477,15 @@ impl Session {
     }
 
     fn source_key(&self, id: &str) -> Result<String, Error> {
+        let src = self.analysis.source(id).ok_or_else(|| Error::Validation(format!("unknown source `{id}`")))?;
         let mut h = Sha256::new();
-        for part in ["vda-source-v1", &self.source_hash(id)?, &self.engine.fingerprint(), CSV_OPTIONS] {
+        // CSV keys are unchanged from the first format, so converted sources are reused.
+        let how = match src.format {
+            SourceFormat::Csv => CSV_OPTIONS.to_string(),
+            SourceFormat::Json => format!("json\n{JSON_OPTIONS}"),
+            f => format!("{}\n{}", f.name(), src.sheet.as_deref().unwrap_or("")),
+        };
+        for part in ["vda-source-v1", &self.source_hash(id)?, &self.engine.fingerprint(), &how] {
             h.update(part.as_bytes());
             h.update(b"\n");
         }
@@ -484,7 +505,8 @@ impl Session {
             Some(Output::Table(ds)) => ds,
             _ => {
                 let tmp = self.artifacts.temp_path(&key);
-                let ds = self.engine.import_csv(&self.source_path(id)?, &tmp).inspect_err(|_| {
+                let src = self.analysis.source(id).unwrap().clone();
+                let ds = self.engine.import_source(&self.source_path(id)?, src.format, src.sheet.as_deref(), &tmp).inspect_err(|_| {
                     let _ = fs::remove_file(&tmp);
                 })?;
                 self.artifacts.commit_table(&key, ds)?
@@ -698,7 +720,11 @@ impl Session {
         let tmp = self.artifacts.temp_path(key);
         let result = (|| -> Result<Output, Error> {
             match &step.kind {
-                StepKind::Filter { .. } | StepKind::Aggregate { .. } | StepKind::Join { .. } | StepKind::Sql { .. } => {
+                StepKind::Filter { .. }
+                | StepKind::Aggregate { .. }
+                | StepKind::Join { .. }
+                | StepKind::Append { .. }
+                | StepKind::Sql { .. } => {
                     let ds = self.engine.run_step(&step, &inputs, &tmp)?;
                     Ok(Output::Table(self.artifacts.commit_table(key, ds)?))
                 }

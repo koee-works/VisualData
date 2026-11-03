@@ -349,7 +349,7 @@ id,name,region,tier
 ";
 
 fn join(how: JoinKind, on: &[(&str, &str)]) -> StepKind {
-    StepKind::Join { how, on: on.iter().map(|(l, r)| JoinKey { left: (*l).into(), right: (*r).into() }).collect() }
+    StepKind::Join { how, on: on.iter().map(|(l, r)| JoinKey::equal(*l, *r)).collect() }
 }
 
 fn join_both(case: &str, left_csv: &str, right_csv: &str, kind: StepKind) -> Table {
@@ -421,8 +421,8 @@ fn inspectable_sql_with_a_join_executes_to_the_same_result() {
     let a = Analysis {
         name: "join".into(),
         sources: vec![
-            Source { id: "orders".into(), path: l.to_string_lossy().into() },
-            Source { id: "customers".into(), path: r.to_string_lossy().into() },
+            Source::new("orders", l.to_string_lossy()),
+            Source::new("customers", r.to_string_lossy()),
         ],
         steps: vec![
             Step {
@@ -461,4 +461,177 @@ fn inspectable_sql_with_a_join_executes_to_the_same_result() {
     assert_eq!(tables["per_name"].rows[0][2], Value::Int(5), "SQL reads a second input by its id");
     // Without the inputs' columns a join has no SQL form yet.
     assert!(vda_core::compile::pipeline_sql(&a, "j").is_err());
+}
+
+// ------------------------------------------------------------ range joins
+
+const SALES_CSV: &str = "\
+id,product,day,amount
+1,A,2026-01-05,10
+2,A,2026-02-10,12
+3,B,2026-01-20,7
+4,A,,9
+5,C,2026-03-01,4
+6,B,2026-03-31,
+";
+
+/// Price periods: a product's price applies from `start` to `end` inclusive.
+/// A gap (A in mid-February) and an overlap (B in March) on purpose.
+const PRICES_CSV: &str = "\
+product,start,end,price
+A,2026-01-01,2026-01-31,2.5
+A,2026-02-15,2026-12-31,3
+B,2026-01-01,2026-03-31,1.25
+B,2026-03-01,2026-03-31,1.5
+C,,,9
+";
+
+fn cond(l: &str, op: CmpOp, r: &str) -> JoinKey {
+    JoinKey { left: l.into(), op, right: r.into() }
+}
+
+#[test]
+fn range_joins_agree() {
+    use CmpOp::*;
+    let period = |how| StepKind::Join {
+        how,
+        on: vec![cond("product", Eq, "product"), cond("day", Ge, "start"), cond("day", Le, "end")],
+    };
+    // Inner: the price in force on the sale day; B on 2026-03-31 matches both
+    // overlapping periods; a missing day or period bound never matches.
+    let inner = join_both("periods inner", SALES_CSV, PRICES_CSV, period(JoinKind::Inner));
+    let ids: Vec<String> = inner.rows.iter().map(|r| r[0].to_string()).collect();
+    assert_eq!(ids, ["1", "3", "6", "6"]);
+    let names: Vec<&str> = inner.schema.fields.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["id", "product", "day", "amount", "start", "end", "price"], "range bounds are kept");
+
+    let left = join_both("periods left", SALES_CSV, PRICES_CSV, period(JoinKind::Left));
+    assert_eq!(left.rows.len(), 7, "every sale; sale 6 twice");
+    join_both("periods full", SALES_CSV, PRICES_CSV, period(JoinKind::Full));
+
+    // Ranges only, no equal pair: every sale against every larger amount band.
+    join_both(
+        "bands",
+        SALES_CSV,
+        "low,high,band\n0,5,small\n5,10,medium\n10,100,large\n",
+        StepKind::Join { how: JoinKind::Full, on: vec![cond("amount", Ge, "low"), cond("amount", Lt, "high")] },
+    );
+    // Not equal.
+    join_both(
+        "other products",
+        SALES_CSV,
+        PRICES_CSV,
+        StepKind::Join { how: JoinKind::Left, on: vec![cond("product", Ne, "product")] },
+    );
+    // A date key equal to a timestamp key, in a full join: the key becomes a timestamp.
+    let mixed = join_both(
+        "date = timestamp",
+        SALES_CSV,
+        "at,note\n2026-01-05 00:00:00,new year\n2026-01-05 10:00:00,later\n2027-01-01 00:00:00,future\n",
+        StepKind::Join { how: JoinKind::Full, on: vec![cond("day", Eq, "at")] },
+    );
+    assert_eq!(mixed.schema.fields[2].dtype, vda_core::table::DataType::Timestamp);
+}
+
+#[test]
+fn join_conditions_must_compare() {
+    let (l, r) = (write("c-l.csv", SALES_CSV), write("c-r.csv", PRICES_CSV));
+    let step = Step {
+        id: "j".into(),
+        inputs: vec!["orders".into(), "customers".into()],
+        label: None,
+        kind: StepKind::Join { how: JoinKind::Inner, on: vec![cond("day", CmpOp::IsNull, "start")] },
+    };
+    let mut duck = DuckDbEngine::new().unwrap();
+    let (dl, dr) = (duck.import_table(&l).unwrap(), duck.import_table(&r).unwrap());
+    let err = duck.run_tables(&step, &[&dl, &dr]).unwrap_err().to_string();
+    assert!(err.contains("not a comparison"), "{err}");
+}
+
+// ----------------------------------------------------------------- append
+
+fn append_both(case: &str, csvs: &[&str], kind: StepKind) -> Result<Table, String> {
+    let paths: Vec<PathBuf> = csvs.iter().enumerate().map(|(i, c)| write(&format!("{case}-{i}.csv"), c)).collect();
+    let ids: Vec<String> = (0..csvs.len()).map(|i| format!("part_{}", i + 1)).collect();
+    let step = Step { id: "a".into(), inputs: ids, label: None, kind };
+    let mut reference = ReferenceEngine::new();
+    let mut duck = DuckDbEngine::new().unwrap();
+    let rt: Vec<Table> = paths.iter().map(|p| reference.import_table(p).unwrap()).collect();
+    let dt: Vec<Table> = paths.iter().map(|p| duck.import_table(p).unwrap()).collect();
+    let a = reference.run_tables(&step, &rt.iter().collect::<Vec<_>>()).map_err(|e| e.to_string());
+    let b = duck.run_tables(&step, &dt.iter().collect::<Vec<_>>()).map_err(|e| e.to_string());
+    match (a, b) {
+        (Ok(a), Ok(b)) => {
+            assert_same(case, &a, &b);
+            Ok(a)
+        }
+        (Err(a), Err(b)) => {
+            assert_eq!(a, b, "{case}: messages differ");
+            Err(a)
+        }
+        (a, b) => panic!("{case}: reference {a:?} vs duckdb {b:?}"),
+    }
+}
+
+const JAN: &str = "region,units,day\nEast,3,2026-01-02\nWest,,2026-01-03\nEast,3,2026-01-02\n";
+const FEB: &str = "units,region,note\n2.5,North,late\n3,East,\n";
+const MAR: &str = "region,day\nEast,2026-03-01 10:30:00\n,\n";
+
+#[test]
+fn appends_agree() {
+    let plain = || StepKind::Append { distinct: false, origin: None };
+    let t = append_both("three", &[JAN, FEB, MAR], plain()).unwrap();
+    let names: Vec<&str> = t.schema.fields.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["region", "units", "day", "note"], "first input's columns, then new ones");
+    use vda_core::table::DataType::*;
+    let types: Vec<_> = t.schema.fields.iter().map(|f| f.dtype).collect();
+    assert_eq!(types, [Text, Float, Timestamp, Text], "integer+decimal and date+timestamp widen");
+    assert_eq!(t.rows.len(), 7);
+    assert_eq!(t.rows[3][3], Value::Text("late".into()));
+    assert_eq!(t.rows[0][3], Value::Null, "January has no note column");
+
+    let distinct = append_both("distinct", &[JAN, JAN, FEB], StepKind::Append { distinct: true, origin: None }).unwrap();
+    assert_eq!(distinct.rows.len(), 4, "repeated rows, including ones with missing values, kept once");
+
+    let tagged =
+        append_both("origin", &[JAN, FEB], StepKind::Append { distinct: true, origin: Some("month".into()) }).unwrap();
+    assert_eq!(tagged.schema.fields.last().unwrap().name, "month");
+    assert_eq!(tagged.rows.len(), 4, "identical rows within one input still collapse");
+    assert_eq!(tagged.rows[3][4], Value::Text("part_2".into()));
+
+    let err = append_both("clash", &[JAN, "region,units\nEast,lots\n"], plain()).unwrap_err();
+    assert!(err.contains("column `units` is BIGINT in `part_1` but VARCHAR in `part_2`"), "{err}");
+    let err = append_both("origin clash", &[JAN, FEB], StepKind::Append { distinct: false, origin: Some("note".into()) })
+        .unwrap_err();
+    assert!(err.contains("already have a column `note`"), "{err}");
+}
+
+#[test]
+fn inspectable_sql_of_an_append_executes_to_the_same_result() {
+    use vda_core::model::{Analysis, Source};
+    let paths = [write("pa-jan.csv", JAN), write("pa-feb.csv", FEB)];
+    let a = Analysis {
+        name: "append".into(),
+        sources: vec![
+            Source::new("jan", paths[0].to_string_lossy()),
+            Source::new("feb", paths[1].to_string_lossy()),
+        ],
+        steps: vec![Step {
+            id: "both".into(),
+            inputs: vec!["jan".into(), "feb".into()],
+            label: None,
+            kind: StepKind::Append { distinct: true, origin: Some("month".into()) },
+        }],
+        cells: vec![],
+    };
+    let mut duck = DuckDbEngine::new().unwrap();
+    let (j, f) = (duck.import_table(&paths[0]).unwrap(), duck.import_table(&paths[1]).unwrap());
+    let direct = duck.run_tables(&a.steps[0], &[&j, &f]).unwrap();
+    let schemas = [("jan", j.schema.clone()), ("feb", f.schema.clone())];
+    let sql = vda_core::compile::pipeline_sql_with(&a, "both", &|id| {
+        schemas.iter().find(|(k, _)| *k == id).map(|(_, s)| s.clone())
+    })
+    .unwrap();
+    let combined = DuckDbEngine::new().unwrap().query(&sql).unwrap_or_else(|e| panic!("{e}\n{sql}"));
+    assert_same("append pipeline", &direct, &combined);
 }

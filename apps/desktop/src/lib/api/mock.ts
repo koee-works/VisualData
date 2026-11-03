@@ -100,6 +100,7 @@ function regionsTable(): { columns: Column[]; rows: Row[] } {
 interface MockSource {
   id: string;
   path: string;
+  sheet?: string;
   columns: Column[];
   rows: Row[];
 }
@@ -160,7 +161,7 @@ export class MockBackend implements Backend {
         inputs: s.inputs,
         label: s.label,
         op: s.op,
-        mode: s.op.type === "filter" || s.op.type === "aggregate" || s.op.type === "join" ? "visual" : s.op.type,
+        mode: ["filter", "aggregate", "join", "append"].includes(s.op.type) ? "visual" : (s.op.type as "sql" | "python" | "chart"),
         state: this.state(s),
         detail: this.failed.get(s.id) ?? null,
         rows: r ? r.rows.length : null,
@@ -172,7 +173,15 @@ export class MockBackend implements Backend {
     return {
       project_dir: "/projects/regional-revenue",
       name: this.name,
-      sources: this.sources.map((x) => ({ id: x.id, path: x.path, rows: x.rows.length, columns: x.columns, external: false })),
+      sources: this.sources.map((x) => ({
+        id: x.id,
+        path: x.path,
+        rows: x.rows.length,
+        columns: x.columns,
+        external: false,
+        format: x.path.endsWith(".xlsx") ? "excel" : "csv",
+        sheet: x.sheet ?? null,
+      })),
       steps,
       cells: this.cells,
       python: "python 3.13 | pandas 3.0",
@@ -203,6 +212,28 @@ export class MockBackend implements Backend {
     const base = id;
     for (let n = 2; this.sources.some((s) => s.id === id) || this.steps.some((s) => s.id === id); n++) id = `${base}_${n}`;
     this.sources.push({ id, path: `${id === base ? stem : id}.csv`, ...regionsTable() });
+    return this.view();
+  }
+
+  async sourceSheets(id: string): Promise<string[]> {
+    const s = this.sourceById(id);
+    return s.path.endsWith(".xlsx") ? ["Notes", "Targets"] : [];
+  }
+
+  async updateSource(id: string, newId: string | null, sheet: string | null): Promise<AnalysisView> {
+    const s = this.sourceById(id);
+    if (sheet !== null) s.sheet = sheet;
+    if (newId && newId !== id) {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(newId) || newId.toLowerCase() === "input")
+        throw { message: `\`${newId}\` cannot be a source name: start with a letter and use only letters, digits and _` };
+      if (this.sources.some((x) => x.id === newId) || this.steps.some((x) => x.id === newId))
+        throw { message: `\`${newId}\` is already used in this analysis` };
+      s.id = newId;
+      for (const st of this.steps) {
+        st.inputs = st.inputs.map((i) => (i === id ? newId : i));
+        if (st.op.type === "sql") st.op = { ...st.op, sql: st.op.sql.replace(new RegExp(`\\b${id}\\b`, "g"), newId) };
+      }
+    }
     return this.view();
   }
 
@@ -277,9 +308,10 @@ export class MockBackend implements Backend {
   private checkInputs(op: StepOp, inputs: string[]) {
     for (const i of inputs)
       if (!this.sources.some((s) => s.id === i) && !this.steps.some((s) => s.id === i)) throw { message: `unknown step \`${i}\`` };
-    const want = op.type === "join" ? 2 : 1;
-    if (op.type === "join" ? inputs.length !== 2 : inputs.length < 1 || (op.type !== "sql" && op.type !== "python" && inputs.length > 1))
-      throw { message: `step reads ${want} input${want === 1 ? "" : "s"}, not ${inputs.length}` };
+    const many = op.type === "sql" || op.type === "python";
+    const ok =
+      op.type === "join" ? inputs.length === 2 : op.type === "append" ? inputs.length >= 2 : many ? inputs.length >= 1 : inputs.length === 1;
+    if (!ok) throw { message: `step \`${op.type}\` cannot read ${inputs.length} input${inputs.length === 1 ? "" : "s"}` };
   }
 
   async addStep(inputs: string[], label: string | null, op: StepOp): Promise<AnalysisView> {
@@ -341,13 +373,39 @@ export class MockBackend implements Backend {
     const input = this.inputOf(s.inputs[0]!);
     if (!input) throw new Error(`upstream step \`${s.inputs[0]}\` did not succeed`);
     const op = s.op;
+    if (op.type === "append") {
+      const tables = s.inputs.map((i) => {
+        const t = this.inputOf(i);
+        if (!t) throw new Error(`upstream step \`${i}\` did not succeed`);
+        return { id: i, t };
+      });
+      const columns: Column[] = [];
+      for (const { t } of tables) for (const c of t.columns) if (!columns.some((x) => x.name === c.name)) columns.push({ ...c });
+      if (op.origin) columns.push({ name: op.origin, type: "VARCHAR" });
+      const rows: Row[] = [];
+      const seen = new Set<string>();
+      for (const { id, t } of tables)
+        for (const r of t.rows) {
+          const row: Row = columns.map((c) => {
+            if (c.name === op.origin) return { t: "text", v: id };
+            const i = t.columns.findIndex((x) => x.name === c.name);
+            return i < 0 ? { t: "null" } : r[i]!;
+          });
+          const key = JSON.stringify(row);
+          if (op.distinct && seen.has(key)) continue;
+          seen.add(key);
+          rows.push(row);
+        }
+      return { def: this.def(s.id), columns, rows };
+    }
     if (op.type === "join") {
       const right = this.inputOf(s.inputs[1]!);
       if (!right) throw new Error(`upstream step \`${s.inputs[1]}\` did not succeed`);
       const li = op.on.map((k) => input.columns.findIndex((c) => c.name === k.left));
       const ri = op.on.map((k) => right.columns.findIndex((c) => c.name === k.right));
       if (!op.on.length || li.some((i) => i < 0) || ri.some((i) => i < 0)) throw new Error("choose columns to join on");
-      const keep = right.columns.map((_, i) => i).filter((i) => !ri.includes(i));
+      const isEq = op.on.map((k) => (k.op ?? "=") === "=");
+      const keep = right.columns.map((_, i) => i).filter((i) => !ri.some((r, k) => r === i && isEq[k]));
       const names = new Set(input.columns.map((c) => c.name));
       const columns = [
         ...input.columns,
@@ -357,7 +415,12 @@ export class MockBackend implements Backend {
         }),
       ];
       const nulls = (n: number): Cell[] => Array.from({ length: n }, () => ({ t: "null" }));
-      const eq = (a: Row, b: Row) => li.every((x, k) => compare(a[x]!, b[ri[k]!]!) === 0);
+      const test = { "=": (c: number) => c === 0, "<>": (c: number) => c !== 0, "<": (c: number) => c < 0, "<=": (c: number) => c <= 0, ">": (c: number) => c > 0, ">=": (c: number) => c >= 0 } as Record<string, (c: number) => boolean>;
+      const eq = (a: Row, b: Row) =>
+        li.every((x, k) => {
+          const c = compare(a[x]!, b[ri[k]!]!);
+          return c !== null && (test[op.on[k]!.op ?? "="] ?? (() => false))(c);
+        });
       const rows: Row[] = [];
       const used = new Set<number>();
       for (const l of input.rows) {
@@ -375,7 +438,7 @@ export class MockBackend implements Backend {
         right.rows.forEach((r, j) => {
           if (used.has(j)) return;
           const left = nulls(input.columns.length);
-          op.on.forEach((k, n) => (left[li[n]!] = r[ri[n]!]!));
+          op.on.forEach((k, n) => isEq[n] && (left[li[n]!] = r[ri[n]!]!));
           rows.push([...left, ...keep.map((i) => r[i]!)]);
         });
       return { def: this.def(s.id), columns, rows };

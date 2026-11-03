@@ -16,7 +16,7 @@ From the "Shared team acceptance" section of the v0.2.0 briefs. Tests: `crates/v
 | 6 | Change an upstream step; downstream stale until rerun | Done | `step6_…`, `undoing_an_edit_reuses_the_earlier_saved_results` |
 | 7 | Controlled failure: diagnose, cancel or correct, recover | Done | `step7_…` (2 tests), `unreadable_saved_result_is_recomputed` |
 
-All 88 Rust tests pass (`cargo test -p vda-core -p vda-app`), plus 23 frontend unit tests and the desktop end-to-end scenario (below). The demo writes a complete project folder: `cargo run -p vda-core --example slice -- <dir>`.
+All 103 Rust tests pass (`cargo test -p vda-core -p vda-app`), plus 26 frontend unit tests and the desktop end-to-end scenario (below). The demo writes a complete project folder: `cargo run -p vda-core --example slice -- <dir>`.
 
 ## What exists
 
@@ -60,7 +60,7 @@ Svelte 5 in Tauri 2 ([ADR-0003](docs/adr/0003-frontend.md)), built and run on Li
 | Notebook | Markdown and step cells in document order, previews of each result, reordering; text is escaped before rendering |
 | Not yet | Creating projects from the welcome screen is wired but was not exercised end to end (file dialogs cannot be scripted under Xvfb); no undo; no column resizing; keyboard navigation inside the grid |
 
-**End to end** (`apps/desktop/e2e/run_e2e.py`, the real app under Xvfb through tauri-driver, with a fresh approvals file), in two phases. First: open a project received from someone else → its Python code is shown for review → *Not now* → run: visual steps run, the Python step needs review and the chart waits → approve from the top bar → run → all current → inspect an aggregate's rows and SQL → edit the upstream filter → all four steps outdated, banner shown → rerun from the banner → notebook with text, tables and chart → chart step → Python step. Passes; screenshots in `docs/screenshots/`. Then a second project with two sources: run → the full join keeps a region with no orders, its SQL is a full outer join → switch to matching rows only → the join and the SQL after it go outdated → rerun → SQL that reads the second source by name → the second source's profile.
+**End to end** (`apps/desktop/e2e/run_e2e.py`, the real app under Xvfb through tauri-driver, with a fresh approvals file), in two phases. First: open a project received from someone else → its Python code is shown for review → *Not now* → run: visual steps run, the Python step needs review and the chart waits → approve from the top bar → run → all current → inspect an aggregate's rows and SQL → edit the upstream filter → all four steps outdated, banner shown → rerun from the banner → notebook with text, tables and chart → chart step → Python step. Passes; screenshots in `docs/screenshots/`. Then a second project with two sources: run → the full join keeps a region with no orders, its SQL is a full outer join → switch to matching rows only → the join and the SQL after it go outdated → rerun → SQL that reads the second source by name → the second source's profile → a spreadsheet source with typed columns, stacked with a CSV by an append → rename a source in the app, rerun, and the SQL that names it follows.
 
 Found and fixed while building it: an effect loop in the grid (reading the page cache while clearing it), Vega cloning Svelte's reactive proxies, charts widening the window, and long decimals (now six places on screen, full value on hover).
 
@@ -108,12 +108,13 @@ Before this change, results were in-memory tables. The regional-revenue sample w
 
 | Part | Behaviour | Tests |
 |---|---|---|
-| Sources | An analysis has any number of CSV sources, each with an id custom SQL can use. **Add source** copies the file in and names it from the file name. A source can be removed once no step reads it. | `crates/vda-app/tests/sources.rs`, `workspace.test.ts` |
-| Join | Visual inner, left or full join on pairs of equal columns. Missing values never match; integer and decimal keys can match. Right columns whose names clash get `_<input id>`. Output order is defined. | `tests/equivalence.rs` (`joins_agree`: duplicate keys on both sides, NULL keys, mixed types, two keys, no matches; `join_validation_messages_match`) |
+| Sources | Any number of sources, each with an id custom SQL can use: CSV, Parquet, JSON and spreadsheets (one sheet, chosen by name). **Add source** copies the file in and names it from the file name. A source can be renamed (inputs, SQL table references and Python `dfs[...]` follow; approved code stays approved) and removed once no step reads it. | `tests/source_formats.rs`, `tests/multi_input.rs` (renaming), `crates/vda-app/tests/sources.rs`, `rename.rs` (unit), `workspace.test.ts` |
+| Join | Visual inner, left or full join on conditions between columns: `=` keys and `<`, `<=`, `>`, `>=`, `<>` for ranges. Missing values never match; integer/decimal and date/timestamp pairs can be compared. Right columns whose names clash get `_<input id>`. Output order is defined. | `tests/equivalence.rs` (`joins_agree`, `range_joins_agree`: price periods with a gap and an overlap, range-only full joins, date = timestamp; `join_validation_messages_match`, `join_conditions_must_compare`) |
+| Append | Visual: stack two or more tables by column name, widening integer/decimal and date/timestamp; optionally drop repeated rows and record each row's input. | `tests/equivalence.rs` (`appends_agree`, combined SQL of an append) |
 | SQL and Python with several inputs | SQL reads the first input as `input` and each input by id; Python gets `df` and `dfs`. | `tests/multi_input.rs`, `tests/equivalence.rs` (combined SQL with a join and a second input) |
 | Graph and keys | Input counts, repeated inputs and cycles through any input are explained. Keys cover all inputs; single-input keys are unchanged from format 1, so old projects keep saved results. Changing one source outdates only its readers. | `tests/multi_input.rs` |
 | Format 2 | `sources` and `inputs`; format 1 files and run records still load. | `tests/multi_input.rs` (`format_1_projects_open_and_keep_their_saved_results`, round trip) |
-| UI | One tree per source, "with …" on multi-input steps, join editor, extra inputs on code steps. | e2e steps 10–14, `docs/screenshots/8-join.png`, `9-sql-two-inputs.png` |
+| UI | One tree per source, "with …" on multi-input steps, join editor with comparisons, append editor, extra inputs on code steps, rename and sheet choice on a source's page. | e2e steps 10–16, `docs/screenshots/8-join.png`, `9-sql-two-inputs.png`, `10-append.png` |
 
 ## Opening other people's projects (ADR-0004)
 
@@ -138,7 +139,7 @@ Before this change, results were in-memory tables. The regional-revenue sample w
 | **Notebook** | Markdown export only. `.ipynb` import/export not implemented. | Define the supported cell/output subset first (developer brief, rule 4). |
 | **Python containment** | Approved Python runs with the user's full permissions; review is the only safeguard. | OS sandbox per platform (Landlock/seccomp, `sandbox-exec`, AppContainer): no network, read-only outside the project (ADR-0004). |
 | **Managing approvals** | Approvals cannot be listed or revoked in the UI (`Approvals::revoke` exists in the core); they do not move between computers. | An approvals page in settings; signed projects for teams. |
-| **Combining data, further** | Union/append, joins on expressions or ranges, non-CSV sources and renaming source ids are not available (custom SQL covers the first two). | ADR-0005, "Not done yet". |
+| **Combining data, further** | Join conditions on computed expressions need custom SQL; database and remote sources are not available (they need DuckDB extensions downloaded at run time). | ADR-0005, "Not done yet". |
 | **Windows** | Not run. The memory cap is Unix only (`ulimit -v`); CI runs Windows as allowed-to-fail. | Job Object limits, then make the Windows job required. |
 | **Seeds / nondeterminism** | Not recorded. Replay detects divergence but cannot explain it. | Record seeds where users set them; flag known nondeterministic functions. |
 | **Desktop: macOS and Windows** | Built and tested on Linux only. | Add macOS and Windows to the desktop CI job; produce signed bundles. |

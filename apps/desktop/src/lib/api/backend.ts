@@ -16,6 +16,10 @@ export interface Backend {
   /** Copy a CSV into the project as another source. */
   addSource(csv: string): Promise<AnalysisView>;
   removeSource(id: string): Promise<AnalysisView>;
+  /** Sheet names of a spreadsheet source (empty for other formats). */
+  sourceSheets(id: string): Promise<string[]>;
+  /** Rename a source and/or choose another sheet. */
+  updateSource(id: string, newId: string | null, sheet: string | null): Promise<AnalysisView>;
   page(stepId: string, offset: number, limit: number): Promise<Page>;
   chart(stepId: string): Promise<unknown>;
   /** `inputs[0]` is the main input. */

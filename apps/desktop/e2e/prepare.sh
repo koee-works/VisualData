@@ -15,14 +15,16 @@ rm -rf "$tmp"
 if [ "${2:-}" != "" ]; then
   join="$2"
   rm -rf "$join" && mkdir -p "$join"
-  cp "$root/examples/regional-revenue/sales.csv" "$root/examples/regional-revenue/regions.csv" "$join/"
+  cp "$root/examples/regional-revenue/sales.csv" "$root/examples/regional-revenue/regions.csv" \
+    "$root/crates/vda-core/tests/fixtures/regions.xlsx" "$join/"
   cat > "$join/analysis.json" <<'JSON'
 {
   "format_version": 2,
   "name": "Revenue against target",
   "sources": [
     {"id": "source", "path": "sales.csv", "format": "csv"},
-    {"id": "regions", "path": "regions.csv", "format": "csv"}
+    {"id": "regions", "path": "regions.csv", "format": "csv"},
+    {"id": "sheet", "path": "regions.xlsx", "format": "excel", "sheet": "Targets"}
   ],
   "steps": [
     {"id": "by_region", "inputs": ["source"], "label": "Revenue by region",
@@ -32,7 +34,9 @@ if [ "${2:-}" != "" ]; then
     {"id": "vs_target", "inputs": ["by_region", "regions"], "label": "Revenue against target",
      "op": {"type": "join", "how": "full", "on": [{"left": "region", "right": "region"}]}},
     {"id": "below", "inputs": ["vs_target", "regions"], "label": "Regions below target",
-     "op": {"type": "sql", "sql": "SELECT region, manager, revenue, target\nFROM input\nWHERE region IN (SELECT region FROM regions) AND coalesce(revenue, 0) < target\nORDER BY region"}}
+     "op": {"type": "sql", "sql": "SELECT region, manager, revenue, target\nFROM input\nWHERE region IN (SELECT region FROM regions) AND coalesce(revenue, 0) < target\nORDER BY region"}},
+    {"id": "all_regions", "inputs": ["regions", "sheet"], "label": "Regions from both files",
+     "op": {"type": "append", "distinct": false, "origin": "from_file"}}
   ],
   "cells": [
     {"type": "markdown", "text": "## Which regions are below target?"},

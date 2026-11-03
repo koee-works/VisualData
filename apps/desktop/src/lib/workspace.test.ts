@@ -236,3 +236,45 @@ describe("Several sources and joins", () => {
     expect(ws.view!.sources).toHaveLength(2);
   });
 });
+
+describe("Append, comparison joins and source settings", () => {
+  async function joined() {
+    const mock = new MockBackend();
+    await mock.seedDemo({ run: false, editAfterRun: false, join: true });
+    const ws = new Workspace(mock);
+    await ws.open("/projects/x");
+    return { ws, mock };
+  }
+
+  it("appends tables by column name and records where each row came from", async () => {
+    const { ws } = await joined();
+    ws.selected = "regions";
+    await ws.addStep({ type: "append", distinct: false, origin: "from" }, null, ["source"]);
+    await ws.run();
+    const page = await ws.backend.page("append_1", 0, 1000);
+    expect(page.columns.map((c) => c.name)).toEqual(["region", "manager", "target", "order_id", "order_date", "revenue", "from"]);
+    expect(page.total_rows).toBe(5 + 240);
+    expect(page.rows[0]![6]).toEqual({ t: "text", v: "regions" });
+    expect(page.rows[5]![1]).toEqual({ t: "null" });
+  });
+
+  it("joins on a comparison", async () => {
+    const { ws } = await joined();
+    const j = ws.view!.steps.find((s) => s.id === "join_1")!;
+    await ws.saveStep("join_1", null, { type: "join", how: "inner", on: [{ left: "revenue", op: ">=", right: "target" }] }, j.inputs);
+    await ws.run();
+    expect(ws.progress["join_1"]!.status).toBe("succeeded");
+    const page = await ws.backend.page("join_1", 0, 100);
+    expect(page.columns.map((c) => c.name)).toContain("target");
+  });
+
+  it("renames a source everywhere it is read and keeps it selected", async () => {
+    const { ws } = await joined();
+    ws.selected = "regions";
+    expect(await ws.updateSource("regions", "targets", null)).toBe(true);
+    expect(ws.selected).toBe("targets");
+    expect(ws.view!.steps.find((s) => s.id === "join_1")!.inputs).toEqual(["aggregate_1", "targets"]);
+    expect(await ws.updateSource("targets", "aggregate_1", null)).toBe(false);
+    expect(ws.error?.message).toContain("already used");
+  });
+});

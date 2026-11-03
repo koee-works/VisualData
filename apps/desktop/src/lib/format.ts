@@ -83,6 +83,9 @@ const opWords: Record<string, string> = {
   "IS NOT NULL": "is present",
 };
 
+/** Comparison symbols as people write them. */
+export const symbols: Record<string, string> = { "=": "=", "<>": "≠", "<": "<", "<=": "≤", ">": ">", ">=": "≥" };
+
 /** One-line description of what a step does, for the pipeline. */
 export function describe(op: StepOp): string {
   switch (op.type) {
@@ -100,9 +103,13 @@ export function describe(op: StepOp): string {
     }
     case "join": {
       const kind = { inner: "Join", left: "Left join", full: "Full join" }[op.how];
-      const keys = op.on.map((k) => (k.left === k.right ? k.left : `${k.left} = ${k.right}`));
+      const keys = op.on.map((k) =>
+        (k.op ?? "=") === "=" && k.left === k.right ? k.left : `${k.left} ${symbols[k.op ?? "="]} ${k.right}`,
+      );
       return keys.length ? `${kind} on ${keys.join(", ")}` : kind;
     }
+    case "append":
+      return op.distinct ? "Append rows, without repeats" : "Append rows";
     case "sql":
       return "Custom SQL";
     case "python":

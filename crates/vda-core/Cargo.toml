@@ -7,3 +7,6 @@ description = "Analysis model, planning, staleness and execution orchestration f
 # The in-house JSON and SHA-256 modules are still TEMPORARY (see STATUS.md).
 [dependencies]
 duckdb = { version = "=1.20000.1", features = ["bundled", "parquet", "json"] }
+# Excel and OpenDocument spreadsheets, read in Rust (DuckDB's Excel
+# extension would have to be downloaded at run time; ADR-0001).
+calamine = { version = "=0.38.0", default-features = false }

@@ -28,10 +28,10 @@
     </p>
 
     <section class="mt-6 rounded-lg border border-rule bg-panel p-5">
-      <h2 class="font-semibold">From a CSV file</h2>
+      <h2 class="font-semibold">From a data file</h2>
       <div class="mt-3 grid grid-cols-[7rem_1fr] items-center gap-x-3 gap-y-2.5">
         <span class="text-sm text-ink-soft">Data</span>
-        <button class="btn justify-start truncate" onclick={pickCsv}>{csv ?? "Choose a CSV file…"}</button>
+        <button class="btn justify-start truncate" onclick={pickCsv}>{csv ?? "Choose a file…"}</button>
         <span class="text-sm text-ink-soft">Save in</span>
         <button class="btn justify-start truncate" onclick={async () => (folder = await ws.backend.pickFolder())}>
           {folder ?? "Choose an empty folder…"}

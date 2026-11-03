@@ -48,9 +48,11 @@
         </div>
       {/if}
 
-      <Tabs.Content value="step" class="min-h-0 flex-1">
-        <div bind:this={centre} class="grid h-full min-h-0" style:grid-template-rows="{split}fr 6px {1 - split}fr">
-          <div class="min-h-0 overflow-hidden bg-panel">
+      <Tabs.Content value="step" class="min-h-0 min-w-0 flex-1">
+        <!-- min-w-0 on every grid item: a wide result scrolls inside its panel
+             instead of widening the window. -->
+        <div bind:this={centre} class="grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)]" style:grid-template-rows="{split}fr 6px {1 - split}fr">
+          <div class="min-h-0 min-w-0 overflow-hidden bg-panel">
             {#if ws.selectedStep}
               <StepEditor {ws} step={ws.selectedStep} />
             {:else}
@@ -67,7 +69,7 @@
               if (e.key === "ArrowDown") split = Math.min(0.8, split + 0.05);
             }}
           ></button>
-          <div class="min-h-0">
+          <div class="min-h-0 min-w-0 overflow-hidden">
             <ResultPanel {ws} />
           </div>
         </div>

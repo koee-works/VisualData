@@ -13,6 +13,8 @@ export const tauriBackend: Backend = {
   sourcePage: (sourceId, offset, limit) => invoke<Page>("source_page", { sourceId, offset, limit }),
   addSource: (csv) => invoke<AnalysisView>("add_source", { csv }),
   removeSource: (id) => invoke<AnalysisView>("remove_source", { id }),
+  sourceSheets: (id) => invoke<string[]>("source_sheets", { id }),
+  updateSource: (id, newId, sheet) => invoke<AnalysisView>("update_source", { id, newId, sheet }),
   page: (stepId, offset, limit) => invoke<Page>("page", { stepId, offset, limit }),
   chart: (stepId) => invoke<unknown>("chart", { stepId }),
   addStep: (inputs, label, op: StepOp) => invoke<AnalysisView>("add_step", { inputs, label, op }),
@@ -38,7 +40,13 @@ export const tauriBackend: Backend = {
 
   startupProject: () => invoke<string | null>("startup_project"),
   async pickCsv() {
-    const p = await open({ multiple: false, directory: false, filters: [{ name: "CSV", extensions: ["csv"] }] });
+    const p = await open({
+      multiple: false,
+      directory: false,
+      filters: [
+        { name: "Data files", extensions: ["csv", "parquet", "json", "jsonl", "ndjson", "xlsx", "xlsm", "xls", "ods"] },
+      ],
+    });
     return typeof p === "string" ? p : null;
   },
   async pickFolder() {

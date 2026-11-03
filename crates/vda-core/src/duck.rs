@@ -9,7 +9,8 @@
 //! engine and from DuckDB are directly comparable. Other types (TIMESTAMPTZ,
 //! TIME, INTERVAL, LIST, …) are cast to VARCHAR; see STATUS.md.
 
-use crate::compile::{self, quote_ident, quote_literal, CSV_OPTIONS};
+use crate::compile::{self, quote_ident, quote_literal, CSV_OPTIONS, JSON_OPTIONS};
+use crate::model::SourceFormat;
 use crate::dataset::Dataset;
 use crate::engine::Engine;
 use crate::hash::sha256_file;
@@ -218,6 +219,16 @@ impl Engine for DuckDbEngine {
     fn import_csv(&mut self, src: &Path, out: &Path) -> Result<Dataset, Error> {
         self.copy_to(&format!("SELECT * FROM read_csv({}, {CSV_OPTIONS})", lit(src)), out)
             .map_err(|e| Error::Data(format!("cannot import {}: {e}", src.display())))
+    }
+
+    fn import_source(&mut self, src: &Path, format: SourceFormat, sheet: Option<&str>, out: &Path) -> Result<Dataset, Error> {
+        match format {
+            // Nested values (objects, lists) become text.
+            SourceFormat::Json => self
+                .copy_to(&format!("SELECT * FROM read_json({}, {JSON_OPTIONS})", lit(src)), out)
+                .map_err(|e| Error::Data(format!("cannot import {}: {e}", src.display()))),
+            _ => crate::engine::import_with_defaults(self, src, format, sheet, out),
+        }
     }
 
     fn run_step(&mut self, step: &Step, inputs: &[Dataset], out: &Path) -> Result<Dataset, Error> {

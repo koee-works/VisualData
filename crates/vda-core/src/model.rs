@@ -25,12 +25,62 @@ pub struct Source {
     pub id: String,
     /// Path relative to the project folder (or absolute).
     pub path: String,
+    pub format: SourceFormat,
+    /// For spreadsheets: the sheet to read. Stored by name, so reordering
+    /// the workbook's sheets does not change the data.
+    pub sheet: Option<String>,
 }
 
 impl Source {
+    /// A source whose format follows from its file extension.
+    pub fn new(id: impl Into<String>, path: impl Into<String>) -> Self {
+        let path = path.into();
+        Source { id: id.into(), format: SourceFormat::from_path(&path).unwrap_or(SourceFormat::Csv), path, sheet: None }
+    }
+
     /// The first source of an analysis, with id [`SOURCE_ID`].
     pub fn primary(path: impl Into<String>) -> Self {
-        Source { id: SOURCE_ID.into(), path: path.into() }
+        Source::new(SOURCE_ID, path)
+    }
+}
+
+/// File formats a source can be read from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceFormat {
+    Csv,
+    Parquet,
+    /// A JSON array of objects, or one object per line.
+    Json,
+    /// A spreadsheet: xlsx, xlsm, xlsb, xls or ods.
+    Excel,
+}
+
+impl SourceFormat {
+    pub fn name(self) -> &'static str {
+        match self {
+            SourceFormat::Csv => "csv",
+            SourceFormat::Parquet => "parquet",
+            SourceFormat::Json => "json",
+            SourceFormat::Excel => "excel",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<SourceFormat> {
+        [SourceFormat::Csv, SourceFormat::Parquet, SourceFormat::Json, SourceFormat::Excel]
+            .into_iter()
+            .find(|f| f.name() == s)
+    }
+
+    /// The format a file name's extension implies, if it is one the app reads.
+    pub fn from_path(path: &str) -> Option<SourceFormat> {
+        let ext = std::path::Path::new(path).extension()?.to_string_lossy().to_ascii_lowercase();
+        match ext.as_str() {
+            "csv" | "txt" => Some(SourceFormat::Csv),
+            "parquet" | "pq" => Some(SourceFormat::Parquet),
+            "json" | "jsonl" | "ndjson" => Some(SourceFormat::Json),
+            e if crate::excel::EXTENSIONS.contains(&e) => Some(SourceFormat::Excel),
+            _ => None,
+        }
     }
 }
 
@@ -54,6 +104,10 @@ pub enum StepKind {
     /// Visual: combine the first input (left) with the second (right) on
     /// pairs of equal key columns.
     Join { how: JoinKind, on: Vec<JoinKey> },
+    /// Visual: stack the rows of every input, matching columns by name. A
+    /// column an input lacks is missing in its rows. Optionally drop
+    /// repeated rows, and record which input each row came from.
+    Append { distinct: bool, origin: Option<String> },
     /// Custom SQL. Reads the first input as the relation `input`, and every
     /// input by its id.
     Sql { sql: String },
@@ -70,6 +124,7 @@ impl StepKind {
             StepKind::Filter { .. } => "filter",
             StepKind::Aggregate { .. } => "aggregate",
             StepKind::Join { .. } => "join",
+            StepKind::Append { .. } => "append",
             StepKind::Sql { .. } => "sql",
             StepKind::Python { .. } => "python",
             StepKind::Chart { .. } => "chart",
@@ -81,7 +136,11 @@ impl StepKind {
     pub fn is_visual(&self) -> bool {
         matches!(
             self,
-            StepKind::Filter { .. } | StepKind::Aggregate { .. } | StepKind::Join { .. } | StepKind::Chart { .. }
+            StepKind::Filter { .. }
+                | StepKind::Aggregate { .. }
+                | StepKind::Join { .. }
+                | StepKind::Append { .. }
+                | StepKind::Chart { .. }
         )
     }
 
@@ -94,6 +153,7 @@ impl StepKind {
     pub fn arity(&self) -> (usize, Option<usize>) {
         match self {
             StepKind::Join { .. } => (2, Some(2)),
+            StepKind::Append { .. } => (2, None),
             StepKind::Sql { .. } | StepKind::Python { .. } => (1, None),
             _ => (1, Some(1)),
         }
@@ -130,11 +190,21 @@ impl JoinKind {
     }
 }
 
-/// A left column that must equal a right column. Missing values never match.
+/// A condition between a left and a right column: equal (`=`, the usual
+/// key), or a comparison (`<`, `<=`, `>`, `>=`, `<>`) for range joins such
+/// as "order date on or after the price's start date". Missing values never
+/// match. A pair of rows matches when every condition holds.
 #[derive(Debug, Clone, PartialEq)]
 pub struct JoinKey {
     pub left: String,
+    pub op: CmpOp,
     pub right: String,
+}
+
+impl JoinKey {
+    pub fn equal(left: impl Into<String>, right: impl Into<String>) -> Self {
+        JoinKey { left: left.into(), op: CmpOp::Eq, right: right.into() }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

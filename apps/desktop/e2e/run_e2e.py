@@ -246,7 +246,7 @@ def joins(s, shots):
     mark = lambda label: f"//nav[@aria-label='Pipeline']//span[@role='img' and @aria-label={json.dumps(label)}]"
     table = "//div[@role='table']"
 
-    step(10, "Open a project with two sources: each is a root, the join says what else it reads")
+    step(10, "Open a project with several sources: each is a root, the join says what else it reads")
     s.wait_text(STATUS, "need a run")
     s.find(node("regions.csv"))
     assert "with regions.csv" in s.text(node("Revenue against target"))
@@ -254,7 +254,7 @@ def joins(s, shots):
     step(11, "Run: the full join keeps a region with no orders; its SQL is a full outer join")
     s.click("//button[normalize-space()='Run analysis']")
     s.wait_text(STATUS, "All results current")
-    assert s.count(mark("Current")) == 3
+    assert s.count(mark("Current")) == 4
     s.click(node("Revenue against target"))
     s.wait_text(table, "Central")
     assert "Mei Chen" in s.text(table)
@@ -266,7 +266,7 @@ def joins(s, shots):
     s.click("//button[@role='tab' and normalize-space()='Data']")
     s.click("//label[.//span[normalize-space()='Only rows that match']]")
     s.click("//button[normalize-space()='Save step']")
-    s.wait_text(STATUS, "2 of 3 results need a run")
+    s.wait_text(STATUS, "2 of 4 results need a run")
     s.click("//button[normalize-space()='Run analysis']")
     s.wait_text(STATUS, "All results current")
     s.wait_text(node("Revenue against target"), "4 rows")
@@ -283,6 +283,27 @@ def joins(s, shots):
     step(14, "The second source has its own profile")
     s.click(node("regions.csv"))
     s.find("//section[@aria-label='Source']//td[normalize-space()='manager']")
+
+    step(15, "A spreadsheet is a source: its sheet, typed columns, and an append that stacks it with a CSV")
+    s.click(node("regions.xlsx"))
+    s.wait_text("//section[@aria-label='Source']", "Spreadsheet file")
+    s.find("//section[@aria-label='Source']//td[normalize-space()='since']/following-sibling::td[normalize-space()='date']")
+    s.click(node("Regions from both files"))
+    s.wait_text(table, "from_file")
+    assert "sheet" in s.text(table) and "regions" in s.text(table)
+    s.screenshot(f"{shots}/10-append.png")
+
+    step(16, "Rename a source: the steps and the SQL that name it follow, and run again")
+    s.click(node("regions.csv"))
+    s.clear_and_type("//input[@id='source-name']", "targets")
+    s.click("//button[normalize-space()='Rename']")
+    s.wait_text(node("regions.csv"), "as targets")
+    s.wait_text(STATUS, "need a run")
+    s.click("//button[normalize-space()='Run analysis']")
+    s.wait_text(STATUS, "All results current")
+    s.click(node("Regions below target"))
+    s.click("//button[@role='tab' and normalize-space()='SQL']")
+    s.wait_text("//pre", "FROM targets")
 
 
 if __name__ == "__main__":

@@ -18,7 +18,8 @@ crates/vda-core/          Rust core: model, compiler, planner, sessions, DuckDB 
   tests/python_runner.rs  timeout, cancel, memory cap, env isolation, type preservation
   tests/large.rs          disk-backed results: paging, spilling, source converted once
   tests/sandbox.rs        custom SQL: project files only, one read-only query
-  tests/multi_input.rs    several sources, joins, SQL/Python reading several inputs, format 1 compatibility
+  tests/multi_input.rs    several sources, joins, SQL/Python reading several inputs, renaming, format 1 compatibility
+  tests/source_formats.rs Excel, Parquet and JSON sources (fixtures in tests/fixtures/)
   examples/slice.rs       runs the slice end to end and writes a project folder
   examples/bench.rs       large-data benchmark (see STATUS.md for results)
 examples/regional-revenue/sales.csv   sample dataset (60 orders, with missing values)
@@ -45,7 +46,7 @@ npm run check && npm test          # types and unit tests
 
 ### Combining data
 
-**Add source** copies another CSV into the project; each source is a root of the pipeline. A **Join** step combines two tables on pairs of equal columns, keeping only matching rows, every row of the first table, or every row of both. SQL steps can read several inputs (the first as `input`, every one by its id), and Python steps get them all in `dfs`. See [ADR-0005](docs/adr/0005-multi-input-steps.md).
+**Add source** copies a data file into the project: CSV, Parquet, JSON (an array or one object per line) or a spreadsheet (xlsx, xls, ods; one sheet, chosen on the source's page). Each source is a root of the pipeline and can be renamed; steps and code that name it follow. A **Join** step combines two tables on conditions between columns, equal keys or ranges (a date between a start and an end), keeping only matching rows, every row of the first table, or every row of both. An **Append** step stacks the rows of several tables, matching columns by name. SQL steps can read several inputs (the first as `input`, every one by its id), and Python steps get them all in `dfs`. See [ADR-0005](docs/adr/0005-multi-input-steps.md).
 
 ![A full join of revenue by region with each region's target](docs/screenshots/8-join.png)
 

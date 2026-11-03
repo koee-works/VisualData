@@ -100,10 +100,23 @@ pub fn step_kind_to_json(kind: &StepKind) -> Json {
                 "on",
                 Json::Arr(
                     on.iter()
-                        .map(|k| Json::obj(vec![("left", Json::str(k.left.clone())), ("right", Json::str(k.right.clone()))]))
+                        .map(|k| {
+                            // `=` is the default and is left out, so plain key joins stay compact.
+                            let mut pairs = vec![("left", Json::str(k.left.clone()))];
+                            if k.op != CmpOp::Eq {
+                                pairs.push(("op", Json::str(k.op.token())));
+                            }
+                            pairs.push(("right", Json::str(k.right.clone())));
+                            Json::obj(pairs)
+                        })
                         .collect(),
                 ),
             ),
+        ]),
+        StepKind::Append { distinct, origin } => Json::obj(vec![
+            ("type", Json::str("append")),
+            ("distinct", Json::Bool(*distinct)),
+            ("origin", origin.clone().map(Json::Str).unwrap_or(Json::Null)),
         ]),
         StepKind::Sql { sql } => Json::obj(vec![("type", Json::str("sql")), ("sql", Json::str(sql.clone()))]),
         StepKind::Python { code, timeout_ms } => Json::obj(vec![
@@ -163,8 +176,18 @@ pub fn step_kind_from_json(j: &Json) -> Result<StepKind, Error> {
             on: j
                 .req_arr("on")?
                 .iter()
-                .map(|k| Ok(JoinKey { left: k.req_str("left")?.to_string(), right: k.req_str("right")?.to_string() }))
+                .map(|k| {
+                    let op = match k.get("op").and_then(Json::as_str) {
+                        None => CmpOp::Eq,
+                        Some(t) => CmpOp::from_token(t).ok_or_else(|| Error::Format(format!("unknown join operator `{t}`")))?,
+                    };
+                    Ok(JoinKey { left: k.req_str("left")?.to_string(), op, right: k.req_str("right")?.to_string() })
+                })
                 .collect::<Result<_, Error>>()?,
+        },
+        "append" => StepKind::Append {
+            distinct: j.get("distinct") == Some(&Json::Bool(true)),
+            origin: opt_str("origin").filter(|o| !o.is_empty()),
         },
         "sql" => StepKind::Sql { sql: j.req_str("sql")?.to_string() },
         "python" => StepKind::Python {
@@ -191,11 +214,15 @@ pub fn analysis_to_json(a: &Analysis) -> Json {
                 a.sources
                     .iter()
                     .map(|src| {
-                        Json::obj(vec![
+                        let mut pairs = vec![
                             ("id", Json::str(src.id.clone())),
                             ("path", Json::str(src.path.clone())),
-                            ("format", Json::str("csv")),
-                        ])
+                            ("format", Json::str(src.format.name())),
+                        ];
+                        if let Some(sheet) = &src.sheet {
+                            pairs.push(("sheet", Json::str(sheet.clone())));
+                        }
+                        Json::obj(pairs)
                     })
                     .collect(),
             ),
@@ -245,11 +272,22 @@ pub fn analysis_from_json(j: &Json) -> Result<Analysis, Error> {
     }
     let sources = if v1 {
         let source = j.get("source").ok_or_else(|| Error::Format("missing source".into()))?;
-        vec![Source::primary(source.req_str("path")?)]
+        vec![Source { format: SourceFormat::Csv, ..Source::primary(source.req_str("path")?) }]
     } else {
         j.req_arr("sources")?
             .iter()
-            .map(|s| Ok(Source { id: s.req_str("id")?.to_string(), path: s.req_str("path")?.to_string() }))
+            .map(|s| {
+                let format = match s.get("format").and_then(Json::as_str) {
+                    None => SourceFormat::Csv,
+                    Some(f) => SourceFormat::parse(f).ok_or_else(|| Error::Format(format!("unknown source format `{f}`")))?,
+                };
+                Ok(Source {
+                    id: s.req_str("id")?.to_string(),
+                    path: s.req_str("path")?.to_string(),
+                    format,
+                    sheet: s.get("sheet").and_then(Json::as_str).map(str::to_string),
+                })
+            })
             .collect::<Result<_, Error>>()?
     };
     Ok(Analysis {

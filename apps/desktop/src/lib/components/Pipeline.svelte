@@ -1,6 +1,6 @@
 <script lang="ts">
   import { DropdownMenu } from "bits-ui";
-  import { Plus, Database, Filter, Sigma, Braces, Code, ChartColumn, Combine, FilePlus2 } from "@lucide/svelte";
+  import { Plus, Database, Filter, Sigma, Braces, Code, ChartColumn, Combine, FilePlus2, Rows3, Sheet } from "@lucide/svelte";
   import type { Workspace } from "../workspace.svelte";
   import type { StepOp, StepView } from "../api/types";
   import { formatCount, stepTitle } from "../format";
@@ -8,7 +8,7 @@
 
   let { ws }: { ws: Workspace } = $props();
 
-  const icons = { filter: Filter, aggregate: Sigma, join: Combine, sql: Braces, python: Code, chart: ChartColumn };
+  const icons = { filter: Filter, aggregate: Sigma, join: Combine, append: Rows3, sql: Braces, python: Code, chart: ChartColumn };
 
   // Columns of whatever the new step would read.
   let inputColumns = $derived(ws.columnsOf(ws.selected) ?? []);
@@ -27,6 +27,8 @@
     const numeric = cols.find((c) => c.type === "BIGINT" || c.type === "DOUBLE")?.name ?? first;
     const text = cols.find((c) => c.type === "VARCHAR")?.name ?? first;
     switch (type) {
+      case "append":
+        return { type, distinct: false, origin: null };
       case "join": {
         // Prefer a column both sides share by name.
         const other = joinPartner ? (ws.columnsOf(joinPartner.id) ?? []) : [];
@@ -52,6 +54,7 @@
     { type: "filter", name: "Filter rows", hint: "Visual" },
     { type: "aggregate", name: "Group and summarize", hint: "Visual" },
     { type: "join", name: "Join with another table", hint: "Visual" },
+    { type: "append", name: "Append another table's rows", hint: "Visual" },
     { type: "chart", name: "Chart", hint: "Visual" },
     { type: "sql", name: "SQL", hint: "Code" },
     { type: "python", name: "Python", hint: "Code" },
@@ -80,11 +83,12 @@
           </p>
           {#each choices as c (c.type)}
             {@const Icon = icons[c.type]}
-            {@const blocked = c.type === "join" && !joinPartner}
+            {@const needsTwo = c.type === "join" || c.type === "append"}
+            {@const blocked = needsTwo && !joinPartner}
             <DropdownMenu.Item
               class="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 outline-none data-[disabled]:cursor-default data-[disabled]:opacity-50 data-[highlighted]:bg-select"
               disabled={blocked}
-              onSelect={() => ws.addStep(starter(c.type), null, c.type === "join" && joinPartner ? [joinPartner.id] : [])}
+              onSelect={() => ws.addStep(starter(c.type), null, needsTwo && joinPartner ? [joinPartner.id] : [])}
             >
               <Icon size={15} class="text-ink-soft" />
               <span class="flex-1">
@@ -105,11 +109,15 @@
         <li>
           <button class="node" aria-current={ws.selected === t.source.id} onclick={() => (ws.selected = t.source.id)}>
             <span class="mark-source"></span>
-            <Database size={15} class="mt-0.5 shrink-0 text-ink-soft" />
+            {#if t.source.format === "excel"}
+              <Sheet size={15} class="mt-0.5 shrink-0 text-ink-soft" />
+            {:else}
+              <Database size={15} class="mt-0.5 shrink-0 text-ink-soft" />
+            {/if}
             <span class="min-w-0 flex-1">
               <span class="block truncate font-semibold">{t.source.path}</span>
               <span class="block text-xs text-ink-faint">
-                {formatCount(t.source.rows)} rows{#if (ws.view?.sources.length ?? 0) > 1}, as <code class="code">{t.source.id}</code>{/if}
+                {#if t.source.sheet}{`${t.source.sheet}, `}{/if}{formatCount(t.source.rows)} rows{#if (ws.view?.sources.length ?? 0) > 1}, as <code class="code">{t.source.id}</code>{/if}
               </span>
             </span>
           </button>

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Plus, X } from "@lucide/svelte";
-  import type { Column, JoinHow, JoinKey } from "../api/types";
-  import { typeLabel } from "../format";
+  import type { CmpOp, Column, JoinHow, JoinKey } from "../api/types";
+  import { symbols, typeLabel } from "../format";
   import ColumnPicker from "./ColumnPicker.svelte";
 
   let {
@@ -38,19 +38,36 @@
     return cols?.find((c) => c.name === name)?.type ?? null;
   }
 
-  // Mirrors the core's rule: same type, or both numbers.
+  const ops: { value: CmpOp; words: string }[] = [
+    { value: "=", words: "equals" },
+    { value: "<>", words: "differs from" },
+    { value: "<", words: "is before / less than" },
+    { value: "<=", words: "is on or before / at most" },
+    { value: ">", words: "is after / more than" },
+    { value: ">=", words: "is on or after / at least" },
+  ];
+
+  // Mirrors the core's rule: same type, both numbers, or both dates/times.
   function mismatch(k: JoinKey): string | null {
     const a = typeOf(leftColumns, k.left);
     const b = typeOf(rightColumns, k.right);
     if (!a || !b || a === b) return null;
     const numeric = (t: string) => t === "BIGINT" || t === "DOUBLE";
-    if (numeric(a) && numeric(b)) return null;
-    return `A ${typeLabel[a]} column can't match a ${typeLabel[b]} column.`;
+    const temporal = (t: string) => t === "DATE" || t === "TIMESTAMP";
+    if ((numeric(a) && numeric(b)) || (temporal(a) && temporal(b))) return null;
+    return `A ${typeLabel[a]} column can't be compared with a ${typeLabel[b]} column.`;
+  }
+
+  // `=` is the default and is not stored, so an untouched join stays unchanged.
+  function setOp(k: JoinKey, value: CmpOp) {
+    if (value === "=") delete k.op;
+    else k.op = value;
+    on = [...on];
   }
 
   let clashes = $derived.by(() => {
     if (!leftColumns || !rightColumns) return [];
-    const keys = new Set(on.map((k) => k.right));
+    const keys = new Set(on.filter((k) => (k.op ?? "=") === "=").map((k) => k.right));
     const left = new Set(leftColumns.map((c) => c.name));
     return rightColumns.filter((c) => !keys.has(c.name) && left.has(c.name)).map((c) => c.name);
   });
@@ -86,13 +103,23 @@
 
   <fieldset>
     <legend class="mb-1.5 font-semibold">Match rows where</legend>
+    <p class="mb-2 max-w-[64ch] text-ink-soft">
+      Every condition must hold. For a range, use two: a date on or after a start, and on or before an end.
+    </p>
     <ul class="space-y-2">
       {#each on as key, i (i)}
         {@const problem = mismatch(key)}
         <li>
           <div class="flex flex-wrap items-center gap-2">
             <ColumnPicker bind:value={key.left} columns={leftColumns} label="Column of {leftName}" />
-            <span class="text-ink-soft">equals</span>
+            <select
+              class="field"
+              aria-label="Comparison"
+              value={key.op ?? "="}
+              onchange={(e) => setOp(key, e.currentTarget.value as CmpOp)}
+            >
+              {#each ops as o (o.value)}<option value={o.value}>{symbols[o.value]} {o.words}</option>{/each}
+            </select>
             <ColumnPicker bind:value={key.right} columns={rightColumns} label="Column of {rightName}" />
             <button
               class="btn btn-quiet !px-1.5"
@@ -116,7 +143,8 @@
   </fieldset>
 
   <p class="max-w-[64ch] text-ink-soft">
-    The result has {leftName}'s columns, then {rightName}'s other columns. Missing values never match.
+    The result has {leftName}'s columns, then {rightName}'s other columns (columns matched with = appear once).
+    Missing values never match.
     {#if clashes.length}
       Both have {clashes.map((c) => `"${c}"`).join(", ")}, so {rightName}'s
       {clashes.length === 1 ? "copy is" : "copies are"} renamed {clashes.map((c) => `"${c}_${rightId}"`).join(", ")}.

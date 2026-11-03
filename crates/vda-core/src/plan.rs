@@ -142,8 +142,11 @@ pub fn plan(a: &Analysis, fp: &Fingerprints) -> Result<Plan, Error> {
     for id in &order {
         let step = a.step(id).unwrap();
         // For one input this is exactly the format-1 key input, so projects
-        // saved before multi-input steps keep their saved results.
-        let upstream = step
+        // saved before multi-input steps keep their saved results. With
+        // several inputs their ids matter too (a join names clashing columns
+        // after the right input, an append records each row's input), so
+        // they are part of the key.
+        let mut upstream = step
             .inputs
             .iter()
             .map(|input| match fp.sources.get(input) {
@@ -153,6 +156,9 @@ pub fn plan(a: &Analysis, fp: &Fingerprints) -> Result<Plan, Error> {
             })
             .collect::<Result<Vec<_>, Error>>()?
             .join("\n");
+        if step.inputs.len() > 1 {
+            upstream = format!("inputs:{}\n{upstream}", step.inputs.join(","));
+        }
         let mut h = Sha256::new();
         for part in [
             KEY_VERSION,

@@ -64,6 +64,16 @@ async fn add_source(s: State<'_, Shared>, csv: String) -> Res<AnalysisView> {
 }
 
 #[tauri::command]
+async fn source_sheets(s: State<'_, Shared>, id: String) -> Res<Vec<String>> {
+    with(&s, |a| a.source_sheets(&id))
+}
+
+#[tauri::command]
+async fn update_source(s: State<'_, Shared>, id: String, new_id: Option<String>, sheet: Option<String>) -> Res<AnalysisView> {
+    with(&s, |a| a.update_source(&id, new_id, sheet))
+}
+
+#[tauri::command]
 async fn remove_source(s: State<'_, Shared>, id: String) -> Res<AnalysisView> {
     with(&s, |a| a.remove_source(&id))
 }
@@ -172,6 +182,8 @@ fn main() {
             approve,
             add_source,
             remove_source,
+            source_sheets,
+            update_source,
             set_trust_all,
             create_project,
             open_project,

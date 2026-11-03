@@ -31,6 +31,7 @@ pub fn eval_step(step: &Step, inputs: &[Table]) -> Result<Table, Error> {
         StepKind::Filter { predicates } => filter(input, predicates),
         StepKind::Aggregate { group_by, measures } => aggregate(input, group_by, measures)?,
         StepKind::Join { how, on } => join(*how, on, &inputs[0], &inputs[1], &schema),
+        StepKind::Append { distinct, origin } => append(&step.inputs, inputs, &schema, *distinct, origin.as_deref()),
         _ => unreachable!("output_schema returned Some for a non-table step"),
     };
     Ok(Table { schema, rows })
@@ -39,13 +40,16 @@ pub fn eval_step(step: &Step, inputs: &[Table]) -> Result<Table, Error> {
 fn join(how: JoinKind, on: &[JoinKey], left: &Table, right: &Table, out: &Schema) -> Vec<Vec<Value>> {
     let lk: Vec<usize> = on.iter().map(|k| left.schema.index_of(&k.left).unwrap()).collect();
     let rk: Vec<usize> = on.iter().map(|k| right.schema.index_of(&k.right).unwrap()).collect();
-    let right_keep: Vec<usize> = (0..right.schema.fields.len()).filter(|i| !rk.contains(i)).collect();
+    let eq: Vec<bool> = on.iter().map(|k| k.op == CmpOp::Eq).collect();
+    let dropped: Vec<usize> = rk.iter().zip(&eq).filter(|(_, e)| **e).map(|(i, _)| *i).collect();
+    let right_keep: Vec<usize> = (0..right.schema.fields.len()).filter(|i| !dropped.contains(i)).collect();
     let matches = |l: &[Value], r: &[Value]| {
-        lk.iter().zip(&rk).all(|(&a, &b)| l[a].sql_cmp(&r[b]) == Some(Ordering::Equal))
+        on.iter().zip(lk.iter().zip(&rk)).all(|(k, (&a, &b))| l[a].sql_cmp(&r[b]).is_some_and(|o| holds_cmp(k.op, o)))
     };
-    // Typed as the output column: a full join widens mixed integer/decimal keys.
+    // Typed as the output column: a full join widens mixed key types.
     let fit = |v: Value, col: usize| match (out.fields[col].dtype, v) {
         (DataType::Float, Value::Int(i)) => Value::Float(i as f64),
+        (DataType::Timestamp, Value::Date(d)) => Value::Timestamp(d as i64 * crate::table::MICROS_PER_DAY),
         (_, v) => v,
     };
     let row_of = |l: Option<&Vec<Value>>, r: Option<&Vec<Value>>| -> Vec<Value> {
@@ -53,7 +57,7 @@ fn join(how: JoinKind, on: &[JoinKey], left: &Table, right: &Table, out: &Schema
         for i in 0..left.schema.fields.len() {
             let mut v = l.map(|l| l[i].clone()).unwrap_or(Value::Null);
             if how == JoinKind::Full && v.is_null() {
-                if let (Some(k), Some(r)) = (lk.iter().position(|&x| x == i), r) {
+                if let (Some(k), Some(r)) = (lk.iter().zip(&eq).position(|(&x, &e)| x == i && e), r) {
                     v = r[rk[k]].clone();
                 }
             }
@@ -87,6 +91,47 @@ fn join(how: JoinKind, on: &[JoinKey], left: &Table, right: &Table, out: &Schema
         }
     }
     rows
+}
+
+fn append(ids: &[String], inputs: &[Table], out: &Schema, distinct: bool, origin: Option<&str>) -> Vec<Vec<Value>> {
+    let mut rows = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for (id, t) in ids.iter().zip(inputs) {
+        for r in &t.rows {
+            let row: Vec<Value> = out
+                .fields
+                .iter()
+                .map(|f| {
+                    if Some(f.name.as_str()) == origin {
+                        return Value::Text(id.clone());
+                    }
+                    let v = t.schema.index_of(&f.name).map(|i| r[i].clone()).unwrap_or(Value::Null);
+                    match (f.dtype, v) {
+                        (DataType::Float, Value::Int(i)) => Value::Float(i as f64),
+                        (DataType::Timestamp, Value::Date(d)) => Value::Timestamp(d as i64 * crate::table::MICROS_PER_DAY),
+                        (_, v) => v,
+                    }
+                })
+                .collect();
+            if distinct && !seen.insert(row.iter().map(Value::key).collect::<Vec<_>>().join("\u{1f}")) {
+                continue;
+            }
+            rows.push(row);
+        }
+    }
+    rows
+}
+
+fn holds_cmp(op: CmpOp, ord: Ordering) -> bool {
+    match op {
+        CmpOp::Eq => ord == Ordering::Equal,
+        CmpOp::Ne => ord != Ordering::Equal,
+        CmpOp::Lt => ord == Ordering::Less,
+        CmpOp::Le => ord != Ordering::Greater,
+        CmpOp::Gt => ord == Ordering::Greater,
+        CmpOp::Ge => ord != Ordering::Less,
+        CmpOp::IsNull | CmpOp::IsNotNull => false,
+    }
 }
 
 fn holds(p: &Predicate, v: &Value) -> bool {

@@ -161,6 +161,14 @@ export class Workspace {
     }
   }
 
+  /** Rename a source and/or pick another sheet; selects it under its new name. */
+  async updateSource(id: string, newId: string | null, sheet: string | null) {
+    const v = await this.act(newId ? "Rename source" : "Choose sheet", () => this.backend.updateSource(id, newId, sheet));
+    if (v && newId && this.selected === id) this.selected = newId;
+    this.apply(v);
+    return v !== undefined;
+  }
+
   async removeSource(id: string) {
     this.apply(await this.act("Remove source", () => this.backend.removeSource(id)));
   }

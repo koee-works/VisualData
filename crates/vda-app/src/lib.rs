@@ -15,7 +15,7 @@ use std::sync::Arc;
 use vda_core::{compile, plan};
 use vda_core::duck::{DuckDbEngine, EngineOptions};
 use vda_core::json::Json;
-use vda_core::model::{Analysis, Cell as NoteCell, Source, Step, StepKind};
+use vda_core::model::{Analysis, Cell as NoteCell, Source, SourceFormat, Step, StepKind, SOURCE_ID};
 use vda_core::persist;
 use vda_core::python::{default_interpreter, PythonRunner};
 use vda_core::review::{self, Approvals, ReviewPolicy};
@@ -135,6 +135,10 @@ pub struct SourceView {
     pub columns: Vec<Column>,
     /// Kept outside the project folder (custom SQL may still read it).
     pub external: bool,
+    /// `csv`, `parquet`, `json` or `excel`.
+    pub format: String,
+    /// For spreadsheets, the sheet that is read.
+    pub sheet: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -337,12 +341,12 @@ impl App {
         if dir.join("analysis.json").exists() {
             return fail(format!("{} already contains a project", dir.display()));
         }
+        let source = readable_source(csv, SOURCE_ID.into(), csv.file_name().map(|f| f.to_string_lossy().into_owned()))?;
         std::fs::create_dir_all(dir)?;
-        let file = csv.file_name().ok_or_else(|| AppError::from("the CSV path has no file name"))?;
-        std::fs::copy(csv, dir.join(file))?;
+        std::fs::copy(csv, dir.join(&source.path))?;
         let analysis = Analysis {
             name: name.into(),
-            sources: vec![Source::primary(file.to_string_lossy())],
+            sources: vec![source],
             steps: vec![],
             cells: vec![],
         };
@@ -373,6 +377,8 @@ impl App {
                 rows: ds.rows,
                 columns: columns(&ds.schema),
                 external: Path::new(&src.path).is_absolute(),
+                format: src.format.name().into(),
+                sheet: src.sheet.clone(),
             });
         }
         let mut steps = Vec::new();
@@ -562,8 +568,9 @@ impl App {
         self.commit(a)
     }
 
-    /// Copy a CSV file into the project as another source. Its id comes
-    /// from the file name (`regions.csv` → `regions`), made unique.
+    /// Copy a data file (CSV, Parquet, JSON or a spreadsheet) into the project
+    /// as another source. Its id comes from the file name (`regions.csv` →
+    /// `regions`), made unique. A spreadsheet's first sheet is read.
     pub fn add_source(&mut self, csv: &Path) -> Result<AnalysisView> {
         let s = self.session()?;
         let dir = s.project_dir().to_path_buf();
@@ -576,11 +583,54 @@ impl App {
         if dir.join(&file).exists() && !same_file(&dir.join(&file), csv) {
             file = format!("{id}.{ext}");
         }
+        let source = readable_source(csv, id, Some(file.clone()))?;
         if !same_file(&dir.join(&file), csv) {
             std::fs::copy(csv, dir.join(&file))?;
         }
-        a.sources.push(Source { id, path: file });
+        a.sources.push(source);
         self.commit(a)
+    }
+
+    /// Sheet names of a spreadsheet source, in workbook order.
+    pub fn source_sheets(&mut self, id: &str) -> Result<Vec<String>> {
+        let s = self.session()?;
+        let src = s.analysis.source(id).ok_or_else(|| AppError::from(format!("unknown source `{id}`")))?;
+        if src.format != SourceFormat::Excel {
+            return Ok(vec![]);
+        }
+        Ok(vda_core::excel::sheet_names(&s.source_path(id)?)?)
+    }
+
+    /// Rename a source (steps and custom code that name it are updated), or
+    /// choose another sheet of a spreadsheet.
+    pub fn update_source(&mut self, id: &str, new_id: Option<String>, sheet: Option<String>) -> Result<AnalysisView> {
+        let s = self.session()?;
+        let mut a = s.analysis.clone();
+        let Some(src) = a.source(id).cloned() else { return fail(format!("unknown source `{id}`")) };
+        if let Some(sheet) = &sheet {
+            if src.format != SourceFormat::Excel {
+                return fail(format!("`{id}` is not a spreadsheet"));
+            }
+            let sheets = vda_core::excel::sheet_names(&s.source_path(id)?)?;
+            if !sheets.contains(sheet) {
+                return fail(format!("{} has no sheet named `{sheet}` (sheets: {})", src.path, sheets.join(", ")));
+            }
+            a.sources.iter_mut().find(|x| x.id == id).unwrap().sheet = Some(sheet.clone());
+        }
+        let mut carry = Vec::new();
+        if let Some(new_id) = new_id.filter(|n| n != id) {
+            // Code that was approved stays approved when only the name in it
+            // changes; code waiting for review keeps waiting.
+            let was_pending: Vec<String> = s.pending_review();
+            let renamed = vda_core::rename::rename_source(&mut a, id, &new_id)?;
+            carry = renamed.code_changed.into_iter().filter(|c| !was_pending.contains(c)).collect();
+        }
+        self.commit(a)?;
+        for step in carry {
+            self.session()?.approve_step(&step)?;
+        }
+        self.remember_approvals();
+        self.view()
     }
 
     /// Remove a source no step reads. Its file stays in the project folder.
@@ -653,4 +703,22 @@ fn unique_id(a: &Analysis, base: &str) -> String {
 
 fn same_file(a: &Path, b: &Path) -> bool {
     matches!((std::fs::canonicalize(a), std::fs::canonicalize(b)), (Ok(x), Ok(y)) if x == y)
+}
+
+/// A source for a file the app can read, or a message naming the formats.
+fn readable_source(file: &Path, id: String, name_in_project: Option<String>) -> Result<Source> {
+    let name = name_in_project.ok_or_else(|| AppError::from("the file path has no file name"))?;
+    let Some(format) = SourceFormat::from_path(&name) else {
+        return fail(format!(
+            "{name}: the app reads CSV, Parquet, JSON and spreadsheet files ({})",
+            ["csv", "parquet", "json", "jsonl", "xlsx", "xls", "ods"].join(", ")
+        ));
+    };
+    let mut source = Source::new(id, name);
+    source.format = format;
+    if format == SourceFormat::Excel {
+        // The first sheet, stored by name so reordering sheets changes nothing.
+        source.sheet = vda_core::excel::sheet_names(file)?.into_iter().next();
+    }
+    Ok(source)
 }

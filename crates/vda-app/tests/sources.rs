@@ -135,3 +135,65 @@ fn sources_are_named_from_files_and_removed_only_when_unused() {
     let view = app.open_project(&dir).unwrap();
     assert_eq!(view.sources.len(), 2);
 }
+
+fn fixtures() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../vda-core/tests/fixtures")
+}
+
+#[test]
+fn spreadsheets_parquet_and_json_are_sources_and_a_sheet_can_be_chosen() {
+    let dir = fresh("formats");
+    let mut app = app("formats");
+    app.create_project(&dir, &fixtures().join("targets.parquet"), "Formats").unwrap();
+    let view = app.add_source(&fixtures().join("regions.xlsx")).unwrap();
+    let sheet = view.sources.iter().find(|s| s.id == "regions").unwrap();
+    assert_eq!((sheet.format.as_str(), sheet.sheet.as_deref()), ("excel", Some("Notes")), "the first sheet, by name");
+    assert_eq!(app.source_sheets("regions").unwrap(), ["Notes", "Targets"]);
+    assert_eq!(view.sources[0].format, "parquet");
+
+    let view = app.update_source("regions", None, Some("Targets".into())).unwrap();
+    let sheet = view.sources.iter().find(|s| s.id == "regions").unwrap();
+    assert_eq!(sheet.rows, 5);
+    assert!(app.update_source("regions", None, Some("Q3".into())).unwrap_err().message.contains("no sheet named `Q3`"));
+    assert!(app.update_source("source", None, Some("x".into())).unwrap_err().message.contains("not a spreadsheet"));
+
+    app.add_source(&fixtures().join("events.jsonl")).unwrap();
+    app.add_step(&ids(&["source", "regions"]), None, &join("left", "region", "region")).unwrap();
+    let summary = app.run(&mut |_| {}).unwrap();
+    assert!(summary.succeeded, "{summary:?}");
+
+    let txt = fresh("notes").with_extension("docx");
+    fs::write(&txt, "x").unwrap();
+    let err = app.add_source(&txt).unwrap_err().message;
+    assert!(err.contains("reads CSV, Parquet, JSON and spreadsheet files"), "{err}");
+}
+
+#[test]
+fn renaming_a_source_updates_steps_and_keeps_approved_code_approved() {
+    let dir = fresh("rename");
+    let mut app = app("rename");
+    app.create_project(&dir, &samples().join("sales.csv"), "Rename").unwrap();
+    app.add_source(&samples().join("regions.csv")).unwrap();
+    app.add_step(&ids(&["source"]), None, &by_region()).unwrap();
+    app.add_step(
+        &ids(&["aggregate_1", "regions"]),
+        None,
+        &json!({"type": "python", "timeout_ms": 30000, "code": "result = df.merge(dfs['regions'], on='region')"}),
+    )
+    .unwrap();
+    app.add_step(&ids(&["regions"]), None, &json!({"type": "sql", "sql": "SELECT region AS regions FROM regions"})).unwrap();
+    assert!(app.run(&mut |_| {}).unwrap().succeeded);
+
+    let view = app.update_source("regions", Some("targets".into()), None).unwrap();
+    assert!(view.sources.iter().any(|s| s.id == "targets"));
+    let py = view.steps.iter().find(|s| s.id == "python_1").unwrap();
+    assert_eq!(py.inputs, ["aggregate_1", "targets"]);
+    assert_eq!(py.op["code"], "result = df.merge(dfs['targets'], on='region')");
+    assert!(view.review.is_empty(), "the user's own code stays approved after a rename");
+    let sql = view.steps.iter().find(|s| s.id == "sql_1").unwrap();
+    assert_eq!(sql.op["sql"], "SELECT region AS regions FROM targets", "the alias is not the table");
+    assert!(app.run(&mut |_| {}).unwrap().succeeded);
+
+    let err = app.update_source("targets", Some("aggregate_1".into()), None).unwrap_err().message;
+    assert!(err.contains("already used"), "{err}");
+}

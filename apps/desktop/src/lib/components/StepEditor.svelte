@@ -9,6 +9,7 @@
   import CodeEditor from "./CodeEditor.svelte";
   import ChartEditor from "./ChartEditor.svelte";
   import JoinEditor from "./JoinEditor.svelte";
+  import AppendEditor from "./AppendEditor.svelte";
 
   let { ws, step }: { ws: Workspace; step: StepView } = $props();
 
@@ -136,6 +137,8 @@
         rightColumns={ws.columnsOf(inputs[1]!)}
         rightId={inputs[1]!}
       />
+    {:else if draft.type === "append"}
+      <AppendEditor {ws} bind:inputs bind:distinct={draft.distinct} bind:origin={draft.origin} choices={readable} />
     {:else if draft.type === "sql" || draft.type === "python"}
       {#if draft.type === "sql"}
         <CodeEditor bind:code={draft.sql} language="sql" inputs={inputs.map((id) => ({ id, name: ws.nameOf(id) }))} />

@@ -14,7 +14,7 @@ use crate::compile;
 use crate::csv;
 use crate::dataset::Dataset;
 use crate::duck::{self, DuckDbEngine};
-use crate::model::{Step, StepKind};
+use crate::model::{SourceFormat, Step, StepKind};
 use crate::reference;
 use crate::table::{ColumnProfile, Table};
 use crate::Error;
@@ -28,6 +28,19 @@ pub trait Engine: Send {
 
     /// Convert a CSV source into a dataset written at `out`.
     fn import_csv(&mut self, src: &Path, out: &Path) -> Result<Dataset, Error>;
+
+    /// Convert a source in any supported format into a dataset at `out`.
+    /// Spreadsheets are read in Rust and Parquet is adopted with core types,
+    /// for every engine; JSON needs an engine that can read it.
+    fn import_source(
+        &mut self,
+        src: &Path,
+        format: SourceFormat,
+        sheet: Option<&str>,
+        out: &Path,
+    ) -> Result<Dataset, Error> {
+        import_with_defaults(self, src, format, sheet, out)
+    }
 
     /// Execute a relational step (visual or custom SQL) on its inputs, given
     /// in the order of `step.inputs`, writing its result at `out`.
@@ -47,6 +60,41 @@ pub trait Engine: Send {
     fn profile(&mut self, ds: &Dataset) -> Result<Vec<ColumnProfile>, Error>;
 }
 
+/// Import shared by engines: CSV through the engine, Parquet adopted with core
+/// types, spreadsheets read in Rust. JSON needs the engine itself.
+pub fn import_with_defaults<E: Engine + ?Sized>(
+    engine: &mut E,
+    src: &Path,
+    format: SourceFormat,
+    sheet: Option<&str>,
+    out: &Path,
+) -> Result<Dataset, Error> {
+    match format {
+        SourceFormat::Csv => engine.import_csv(src, out),
+        SourceFormat::Parquet => {
+            // Adopting may rename its input into place, so work on a copy.
+            let copy = out.with_extension("src.parquet");
+            std::fs::copy(src, &copy)
+                .map_err(|e| Error::Data(format!("cannot read {}: {e}", src.display())))?;
+            let ds = engine.adopt_parquet(&copy, out);
+            let _ = std::fs::remove_file(&copy);
+            ds.map_err(|e| Error::Data(format!("cannot import {}: {e}", src.display())))
+        }
+        SourceFormat::Excel => {
+            let table = crate::excel::read_sheet(src, sheet)?;
+            let raw = out.with_extension("sheet.parquet");
+            duck::write_parquet(&table, &raw)?;
+            let ds = engine.adopt_parquet(&raw, out);
+            let _ = std::fs::remove_file(&raw);
+            ds
+        }
+        SourceFormat::Json => Err(Error::Unsupported(format!(
+            "this engine cannot read JSON ({})",
+            src.display()
+        ))),
+    }
+}
+
 /// Reference engine: evaluation in memory, file I/O through DuckDB.
 pub struct ReferenceEngine {
     io: DuckDbEngine,
@@ -54,7 +102,9 @@ pub struct ReferenceEngine {
 
 impl ReferenceEngine {
     pub fn new() -> Self {
-        ReferenceEngine { io: DuckDbEngine::new().expect("DuckDB starts") }
+        ReferenceEngine {
+            io: DuckDbEngine::new().expect("DuckDB starts"),
+        }
     }
 
     fn write(&mut self, t: &Table, out: &Path) -> Result<Dataset, Error> {
@@ -92,9 +142,27 @@ impl Engine for ReferenceEngine {
                 compile::step_sql(&step.kind).unwrap_or_default()
             )));
         }
-        let tables = inputs.iter().map(|d| duck::read_parquet(&d.path)).collect::<Result<Vec<_>, _>>()?;
+        let tables = inputs
+            .iter()
+            .map(|d| duck::read_parquet(&d.path))
+            .collect::<Result<Vec<_>, _>>()?;
         let result = reference::eval_step(step, &tables)?;
         self.write(&result, out)
+    }
+
+    fn import_source(
+        &mut self,
+        src: &Path,
+        format: SourceFormat,
+        sheet: Option<&str>,
+        out: &Path,
+    ) -> Result<Dataset, Error> {
+        // Only CSV import is reimplemented independently; other formats use
+        // the same readers as DuckDB.
+        match format {
+            SourceFormat::Csv => self.import_csv(src, out),
+            _ => self.io.import_source(src, format, sheet, out),
+        }
     }
 
     fn adopt_parquet(&mut self, src: &Path, out: &Path) -> Result<Dataset, Error> {

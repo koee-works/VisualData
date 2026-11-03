@@ -49,6 +49,8 @@ export type JoinHow = "inner" | "left" | "full";
 
 export interface JoinKey {
   left: string;
+  /** Comparison between the two columns; `=` when left out. */
+  op?: CmpOp;
   right: string;
 }
 
@@ -71,6 +73,7 @@ export type StepOp =
   | { type: "filter"; predicates: Predicate[] }
   | { type: "aggregate"; group_by: string[]; measures: Measure[] }
   | { type: "join"; how: JoinHow; on: JoinKey[] }
+  | { type: "append"; distinct: boolean; origin: string | null }
   | { type: "sql"; sql: string }
   | { type: "python"; code: string; timeout_ms: number }
   | { type: "chart"; mark: Mark; x: string; y: string; title: string | null };
@@ -140,7 +143,12 @@ export interface SourceView {
   columns: Column[];
   /** Kept outside the project folder. */
   external: boolean;
+  format: SourceFormat;
+  /** For spreadsheets, the sheet that is read. */
+  sheet: string | null;
 }
+
+export type SourceFormat = "csv" | "parquet" | "json" | "excel";
 
 /** Id of an analysis's first source. */
 export const SOURCE_ID = "source";

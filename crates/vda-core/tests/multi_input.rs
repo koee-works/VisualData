@@ -41,7 +41,7 @@ fn step(id: &str, inputs: &[&str], kind: StepKind) -> Step {
 fn analysis() -> Analysis {
     Analysis {
         name: "Revenue against target".into(),
-        sources: vec![Source::primary("sales.csv"), Source { id: "regions".into(), path: "regions.csv".into() }],
+        sources: vec![Source::primary("sales.csv"), Source::new("regions", "regions.csv")],
         steps: vec![
             step(
                 "by_region",
@@ -54,7 +54,7 @@ fn analysis() -> Analysis {
             step(
                 "with_target",
                 &["by_region", "regions"],
-                StepKind::Join { how: JoinKind::Full, on: vec![JoinKey { left: "region".into(), right: "region".into() }] },
+                StepKind::Join { how: JoinKind::Full, on: vec![JoinKey::equal("region", "region")] },
             ),
             step(
                 "missed",
@@ -224,4 +224,38 @@ fn invalid_graphs_are_explained() {
     let mut a = analysis();
     a.steps[0].inputs = vec!["missed".into()];
     assert!(validate(&a).unwrap_err().to_string().contains("cycle"));
+}
+
+#[test]
+fn renaming_a_source_rewrites_inputs_and_code_and_reruns_what_it_changes() {
+    use vda_core::rename::rename_source;
+    let dir = project("rename");
+    let mut s = Session::new(analysis(), &dir, engine(), python(&dir)).unwrap();
+    assert!(s.run_all().unwrap().succeeded());
+    let key = |s: &Session, id: &str| s.plan().unwrap().keys[id].clone();
+    let before = ["by_region", "with_target", "missed", "ratio"].map(|id| key(&s, id));
+
+    let mut a = s.analysis.clone();
+    let renamed = rename_source(&mut a, "regions", "targets").unwrap();
+    assert_eq!(renamed.code_changed, ["missed", "ratio"]);
+    assert_eq!(
+        a.step("missed").unwrap().kind,
+        StepKind::Sql {
+            sql: "SELECT region, manager, revenue, target, (SELECT COUNT(*) FROM targets) AS regions \
+                  FROM input WHERE coalesce(revenue, 0) < target ORDER BY region"
+                .into()
+        },
+        "the table reference is renamed; the column alias `regions` is not"
+    );
+    s.analysis = a;
+    let after = ["by_region", "with_target", "missed", "ratio"].map(|id| key(&s, id));
+    assert_eq!(before[0], after[0], "a step that does not read the source keeps its result");
+    assert!(before[1..].iter().zip(&after[1..]).all(|(b, a)| b != a), "readers are rerun");
+    let run = s.run_all().unwrap();
+    assert!(run.succeeded(), "{run:?}");
+
+    let mut a = s.analysis.clone();
+    assert!(rename_source(&mut a, "targets", "by_region").unwrap_err().to_string().contains("already used"));
+    assert!(rename_source(&mut a, "targets", "two words").unwrap_err().to_string().contains("cannot be a source name"));
+    assert!(rename_source(&mut a, "nope", "x").is_err());
 }
