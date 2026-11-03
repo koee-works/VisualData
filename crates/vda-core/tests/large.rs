@@ -166,3 +166,26 @@ fn python_reads_the_upstream_file_and_types_survive() {
     let again = s.run_all().unwrap();
     assert!(again.steps.iter().all(|r| r.status == RunStatus::Succeeded { cached: true }));
 }
+
+#[test]
+fn reopening_does_not_rehash_an_unchanged_source() {
+    let dir = project("fingerprint", 2_000);
+    let s = session(&dir, vec![by_customer()], EngineOptions::default());
+    let real = s.source_hash().unwrap();
+    let saved = dir.join("artifacts").join("source-fingerprint.json");
+    assert!(saved.exists());
+
+    // Plant a marker hash: a new session that returns it did not reread the file.
+    let text = std::fs::read_to_string(&saved).unwrap().replace(&real, "marker");
+    std::fs::write(&saved, text).unwrap();
+    let reopened = session(&dir, vec![by_customer()], EngineOptions::default());
+    assert_eq!(reopened.source_hash().unwrap(), "marker");
+
+    // Any change to size or modification time makes it hash again.
+    let mut csv = std::fs::read_to_string(dir.join("orders.csv")).unwrap();
+    csv.push_str("99999,c1,r1,1.00\n");
+    std::fs::write(dir.join("orders.csv"), csv).unwrap();
+    let after_edit = session(&dir, vec![by_customer()], EngineOptions::default());
+    let new_hash = after_edit.source_hash().unwrap();
+    assert!(new_hash != "marker" && new_hash != real);
+}

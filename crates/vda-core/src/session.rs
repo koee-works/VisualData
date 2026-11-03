@@ -333,7 +333,10 @@ impl Session {
     }
 
     /// SHA-256 of the source file. Streamed, and recomputed only when the
-    /// file's size or modification time changes.
+    /// file's size or modification time changes. The fingerprint is also kept
+    /// in the artifact store, so reopening a project does not rehash a large
+    /// source. (A content change that keeps both size and modification time
+    /// would go unnoticed; editors and copies update the modification time.)
     pub fn source_hash(&self) -> Result<String, Error> {
         let path = self.source_path();
         let meta = fs::metadata(&path).map_err(|e| Error::Data(format!("cannot read source {}: {e}", path.display())))?;
@@ -343,7 +346,33 @@ impl Session {
                 return Ok(hash.clone());
             }
         }
-        let hash = sha256_file(&path).map_err(|e| Error::Data(format!("cannot read source {}: {e}", path.display())))?;
+        let nanos = stamp.1.duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos().to_string();
+        let saved = self.artifacts.dir().join("source-fingerprint.json");
+        let remembered = fs::read_to_string(&saved).ok().and_then(|t| Json::parse(&t).ok()).and_then(|j| {
+            let matches = j.get("path").and_then(Json::as_str) == Some(&*path.to_string_lossy())
+                && j.get("bytes").and_then(Json::as_str) == Some(&*stamp.0.to_string())
+                && j.get("modified_ns").and_then(Json::as_str) == Some(&*nanos);
+            matches.then(|| j.get("sha256").and_then(Json::as_str).map(str::to_string)).flatten()
+        });
+        let hash = match remembered {
+            Some(h) => h,
+            None => {
+                let h = sha256_file(&path)
+                    .map_err(|e| Error::Data(format!("cannot read source {}: {e}", path.display())))?;
+                let record = Json::obj(vec![
+                    ("path", Json::str(path.to_string_lossy())),
+                    ("bytes", Json::str(stamp.0.to_string())),
+                    ("modified_ns", Json::str(nanos)),
+                    ("sha256", Json::str(h.clone())),
+                ]);
+                // Best effort: losing it only costs a rehash next time.
+                let tmp = self.artifacts.dir().join(".source-fingerprint.json.tmp");
+                if fs::write(&tmp, record.to_string_pretty()).is_ok() {
+                    let _ = fs::rename(&tmp, &saved);
+                }
+                h
+            }
+        };
         *self.source_fp.borrow_mut() = Some((stamp.0, stamp.1, hash.clone()));
         Ok(hash)
     }
