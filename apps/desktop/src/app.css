@@ -1,0 +1,161 @@
+@import "tailwindcss";
+@import "@fontsource/atkinson-hyperlegible-next/400.css";
+@import "@fontsource/atkinson-hyperlegible-next/600.css";
+@import "@fontsource/atkinson-hyperlegible-next/700.css";
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/600.css";
+
+/*
+  Cool drafting-paper surfaces in navy ink. Colour is reserved for result
+  state, so it always means something: teal = current, ochre = outdated,
+  brick = failed, indigo = running. Outdated results are also hatched, so the
+  state reads without colour.
+*/
+@theme {
+  --font-sans: "Atkinson Hyperlegible Next", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  --color-ink: #1d2a3f;
+  --color-ink-soft: #4a5872;
+  --color-ink-faint: #7c879a;
+  --color-paper: #eef2f5;
+  --color-panel: #ffffff;
+  --color-rule: #d5dce4;
+  --color-rule-strong: #b6c1cd;
+  --color-select: #dfe7f7;
+
+  --color-fresh: #1f7a6c;
+  --color-fresh-wash: #e3f2ef;
+  --color-stale: #a86a12;
+  --color-stale-wash: #fbf1df;
+  --color-failed: #a8322d;
+  --color-failed-wash: #f9e5e3;
+  --color-running: #4652c8;
+  --color-running-wash: #e6e8fa;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.875rem;
+  --text-lg: 1.0625rem;
+  --text-xl: 1.375rem;
+}
+
+@layer base {
+  html,
+  body,
+  #app {
+    height: 100%;
+  }
+  body {
+    margin: 0;
+    background: var(--color-paper);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: var(--text-base);
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-running);
+    outline-offset: 1px;
+  }
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+    color: inherit;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation: none !important;
+      transition: none !important;
+    }
+  }
+}
+
+@layer components {
+  /* Outdated results: diagonal ochre hatching. */
+  .hatch-stale {
+    background-image: repeating-linear-gradient(
+      -45deg,
+      color-mix(in srgb, var(--color-stale) 22%, transparent) 0 4px,
+      transparent 4px 9px
+    );
+  }
+
+  .field {
+    border: 1px solid var(--color-rule-strong);
+    background: var(--color-panel);
+    border-radius: 5px;
+    padding: 0.3rem 0.5rem;
+    min-height: 2rem;
+  }
+  .field:focus {
+    border-color: var(--color-running);
+    outline: none;
+    box-shadow: 0 0 0 2px var(--color-running-wash);
+  }
+  .field[aria-invalid="true"] {
+    border-color: var(--color-failed);
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    border-radius: 5px;
+    padding: 0.3rem 0.75rem;
+    min-height: 2rem;
+    font-weight: 600;
+    border: 1px solid var(--color-rule-strong);
+    background: var(--color-panel);
+    cursor: pointer;
+  }
+  .btn:hover:not(:disabled) {
+    border-color: var(--color-ink-soft);
+  }
+  .btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  .btn-primary {
+    background: var(--color-ink);
+    border-color: var(--color-ink);
+    color: white;
+  }
+  .btn-primary:hover:not(:disabled) {
+    background: #2c3d5a;
+  }
+  .btn-quiet {
+    border-color: transparent;
+    background: transparent;
+    font-weight: 400;
+    color: var(--color-ink-soft);
+  }
+  .btn-quiet:hover:not(:disabled) {
+    background: var(--color-paper);
+    border-color: transparent;
+    color: var(--color-ink);
+  }
+
+  .tab {
+    padding: 0.45rem 0.8rem;
+    color: var(--color-ink-soft);
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+  }
+  .tab[data-state="active"] {
+    color: var(--color-ink);
+    border-bottom-color: var(--color-ink);
+    font-weight: 600;
+  }
+
+  .code {
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+    line-height: 1.55;
+  }
+}
