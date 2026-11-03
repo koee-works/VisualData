@@ -47,7 +47,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install Python step dependencies
-        run: python -m pip install pandas pyarrow duckdb  # duckdb: the exported Jupyter notebook is run in tests
+        run: python -m pip install pandas pyarrow duckdb scipy  # duckdb, scipy: the exported Jupyter notebook is run in tests
 
       # The desktop crate needs WebKitGTK; it is built and tested in the
       # desktop job below.
@@ -85,7 +85,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - run: python -m pip install pandas pyarrow duckdb  # duckdb: the exported Jupyter notebook is run in tests
+      - run: python -m pip install pandas pyarrow duckdb scipy  # duckdb, scipy: the exported Jupyter notebook is run in tests
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -101,7 +101,7 @@ jobs:
           npm run build
 
       - name: Build the app with the frontend embedded
-        run: cargo build --locked -p vda-desktop --features custom-protocol
+        run: cargo build --locked -p vda-desktop --features custom-protocol -p vda-app --bins  # vda-run, for end-to-end step 31
 
       - name: Clippy (desktop)
         run: cargo clippy --locked -p vda-desktop --all-targets -- -D warnings
@@ -111,9 +111,9 @@ jobs:
           VDA_PYTHON: python
         run: |
           cargo install tauri-driver --locked
-          apps/desktop/e2e/prepare.sh "$RUNNER_TEMP/e2e-project" "$RUNNER_TEMP/e2e-join"
+          apps/desktop/e2e/prepare.sh "$RUNNER_TEMP/e2e-project" "$RUNNER_TEMP/e2e-join" "$RUNNER_TEMP/e2e-s4"
           xvfb-run -a -s "-screen 0 1440x900x24" \
-            python apps/desktop/e2e/run_e2e.py "$PWD/target/debug/vda-desktop" "$RUNNER_TEMP/e2e-project" e2e-screenshots "$RUNNER_TEMP/e2e-join"
+            python apps/desktop/e2e/run_e2e.py "$PWD/target/debug/vda-desktop" "$RUNNER_TEMP/e2e-project" e2e-screenshots "$RUNNER_TEMP/e2e-join" "$RUNNER_TEMP/e2e-s4"
 
       - uses: actions/upload-artifact@v4
         if: always()

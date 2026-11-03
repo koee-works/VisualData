@@ -177,3 +177,31 @@ fn printed_output_and_warnings_are_kept_even_when_the_step_fails() {
     );
     assert!(loud.output.len() < 70 * 1024 && loud.output.ends_with("output cut at 64 KB"), "{}", loud.output.len());
 }
+
+#[test]
+fn the_environment_lists_its_packages_and_explains_what_is_missing() {
+    let dir = std::env::temp_dir().join(format!("vda-env-{}", std::process::id()));
+    let env = vda_core::python::PythonRunner::new(vda_core::python::default_interpreter(), &dir).environment();
+    assert!(env.usable(), "{:?}", env.problem);
+    assert!(env.version.as_deref().is_some_and(|v| v.starts_with('3')), "{env:?}");
+    let pandas = env.packages.iter().find(|p| p.0 == "pandas").unwrap();
+    assert!(pandas.2 && pandas.3.is_some());
+    assert_eq!(env.packages.len(), vda_core::python::PACKAGES.len());
+
+    // Started without pandas on its path (-S keeps site-packages away).
+    let shim = dir.join("bare-python");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(&shim, format!("#!/bin/sh\nexec {} -S \"$@\"\n", vda_core::python::default_interpreter().display())).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let bare = vda_core::python::PythonRunner::new(&shim, &dir).environment();
+        let problem = bare.problem.unwrap_or_default();
+        assert!(problem.contains("it has no pandas or pyarrow; install with:") && problem.contains("-m pip install pandas pyarrow"), "{problem}");
+    }
+
+    let gone = vda_core::python::PythonRunner::new("/no/such/python", &dir).environment();
+    assert!(gone.problem.unwrap().starts_with("cannot start /no/such/python"));
+    assert!(vda_core::python::discover(None).iter().all(|p| p.is_file()));
+}

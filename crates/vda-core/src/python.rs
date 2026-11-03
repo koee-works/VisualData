@@ -97,7 +97,158 @@ pub fn default_interpreter() -> PathBuf {
     std::env::var_os("VDA_PYTHON").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("python3"))
 }
 
+/// Packages the app looks for, and what each is for.
+pub const PACKAGES: &[(&str, &str, bool)] = &[
+    ("pandas", "Python steps (required)", true),
+    ("pyarrow", "Python steps (required)", true),
+    ("numpy", "numerical work", false),
+    ("scipy", "statistics", false),
+    ("statsmodels", "statistical models", false),
+    ("sklearn", "machine learning (scikit-learn)", false),
+    ("matplotlib", "plots", false),
+    ("duckdb", "rerunning exported Jupyter notebooks", false),
+];
+
+/// What an interpreter is and has.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Environment {
+    pub interpreter: PathBuf,
+    /// The executable it resolves to (`sys.executable`).
+    pub executable: Option<String>,
+    pub version: Option<String>,
+    /// Package name, what it is for, whether required, installed version.
+    pub packages: Vec<(String, String, bool, Option<String>)>,
+    /// Why the interpreter cannot run Python steps, if it cannot.
+    pub problem: Option<String>,
+}
+
+impl Environment {
+    pub fn usable(&self) -> bool {
+        self.problem.is_none()
+    }
+}
+
+/// The interpreter's path: as given when it names a file, else found on the PATH.
+pub fn resolve(interpreter: &Path) -> PathBuf {
+    if interpreter.components().count() > 1 || interpreter.is_absolute() {
+        return interpreter.to_path_buf();
+    }
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    for dir in std::env::split_paths(&path) {
+        let candidate = dir.join(interpreter);
+        if candidate.is_file() {
+            return candidate;
+        }
+        if cfg!(windows) {
+            let exe = candidate.with_extension("exe");
+            if exe.is_file() {
+                return exe;
+            }
+        }
+    }
+    interpreter.to_path_buf()
+}
+
+/// Interpreters worth offering: the project's own virtual environment, the
+/// active one, conda and pyenv environments, and `python3` on the PATH.
+pub fn discover(project: Option<&Path>) -> Vec<PathBuf> {
+    let bin = |dir: PathBuf| -> PathBuf {
+        if cfg!(windows) { dir.join("Scripts").join("python.exe") } else { dir.join("bin").join("python") }
+    };
+    let mut found: Vec<PathBuf> = Vec::new();
+    if let Some(p) = project {
+        for name in [".venv", "venv", "env"] {
+            found.push(bin(p.join(name)));
+        }
+    }
+    if let Some(v) = std::env::var_os("VIRTUAL_ENV") {
+        found.push(bin(PathBuf::from(v)));
+    }
+    if let Some(c) = std::env::var_os("CONDA_PREFIX") {
+        found.push(if cfg!(windows) { PathBuf::from(&c).join("python.exe") } else { PathBuf::from(&c).join("bin").join("python") });
+    }
+    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from) {
+        for root in ["miniconda3/envs", "anaconda3/envs", "miniforge3/envs", "mambaforge/envs", ".pyenv/versions"] {
+            if let Ok(entries) = std::fs::read_dir(home.join(root)) {
+                let mut dirs: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+                dirs.sort();
+                found.extend(dirs.into_iter().map(bin));
+            }
+        }
+        for base in ["miniconda3", "anaconda3", "miniforge3"] {
+            found.push(bin(home.join(base)));
+        }
+    }
+    if let Some(path) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path) {
+            for name in ["python3", "python"] {
+                let exe = if cfg!(windows) { dir.join(format!("{name}.exe")) } else { dir.join(name) };
+                found.push(exe);
+            }
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    found
+        .into_iter()
+        .filter(|p| p.is_file())
+        // The same interpreter reached through several links counts once.
+        .filter(|p| seen.insert(std::fs::canonicalize(p).unwrap_or_else(|_| p.clone())))
+        .collect()
+}
+
 impl PythonRunner {
+    /// The interpreter's version, location and packages. Never fails: a
+    /// broken interpreter is described, with what is wrong.
+    pub fn environment(&self) -> Environment {
+        let names: Vec<String> = PACKAGES.iter().map(|p| format!("'{}'", p.0)).collect();
+        let script = format!(
+            "import sys, importlib, json\nout = {{'exe': sys.executable, 'version': sys.version.split()[0], 'packages': {{}}}}\n\
+             for n in [{}]:\n    try:\n        m = importlib.import_module(n)\n        out['packages'][n] = str(getattr(m, '__version__', 'installed'))\n\
+             \x20   except Exception:\n        out['packages'][n] = None\nprint(json.dumps(out))",
+            names.join(", ")
+        );
+        let mut env = Environment { interpreter: self.interpreter.clone(), executable: None, version: None, packages: vec![], problem: None };
+        // A bare name is found on the PATH here: with the environment
+        // cleared, Python cannot tell where it was started from.
+        let exe = resolve(&self.interpreter);
+        let out = Command::new(&exe).args(["-I", "-c", &script]).env_clear().output();
+        let fill = |env: &mut Environment, got: &crate::json::Json| {
+            for (name, why, required) in PACKAGES {
+                let v = got.get("packages").and_then(|p| p.get(name)).and_then(|v| v.as_str()).map(str::to_string);
+                env.packages.push((name.to_string(), why.to_string(), *required, v));
+            }
+        };
+        match out {
+            Err(e) => env.problem = Some(format!("cannot start {}: {e}", self.interpreter.display())),
+            Ok(o) if !o.status.success() => {
+                env.problem = Some(format!("{} did not run: {}", self.interpreter.display(), String::from_utf8_lossy(&o.stderr).trim().lines().last().unwrap_or("")))
+            }
+            Ok(o) => match crate::json::Json::parse(String::from_utf8_lossy(&o.stdout).trim()) {
+                Err(_) => env.problem = Some("the interpreter's answer could not be read".into()),
+                Ok(got) => {
+                    env.executable = got
+                        .get("exe")
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string)
+                        .or_else(|| exe.is_absolute().then(|| exe.to_string_lossy().into_owned()));
+                    env.version = got.get("version").and_then(|v| v.as_str()).map(str::to_string);
+                    fill(&mut env, &got);
+                    let missing: Vec<&str> = env.packages.iter().filter(|p| p.2 && p.3.is_none()).map(|p| p.0.as_str()).collect();
+                    if !missing.is_empty() {
+                        env.problem = Some(format!(
+                            "it has no {}; install with: {} -m pip install {}",
+                            missing.join(" or "),
+                            self.interpreter.display(),
+                            missing.join(" ")
+                        ));
+                    }
+                }
+            },
+        }
+        env
+    }
+
     pub fn new(interpreter: impl Into<PathBuf>, work_root: impl Into<PathBuf>) -> Self {
         PythonRunner { interpreter: interpreter.into(), memory_limit_mb: Some(2048), work_root: work_root.into() }
     }

@@ -18,6 +18,8 @@
   import DedupeEditor from "./DedupeEditor.svelte";
   import PivotEditor from "./PivotEditor.svelte";
   import UnpivotEditor from "./UnpivotEditor.svelte";
+  import TestEditor from "./TestEditor.svelte";
+  import Comments from "./Comments.svelte";
   import CheckEditor from "./CheckEditor.svelte";
   import type { CheckReport } from "../api/types";
 
@@ -220,6 +222,8 @@
       <PivotEditor bind:rows={draft.rows} bind:column={draft.column} bind:value={draft.value} bind:func={draft.func} columns={inputColumns} />
     {:else if draft.type === "unpivot"}
       <UnpivotEditor bind:picked={draft.columns} bind:name={draft.name} bind:value={draft.value} columns={inputColumns} />
+    {:else if draft.type === "test"}
+      <TestEditor bind:test={draft.test} bind:a={draft.a} bind:b={draft.b} columns={inputColumns} />
     {:else if draft.type === "check"}
       <CheckEditor bind:rules={draft.rules} bind:stop={draft.stop} columns={inputColumns} problems={byField} report={dirty ? null : report} />
     {:else if draft.type === "append"}
@@ -288,5 +292,7 @@
     {#if dirty}
       <p class="mt-5 text-sm text-ink-soft">Unsaved changes. Saving marks this step and everything after it as outdated until the next run.</p>
     {/if}
+
+    <Comments {ws} target="step:{step.id}" />
   </div>
 </section>

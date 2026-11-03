@@ -28,16 +28,18 @@ pub struct Source {
     /// Path relative to the project folder (or absolute).
     pub path: String,
     pub format: SourceFormat,
-    /// For spreadsheets: the sheet to read. Stored by name, so reordering
-    /// the workbook's sheets does not change the data.
+    /// For spreadsheets: the sheet to read; for databases, the table. Stored
+    /// by name, so reordering sheets or adding tables changes nothing.
     pub sheet: Option<String>,
+    /// For databases: a read-only query, read instead of a table.
+    pub query: Option<String>,
 }
 
 impl Source {
     /// A source whose format follows from its file extension.
     pub fn new(id: impl Into<String>, path: impl Into<String>) -> Self {
         let path = path.into();
-        Source { id: id.into(), format: SourceFormat::from_path(&path).unwrap_or(SourceFormat::Csv), path, sheet: None }
+        Source { id: id.into(), format: SourceFormat::from_path(&path).unwrap_or(SourceFormat::Csv), path, sheet: None, query: None }
     }
 
     /// The first source of an analysis, with id [`SOURCE_ID`].
@@ -55,6 +57,10 @@ pub enum SourceFormat {
     Json,
     /// A spreadsheet: xlsx, xlsm, xlsb, xls or ods.
     Excel,
+    /// A SQLite database file: a table or a query.
+    Sqlite,
+    /// A DuckDB database file: a table or a query.
+    DuckDb,
 }
 
 impl SourceFormat {
@@ -64,11 +70,13 @@ impl SourceFormat {
             SourceFormat::Parquet => "parquet",
             SourceFormat::Json => "json",
             SourceFormat::Excel => "excel",
+            SourceFormat::Sqlite => "sqlite",
+            SourceFormat::DuckDb => "duckdb",
         }
     }
 
     pub fn parse(s: &str) -> Option<SourceFormat> {
-        [SourceFormat::Csv, SourceFormat::Parquet, SourceFormat::Json, SourceFormat::Excel]
+        [SourceFormat::Csv, SourceFormat::Parquet, SourceFormat::Json, SourceFormat::Excel, SourceFormat::Sqlite, SourceFormat::DuckDb]
             .into_iter()
             .find(|f| f.name() == s)
     }
@@ -81,8 +89,15 @@ impl SourceFormat {
             "parquet" | "pq" => Some(SourceFormat::Parquet),
             "json" | "jsonl" | "ndjson" => Some(SourceFormat::Json),
             e if crate::excel::EXTENSIONS.contains(&e) => Some(SourceFormat::Excel),
+            "sqlite" | "sqlite3" | "db3" => Some(SourceFormat::Sqlite),
+            "duckdb" | "ddb" => Some(SourceFormat::DuckDb),
             _ => None,
         }
+    }
+
+    /// A database file, read as a table or a query.
+    pub fn is_database(self) -> bool {
+        matches!(self, SourceFormat::Sqlite | SourceFormat::DuckDb)
     }
 }
 
@@ -134,6 +149,9 @@ pub enum StepKind {
     /// Visual: rules the data must meet. Rows pass through unchanged; with
     /// `stop`, a broken rule fails the step (and what reads it waits).
     Check { rules: Vec<Rule>, stop: bool },
+    /// Visual: a statistical test of columns `a` and `b` (see [`TestKind`]),
+    /// giving one row: the statistic, the p-value and a sentence reading it.
+    Test { test: TestKind, a: String, b: String },
     /// Custom SQL. Reads the first input as the relation `input`, and every
     /// input by its id.
     Sql { sql: String },
@@ -161,6 +179,7 @@ impl StepKind {
             StepKind::Pivot { .. } => "pivot",
             StepKind::Unpivot { .. } => "unpivot",
             StepKind::Check { .. } => "check",
+            StepKind::Test { .. } => "test",
             StepKind::Sql { .. } => "sql",
             StepKind::Python { .. } => "python",
             StepKind::Chart { .. } => "chart",
@@ -184,6 +203,7 @@ impl StepKind {
                 | StepKind::Pivot { .. }
                 | StepKind::Unpivot { .. }
                 | StepKind::Check { .. }
+                | StepKind::Test { .. }
                 | StepKind::Chart { .. }
         )
     }
@@ -258,6 +278,34 @@ pub struct Pick {
     pub column: String,
     /// New name, if renamed.
     pub rename: Option<String>,
+}
+
+/// The statistical tests: what `a` and `b` of a test step are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TestKind {
+    /// Welch's t-test: the average of number column `a` in the two groups of `b`.
+    CompareMeans,
+    /// One-way analysis of variance: the average of `a` across the groups of `b`.
+    CompareGroups,
+    /// Chi-square test of independence between categories `a` and `b`.
+    Independence,
+    /// Pearson correlation between number columns `a` and `b`.
+    Correlation,
+}
+
+impl TestKind {
+    pub const ALL: [TestKind; 4] = [TestKind::CompareMeans, TestKind::CompareGroups, TestKind::Independence, TestKind::Correlation];
+    pub fn name(self) -> &'static str {
+        match self {
+            TestKind::CompareMeans => "compare_means",
+            TestKind::CompareGroups => "compare_groups",
+            TestKind::Independence => "independence",
+            TestKind::Correlation => "correlation",
+        }
+    }
+    pub fn parse(s: &str) -> Option<TestKind> {
+        TestKind::ALL.into_iter().find(|t| t.name() == s)
+    }
 }
 
 /// A data quality rule.

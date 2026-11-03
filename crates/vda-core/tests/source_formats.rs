@@ -153,3 +153,15 @@ fn analyses_mix_formats_and_a_sheet_change_outdates_readers() {
     s.analysis.sources[0].sheet = Some("Notes".into());
     assert_eq!(s.state("joined").unwrap(), StepState::Stale);
 }
+
+#[test]
+fn a_csv_that_cannot_be_read_says_why_in_a_sentence() {
+    use vda_core::engine::Engine;
+    let dir = std::env::temp_dir().join(format!("vda-badcsv-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = dir.join("mixed.csv");
+    std::fs::write(&src, "a,b\r\n1,2\r\n3,4\n5,6,7\n").unwrap();
+    let e = vda_core::duck::DuckDbEngine::new().unwrap().import_csv(&src, &dir.join("out.parquet")).unwrap_err().to_string();
+    assert!(!e.contains("Possible fixes") && !e.contains("Candidates"), "{e}");
+    assert!(e.lines().count() <= 3, "{e}");
+}

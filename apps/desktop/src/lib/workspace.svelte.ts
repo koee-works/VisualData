@@ -2,7 +2,7 @@
 // The backend is the source of truth; every edit returns a fresh view.
 
 import { errorMessage, type Backend } from "./api/backend";
-import type { AnalysisView, Column, NotebookCell, Problem, Problems, SourceView, StepEvent, StepOp, StepView, Parameter } from "./api/types";
+import type { AnalysisView, Column, Comment, NotebookCell, Problem, Problems, SourceView, StepEvent, StepOp, StepView, Parameter } from "./api/types";
 import { SOURCE_ID } from "./api/types";
 import { stepTitle } from "./format";
 
@@ -27,7 +27,11 @@ export class Workspace {
   /** What the linter found, refreshed after every change and run. */
   problems = $state<Problems>({ items: [], dismissed: 0 });
   consoleOpen = $state(false);
-  consoleTab = $state<"problems" | "output" | "log">("problems");
+  consoleTab = $state<"problems" | "output" | "log" | "history">("problems");
+  /** Comments on steps, sources and the analysis (kept with the project). */
+  comments = $state<Comment[]>([]);
+  pythonOpen = $state(false);
+  scheduleOpen = $state(false);
   /** Bumped when a run finishes, so the run log refetches. */
   runs = $state(0);
   private lintSeq = 0;
@@ -130,7 +134,9 @@ export class Workspace {
 
   private apply(v: AnalysisView | undefined) {
     if (!v) return;
+    const reloadComments = this.view?.project_dir !== v.project_dir;
     this.view = v;
+    if (reloadComments) void this.loadComments();
     void this.refreshProblems();
     const known = v.sources.some((s) => s.id === this.selected) || v.steps.some((s) => s.id === this.selected);
     if (!known) this.selected = v.sources[0]?.id ?? SOURCE_ID;
@@ -152,6 +158,65 @@ export class Workspace {
     if (!path) return;
     const rows = await this.act("Export", () => this.backend.exportResult(id, path));
     if (rows !== undefined) this.notice = `Exported ${rows.toLocaleString("en-US")} row${rows === 1 ? "" : "s"} to ${path}`;
+  }
+
+  /** Go back one change (the toolbar's Undo, and Ctrl/Cmd+Z). */
+  async undo() {
+    const what = this.view?.undo;
+    const v = await this.act("Undo", () => this.backend.undo());
+    this.apply(v);
+    if (v && what) this.notice = `Undid: ${what}`;
+  }
+
+  async redo() {
+    const what = this.view?.redo;
+    const v = await this.act("Redo", () => this.backend.redo());
+    this.apply(v);
+    if (v && what) this.notice = `Redid: ${what}`;
+  }
+
+  /** Make a saved version current again; undo goes back. */
+  async restoreVersion(version: number) {
+    const v = await this.act("Restore version", () => this.backend.restoreVersion(version));
+    this.apply(v);
+    if (v) this.notice = `Restored version ${version}. Undo goes back.`;
+    return v !== undefined;
+  }
+
+  async loadComments() {
+    try {
+      this.comments = await this.backend.comments();
+    } catch {
+      this.comments = [];
+    }
+  }
+
+  /** Open comments (not resolved) on `target`, without replies. */
+  openComments(target: string): number {
+    return this.comments.filter((c) => c.target === target && !c.reply_to && !c.resolved).length;
+  }
+
+  async addComment(target: string, text: string, replyTo: string | null = null) {
+    const r = await this.act("Comment", () => this.backend.addComment(target, text, replyTo));
+    if (r) this.comments = r;
+    return r !== undefined;
+  }
+
+  async resolveComment(id: string, resolved: boolean) {
+    const r = await this.act(resolved ? "Resolve comment" : "Reopen comment", () => this.backend.resolveComment(id, resolved));
+    if (r) this.comments = r;
+  }
+
+  async deleteComment(id: string) {
+    const r = await this.act("Delete comment", () => this.backend.deleteComment(id));
+    if (r) this.comments = r;
+  }
+
+  /** What a database source reads. */
+  async setSourceRead(id: string, table: string | null, query: string | null) {
+    const v = await this.act(query ? "Read with a query" : "Choose table", () => this.backend.setSourceRead(id, table, query));
+    this.apply(v);
+    return v !== undefined;
   }
 
   /** Replace the parameters; steps using a changed one become outdated. */

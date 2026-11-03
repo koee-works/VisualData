@@ -7,6 +7,14 @@
 //!   there is one step format everywhere.
 //! - Table data travels a page at a time as typed [`Cell`]s.
 
+mod comments;
+mod history;
+pub mod refresh;
+mod settings;
+pub use comments::CommentView;
+pub use history::VersionView;
+pub use settings::{PackageView, PythonView};
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value as J;
 use std::path::{Path, PathBuf};
@@ -138,10 +146,12 @@ pub struct SourceView {
     pub columns: Vec<Column>,
     /// Kept outside the project folder (custom SQL may still read it).
     pub external: bool,
-    /// `csv`, `parquet`, `json` or `excel`.
+    /// `csv`, `parquet`, `json`, `excel`, `sqlite` or `duckdb`.
     pub format: String,
-    /// For spreadsheets, the sheet that is read.
+    /// For spreadsheets, the sheet that is read; for databases, the table.
     pub sheet: Option<String>,
+    /// For databases, the query read instead of a table.
+    pub query: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -160,6 +170,9 @@ pub struct AnalysisView {
     pub trust_all: bool,
     /// `[{"name", "value"}]`, values as in filter steps.
     pub parameters: J,
+    /// What undo and redo would do, if anything.
+    pub undo: Option<String>,
+    pub redo: Option<String>,
 }
 
 /// Code the user is asked to read before it runs.
@@ -213,6 +226,8 @@ pub struct RunView {
     pub started_unix_ms: u64,
     pub succeeded: bool,
     pub steps: Vec<StepEvent>,
+    /// "scheduled" for runs by `vda-run`; none for runs in the app.
+    pub trigger: Option<String>,
 }
 
 impl From<vda_core::lint::Diagnostic> for Problem {
@@ -314,18 +329,63 @@ pub struct App {
     /// project opened in it, and is never written anywhere.
     trust_all: bool,
     linter: Option<vda_core::lint::Linter>,
+    settings: settings::Settings,
+    /// Changes that can be undone and redone in this session.
+    edits: history::Undo,
+    /// Who writes comments: the computer's user name unless set.
+    author: String,
+    /// The version being restored, so the change is named after it.
+    restoring: Option<u64>,
+    /// Why `interpreter` was chosen: "env", "chosen" or "default".
+    python_chosen_by: &'static str,
 }
 
 impl Default for App {
     fn default() -> Self {
-        Self::new(EngineOptions::default(), default_interpreter()).with_approvals_file(review::default_approvals_path())
+        Self::new(EngineOptions::default(), default_interpreter())
+            .with_approvals_file(review::default_approvals_path())
+            .with_settings_file(settings::default_settings_path())
     }
 }
 
 impl App {
     /// Approvals are kept in memory until `with_approvals_file` is used.
     pub fn new(engine_options: EngineOptions, interpreter: PathBuf) -> Self {
-        App { session: None, engine_options, interpreter, approvals_path: None, memory_approvals: Approvals::in_memory(), trust_all: false, linter: None }
+        App {
+            session: None,
+            engine_options,
+            interpreter,
+            approvals_path: None,
+            memory_approvals: Approvals::in_memory(),
+            trust_all: false,
+            linter: None,
+            settings: settings::Settings::in_memory(),
+            edits: history::Undo::default(),
+            author: comments::current_author(),
+            restoring: None,
+            python_chosen_by: "default",
+        }
+    }
+
+    /// Write comments as `name` (tests, and a name other than the login).
+    pub fn with_author(mut self, name: &str) -> Self {
+        self.author = name.to_string();
+        self
+    }
+
+    pub fn set_author(&mut self, name: &str) {
+        self.author = name.to_string();
+    }
+
+    /// Keep per-user settings (the chosen interpreter) in this file. The
+    /// interpreter is then `VDA_PYTHON`, else the one chosen in the app,
+    /// else `python3`.
+    pub fn with_settings_file(mut self, path: PathBuf) -> Self {
+        self.settings = settings::Settings::load(path);
+        let (interpreter, why) = settings::choose_interpreter(&self.settings);
+        self.interpreter = interpreter;
+        self.python_chosen_by = why;
+        self
     }
 
     /// Keep approvals in this file (outside any project, so a project can
@@ -356,6 +416,10 @@ impl App {
         };
         approvals.set_trust_all(self.trust_all);
         session.set_review_policy(ReviewPolicy::RequireApproval(approvals));
+        // Undo is per project: another project starts with none.
+        if self.session.as_ref().map(|s| s.project_dir() != session.project_dir()).unwrap_or(true) {
+            self.edits = history::Undo::default();
+        }
         self.session = Some(session);
         Ok(())
     }
@@ -429,10 +493,13 @@ impl App {
 
     pub fn close_project(&mut self) {
         self.session = None;
+        self.edits = history::Undo::default();
     }
 
     pub fn view(&mut self) -> Result<AnalysisView> {
         let trust_all = self.trust_all;
+        let undo = self.edits.undo.last().map(|e| e.what.clone());
+        let redo = self.edits.redo.last().map(|e| e.what.clone());
         let s = self.session()?;
         let a = s.analysis.clone();
         let mut sources = Vec::new();
@@ -446,6 +513,7 @@ impl App {
                 external: Path::new(&src.path).is_absolute(),
                 format: src.format.name().into(),
                 sheet: src.sheet.clone(),
+                query: src.query.clone(),
             });
         }
         let mut steps = Vec::new();
@@ -497,6 +565,8 @@ impl App {
                 .collect(),
             trust_all,
             parameters: to_serde(&persist::parameters_to_json(&a.parameters)),
+            undo,
+            redo,
         })
     }
 
@@ -603,10 +673,20 @@ impl App {
     }
 
     fn commit(&mut self, analysis: Analysis) -> Result<AnalysisView> {
+        self.commit_as(analysis, None)
+    }
+
+    /// Save a change, and record it for undo and in the project's history.
+    /// `undoing` is set when the change is itself an undo or a redo.
+    fn commit_as(&mut self, analysis: Analysis, undoing: Option<bool>) -> Result<AnalysisView> {
         vda_core::plan::validate(&analysis)?;
         let s = self.session()?;
+        if s.analysis == analysis && undoing.is_none() {
+            return self.view();
+        }
         persist::save_analysis(&analysis, s.project_dir())?;
-        s.analysis = analysis;
+        let before = std::mem::replace(&mut s.analysis, analysis.clone());
+        self.after_commit(before, &analysis, undoing)?;
         self.view()
     }
 
@@ -706,10 +786,11 @@ impl App {
     pub fn source_sheets(&mut self, id: &str) -> Result<Vec<String>> {
         let s = self.session()?;
         let src = s.analysis.source(id).ok_or_else(|| AppError::from(format!("unknown source `{id}`")))?;
-        if src.format != SourceFormat::Excel {
-            return Ok(vec![]);
+        match src.format {
+            SourceFormat::Excel => Ok(vda_core::excel::sheet_names(&s.source_path(id)?)?),
+            f if f.is_database() => Ok(vda_core::database::tables(&s.source_path(id)?, f)?),
+            _ => Ok(vec![]),
         }
-        Ok(vda_core::excel::sheet_names(&s.source_path(id)?)?)
     }
 
     /// Rename a source (steps and custom code that name it are updated), or
@@ -742,6 +823,41 @@ impl App {
         }
         self.remember_approvals();
         self.view()
+    }
+
+    /// What a database source reads: a table by name, or a read-only query
+    /// (which wins when both are given). The steps reading it go outdated.
+    pub fn set_source_read(&mut self, id: &str, table: Option<String>, query: Option<String>) -> Result<AnalysisView> {
+        let s = self.session()?;
+        let mut a = s.analysis.clone();
+        let Some(src) = a.source(id).cloned() else { return fail(format!("unknown source `{id}`")) };
+        if !src.format.is_database() {
+            return fail(format!("`{id}` is not a database"));
+        }
+        let path = s.source_path(id)?;
+        let query = query.map(|q| q.trim().to_string()).filter(|q| !q.is_empty());
+        let table = match (&query, table) {
+            (Some(_), t) => t.or(src.sheet.clone()),
+            (None, Some(t)) => {
+                let tables = vda_core::database::tables(&path, src.format)?;
+                if !tables.contains(&t) {
+                    return fail(format!("{} has no table `{t}` (tables: {})", src.path, tables.join(", ")));
+                }
+                Some(t)
+            }
+            (None, None) => return fail("choose a table, or write a query"),
+        };
+        // Try the query now, so a mistake is reported here rather than at the next run.
+        if let Some(q) = &query {
+            let probe = std::env::temp_dir().join(format!("vda-query-check-{}-{}.parquet", std::process::id(), id));
+            let r = vda_core::database::copy_to_parquet(&path, src.format, vda_core::database::Read::Query(q), &probe);
+            let _ = std::fs::remove_file(&probe);
+            r?;
+        }
+        let target = a.sources.iter_mut().find(|x| x.id == id).unwrap();
+        target.sheet = table;
+        target.query = query;
+        self.commit(a)
     }
 
     /// Dismissed warnings, kept in the project (`dismissed.json`) so a
@@ -850,6 +966,7 @@ impl App {
                 started_unix_ms: record.started_unix_ms as u64,
                 succeeded: record.succeeded(),
                 steps: record.steps.iter().map(StepEvent::from).collect(),
+                trigger: record.trigger.clone(),
             });
         }
         Ok(out)
@@ -902,8 +1019,14 @@ impl App {
 
     /// Run the analysis, reporting each step as it finishes, and save the run record.
     pub fn run(&mut self, on_step: &mut dyn FnMut(StepEvent)) -> Result<RunSummary> {
+        self.run_as(None, on_step)
+    }
+
+    /// Run, recording what started the run ("scheduled" for `vda-run`).
+    pub fn run_as(&mut self, trigger: Option<&str>, on_step: &mut dyn FnMut(StepEvent)) -> Result<RunSummary> {
         let s = self.session()?;
-        let record = s.run_all_with(&mut |r| on_step(StepEvent::from(r)))?;
+        let mut record = s.run_all_with(&mut |r| on_step(StepEvent::from(r)))?;
+        record.trigger = trigger.map(str::to_string);
         s.save_run(&record)?;
         Ok(RunSummary {
             run_id: record.run_id.clone(),
@@ -953,10 +1076,11 @@ fn same_file(a: &Path, b: &Path) -> bool {
 /// A source for a file the app can read, or a message naming the formats.
 fn readable_source(file: &Path, id: String, name_in_project: Option<String>) -> Result<Source> {
     let name = name_in_project.ok_or_else(|| AppError::from("the file path has no file name"))?;
-    let Some(format) = SourceFormat::from_path(&name) else {
+    // `.db` and other names are recognized by their contents.
+    let Some(format) = SourceFormat::from_path(&name).or_else(|| vda_core::database::sniff(file)) else {
         return fail(format!(
-            "{name}: the app reads CSV, Parquet, JSON and spreadsheet files ({})",
-            ["csv", "parquet", "json", "jsonl", "xlsx", "xls", "ods"].join(", ")
+            "{name}: the app reads CSV, Parquet, JSON, spreadsheet, SQLite and DuckDB files ({})",
+            ["csv", "parquet", "json", "jsonl", "xlsx", "xls", "ods", "sqlite", "db", "duckdb"].join(", ")
         ));
     };
     let mut source = Source::new(id, name);
@@ -964,6 +1088,14 @@ fn readable_source(file: &Path, id: String, name_in_project: Option<String>) -> 
     if format == SourceFormat::Excel {
         // The first sheet, stored by name so reordering sheets changes nothing.
         source.sheet = vda_core::excel::sheet_names(file)?.into_iter().next();
+    }
+    if format.is_database() {
+        // The first table, by name; another table or a query can be chosen.
+        let tables = vda_core::database::tables(file, format)?;
+        if tables.is_empty() {
+            return fail(format!("{} has no tables", source.path));
+        }
+        source.sheet = tables.into_iter().next();
     }
     Ok(source)
 }

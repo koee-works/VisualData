@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Play, ShieldAlert, ShieldOff, Square } from "@lucide/svelte";
+  import { CalendarClock, Ellipsis, Play, Redo2, ShieldAlert, ShieldOff, Square, Terminal, Undo2 } from "@lucide/svelte";
+  import { DropdownMenu } from "bits-ui";
   import type { Workspace } from "../workspace.svelte";
   import { formatCount } from "../format";
 
@@ -17,6 +18,25 @@
 
   let review = $derived(ws.pendingReview.length);
 
+  const mac = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
+  const key = mac ? "⌘" : "Ctrl+";
+
+  // Undo and redo the analysis, but not while typing: text fields keep
+  // their own undo.
+  function onkeydown(e: KeyboardEvent) {
+    if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+    const t = e.target as HTMLElement | null;
+    if (t && (t.closest("input, textarea, select, [contenteditable=true]") || t.isContentEditable)) return;
+    const k = e.key.toLowerCase();
+    if (k === "z" && !e.shiftKey && ws.view?.undo && !ws.running) {
+      e.preventDefault();
+      ws.undo();
+    } else if (((k === "z" && e.shiftKey) || k === "y") && ws.view?.redo && !ws.running) {
+      e.preventDefault();
+      ws.redo();
+    }
+  }
+
   let summary = $derived.by(() => {
     if (ws.running) return `Running step ${Math.min(done + 1, steps.length)} of ${steps.length}`;
     if (!steps.length) return "Add a step to start";
@@ -25,6 +45,8 @@
     return `${outdated} of ${steps.length} results need a run`;
   });
 </script>
+
+<svelte:window {onkeydown} />
 
 <header class="flex items-center gap-4 border-b border-rule bg-panel px-4 py-2">
   <input
@@ -61,6 +83,48 @@
       <ShieldAlert size={14} /> Review {review} Python step{review === 1 ? "" : "s"}
     </button>
   {/if}
+  <div class="flex items-center">
+    <button
+      class="btn btn-quiet !px-2"
+      aria-label="Undo"
+      title={ws.view?.undo ? `Undo: ${ws.view.undo} (${key}Z)` : "Nothing to undo"}
+      disabled={!ws.view?.undo || ws.running}
+      onclick={() => ws.undo()}
+    >
+      <Undo2 size={16} />
+    </button>
+    <button
+      class="btn btn-quiet !px-2"
+      aria-label="Redo"
+      title={ws.view?.redo ? `Redo: ${ws.view.redo} (${mac ? "⇧⌘Z" : "Ctrl+Y"})` : "Nothing to redo"}
+      disabled={!ws.view?.redo || ws.running}
+      onclick={() => ws.redo()}
+    >
+      <Redo2 size={16} />
+    </button>
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger class="btn btn-quiet !px-2" aria-label="More">
+        <Ellipsis size={16} />
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          class="z-50 min-w-64 rounded-md border border-rule-strong bg-panel p-1 shadow-[0_6px_24px_rgba(29,42,63,0.14)]"
+          align="end"
+          sideOffset={4}
+        >
+          {#each [{ icon: Terminal, name: "Python environment", hint: "Which Python runs your steps", open: () => (ws.pythonOpen = true) }, { icon: CalendarClock, name: "Refresh on a schedule", hint: "Rerun and export without the app", open: () => (ws.scheduleOpen = true) }, { icon: Undo2, name: "History", hint: "Every saved version", open: () => ((ws.consoleTab = "history"), (ws.consoleOpen = true)) }] as item (item.name)}
+            <DropdownMenu.Item
+              class="flex cursor-pointer items-start gap-2 rounded px-2 py-1.5 outline-none data-[highlighted]:bg-select"
+              onSelect={item.open}
+            >
+              <item.icon size={15} class="mt-0.5 text-ink-soft" />
+              <span><span class="block">{item.name}</span><span class="block text-xs text-ink-faint">{item.hint}</span></span>
+            </DropdownMenu.Item>
+          {/each}
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  </div>
   {#if ws.running}
     <button class="btn" onclick={() => ws.cancel()}><Square size={14} /> Cancel</button>
   {:else}

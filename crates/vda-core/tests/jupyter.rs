@@ -29,7 +29,7 @@ fn step(id: &str, inputs: &[&str], kind: StepKind) -> Step {
 
 fn python_has_duckdb() -> bool {
     Command::new(vda_core::python::default_interpreter())
-        .args(["-c", "import duckdb, pandas, pyarrow"])
+        .args(["-c", "import duckdb, pandas, pyarrow, scipy"])
         .status()
         .is_ok_and(|s| s.success())
 }
@@ -92,6 +92,9 @@ fn the_notebook_reproduces_every_step() {
                 &["joined"],
                 StepKind::Check { stop: false, rules: vec![Rule::Expect { formula: "units >= @min_units".into() }, Rule::Unique { columns: vec!["order_id".into()] }] },
             ),
+            step("by_product", &["kept"], StepKind::Test { test: TestKind::CompareGroups, a: "revenue".into(), b: "product".into() }),
+            step("related", &["kept"], StepKind::Test { test: TestKind::Independence, a: "region".into(), b: "product".into() }),
+            step("moves", &["kept"], StepKind::Test { test: TestKind::Correlation, a: "units".into(), b: "revenue".into() }),
             step(
                 "chart",
                 &["kept"],
@@ -135,7 +138,7 @@ fn the_notebook_reproduces_every_step() {
         .map(|c| text(c) + "\n\n")
         .collect::<String>()
         .replace("from IPython.display import display\n", "display = lambda *a, **k: None\n");
-    let tables = ["kept", "calc", "joined", "running", "latest", "wide", "long", "big", "py", "quality"];
+    let tables = ["kept", "calc", "joined", "running", "latest", "wide", "long", "big", "py", "quality", "by_product", "related", "moves"];
     for t in tables {
         script.push_str(&format!("con.sql(f'COPY (SELECT * FROM \"{t}\") TO {{lit({:?})}} (FORMAT parquet)')\n", out.join(format!("{t}.parquet")).to_string_lossy()));
     }

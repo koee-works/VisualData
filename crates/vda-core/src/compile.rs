@@ -109,6 +109,7 @@ pub fn step_sql(kind: &StepKind) -> Option<String> {
         | StepKind::Pivot { .. }
         | StepKind::Unpivot { .. }
         | StepKind::Python { .. }
+        | StepKind::Test { .. }
         | StepKind::Chart { .. } => None,
     }
 }
@@ -818,6 +819,7 @@ pub fn output_schema(step: &Step, inputs: &[Schema]) -> Result<Option<Schema>, E
             pivot_check(step, input)?;
             Ok(None)
         }
+        StepKind::Test { .. } => Ok(Some(crate::stat_test::validate(step, input)?)),
         StepKind::Chart { .. } => {
             crate::chart::validate(step, input)?;
             Ok(None)
@@ -844,6 +846,11 @@ pub fn pipeline_sql_with(
         }
         StepKind::Chart { .. } => {
             return Err(Error::Unsupported(format!("step `{step_id}` is a chart; it has no SQL form")))
+        }
+        StepKind::Test { .. } => {
+            return Err(Error::Unsupported(format!(
+                "step `{step_id}` is a statistical test: its summaries run as SQL, and its p-value is computed from them"
+            )))
         }
         _ => {}
     }
@@ -895,16 +902,28 @@ pub fn pipeline_sql_with(
                     src.sheet.as_deref().unwrap_or("1"),
                     src.path
                 ),
+                // Databases are copied out on import, by table or query.
+                SourceFormat::Sqlite | SourceFormat::DuckDb => format!(
+                    "SELECT * FROM {} /* {} of {} {}, copied on import */",
+                    quote_ident(&format!("{id}_converted")),
+                    match &src.query {
+                        Some(q) => format!("query `{}`", q.replace("*/", "* /").trim()),
+                        None => format!("table {}", src.sheet.as_deref().unwrap_or("(first)")),
+                    },
+                    src.format.name(),
+                    src.path
+                ),
             };
             ctes.push(format!("-- source `{id}`\n{} AS ({read})", quote_ident(id)));
             return Ok(());
         }
         let step = a.step(id).ok_or_else(|| Error::Validation(format!("unknown step `{id}`")))?;
-        if let StepKind::Python { .. } = step.kind {
+        if let StepKind::Python { .. } | StepKind::Test { .. } = step.kind {
             ctes.push(format!(
-                "{} AS (SELECT * FROM {} /* materialized output of Python step `{id}` */)",
+                "{} AS (SELECT * FROM {} /* materialized output of {} step `{id}` */)",
                 quote_ident(id),
-                quote_ident(&format!("{id}_output"))
+                quote_ident(&format!("{id}_output")),
+                if matches!(step.kind, StepKind::Python { .. }) { "Python" } else { "test" }
             ));
             return Ok(());
         }

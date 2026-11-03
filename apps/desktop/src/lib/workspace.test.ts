@@ -498,6 +498,125 @@ describe("Parameters, checks and notebook export", () => {
   });
 });
 
+describe("Undo, history, comments and the environment", () => {
+  async function seeded() {
+    const mock = new MockBackend();
+    await mock.seedDemo({ run: true, editAfterRun: false });
+    const ws = new Workspace(mock);
+    await ws.open("/projects/x");
+    return { ws, mock };
+  }
+
+  it("undoes and redoes changes, saying what each one was", async () => {
+    const { ws } = await seeded();
+    expect(ws.view!.undo).toBeNull();
+    await ws.rename("Q3 revenue");
+    expect(ws.view!.undo).toBe('Renamed the analysis to "Q3 revenue"');
+    ws.selected = "source";
+    await ws.addStep({ type: "dedupe", keys: ["region"], order_by: [] }, "One per region");
+    expect(ws.view!.undo).toBe("Added One per region");
+    await ws.undo();
+    expect(ws.view!.steps.some((s) => s.label === "One per region")).toBe(false);
+    expect(ws.notice).toBe("Undid: Added One per region");
+    expect(ws.view!.redo).toBe("Added One per region");
+    await ws.redo();
+    expect(ws.view!.steps.some((s) => s.label === "One per region")).toBe(true);
+    await ws.undo();
+    await ws.undo();
+    expect(ws.view!.name).toBe("Regional revenue");
+    await ws.undo();
+    expect(ws.error?.message).toBe("there is nothing to undo");
+  });
+
+  it("lists saved versions and restores one, which undo reverses", async () => {
+    const { ws } = await seeded();
+    await ws.rename("First");
+    await ws.rename("Second");
+    const versions = await ws.backend.history(10);
+    expect(versions.map((v) => v.what)).toEqual(['Renamed the analysis to "Second"', 'Renamed the analysis to "First"', "As first opened"]);
+    expect(versions[0]!.current).toBe(true);
+    expect(await ws.restoreVersion(versions[2]!.version)).toBe(true);
+    expect(ws.view!.name).toBe("Regional revenue");
+    await ws.undo();
+    expect(ws.view!.name).toBe("Second");
+  });
+
+  it("keeps comment threads per step, with replies, resolving and authors", async () => {
+    const { ws, mock } = await seeded();
+    const id = ws.view!.steps[0]!.id;
+    expect(await ws.addComment(`step:${id}`, "Why drop missing regions?")).toBe(true);
+    expect(ws.openComments(`step:${id}`)).toBe(1);
+    const c = ws.comments[0]!;
+    await ws.addComment(`step:${id}`, "They are test orders", c.id);
+    expect(ws.comments.map((x) => x.reply_to)).toEqual([null, c.id]);
+    expect(ws.openComments(`step:${id}`)).toBe(1);
+    await ws.resolveComment(c.id, true);
+    expect(ws.openComments(`step:${id}`)).toBe(0);
+    expect(ws.comments.every((x) => x.resolved)).toBe(true);
+    mock.author = "sam";
+    await ws.deleteComment(c.id);
+    expect(ws.error?.message).toContain("only you can delete");
+    mock.author = "you";
+    await ws.deleteComment(c.id);
+    expect(ws.comments).toEqual([]);
+    expect(await ws.addComment(`step:${id}`, "   ")).toBe(false);
+  });
+
+  it("puts open comments in the report", async () => {
+    const { ws, mock } = await seeded();
+    const id = ws.view!.steps[0]!.id;
+    await ws.addComment(`step:${id}`, "Check <this> number");
+    await ws.exportNotebook("html");
+    const html = mock.documents.at(-1)![1];
+    expect(html).toContain("Open comments");
+    expect(html).toContain("Check &lt;this&gt; number");
+  });
+
+  it("reads a database source by table or by query", async () => {
+    const { ws, mock } = await seeded();
+    mock.csvToPick = "/data/shop.sqlite";
+    await ws.addSource();
+    const src = ws.view!.sources.find((s) => s.path === "shop.sqlite")!;
+    expect([src.format, src.sheet, src.query]).toEqual(["sqlite", "regions", null]);
+    expect(await ws.backend.sourceSheets(src.id)).toEqual(["regions", "targets"]);
+    expect(await ws.setSourceRead(src.id, null, "DELETE FROM regions")).toBe(false);
+    expect(ws.error?.message).toContain("must only read");
+    expect(await ws.setSourceRead(src.id, null, "SELECT * FROM targets")).toBe(true);
+    expect(ws.view!.sources.find((s) => s.id === src.id)!.query).toBe("SELECT * FROM targets");
+    expect(ws.view!.undo).toBe("Changed the query");
+  });
+
+  it("describes statistical tests in words", async () => {
+    const { describe: d } = await import("./format");
+    expect(d({ type: "test", test: "compare_means", a: "revenue", b: "region" })).toBe("Compare the average of revenue between region");
+    expect(d({ type: "test", test: "correlation", a: "units", b: "revenue" })).toBe("Correlation of units and revenue");
+    expect(d({ type: "test", test: "independence", a: "region", b: "product" })).toBe("Test whether region and product are related");
+  });
+
+  it("runs a test step and explains a wrong number of groups", async () => {
+    const { ws } = await seeded();
+    ws.selected = "source";
+    const t = await ws.addStep({ type: "test", test: "correlation", a: "order_id", b: "revenue" });
+    await ws.run();
+    const page = await ws.backend.page(t!.id, 0, 1);
+    expect(page.columns.map((c) => c.name)).toContain("p_value");
+    await ws.saveStep(t!.id, null, { type: "test", test: "compare_means", a: "revenue", b: "region" });
+    await ws.run();
+    expect(ws.view!.steps.find((s) => s.id === t!.id)!.detail).toContain("needs exactly two groups");
+  });
+
+  it("chooses another Python and writes a schedule entry", async () => {
+    const { ws } = await seeded();
+    const env = await ws.backend.pythonEnvironment();
+    expect(env.packages.find((p) => p.name === "pandas")!.version).not.toBeNull();
+    const chosen = await ws.backend.setPython(env.candidates[0]!);
+    expect(chosen.chosen_by).toBe("chosen");
+    await expect(ws.backend.setPython("/usr/bin/missing-python")).rejects.toMatchObject({ message: expect.stringContaining("pip install pandas") });
+    const s = await ws.backend.schedule("weekdays", 7, 30, [["aggregate_1", "/reports/latest.xlsx"]]);
+    expect(s.entry).toMatch(/^30 7 \* \* 1-5 vda-run .* --export aggregate_1=\/reports\/latest\.xlsx/);
+  });
+});
+
 describe("Console", () => {
   async function seeded() {
     const mock = new MockBackend();

@@ -20,6 +20,8 @@
     Table2,
     ListTree,
     ShieldCheck,
+    FlaskConical,
+    MessageSquare,
   } from "@lucide/svelte";
   import type { Workspace } from "../workspace.svelte";
   import type { StepOp, StepView } from "../api/types";
@@ -42,6 +44,7 @@
     pivot: Table2,
     unpivot: ListTree,
     check: ShieldCheck,
+    test: FlaskConical,
     sql: Braces,
     python: Code,
     chart: ChartColumn,
@@ -118,6 +121,14 @@
         return { type, code: "# `df` is the input as a pandas DataFrame.\nresult = df", timeout_ms: 60000 };
       case "chart":
         return { type, mark: "bar", x: text, y: numeric, title: null, color: null, summary: "SUM" };
+      case "test": {
+        // Measures, not identifiers.
+        const nums = cols.filter((c) => (c.type === "BIGINT" || c.type === "DOUBLE") && !/(^|_)id$/i.test(c.name)).map((c) => c.name);
+        const cats = cols.filter((c) => c.type === "VARCHAR" || c.type === "BOOLEAN").map((c) => c.name);
+        return cats[0] && nums[0]
+          ? { type, test: "compare_groups", a: nums[0], b: cats[0] }
+          : { type, test: "correlation", a: nums[0] ?? first, b: nums[1] ?? first };
+      }
       case "check": {
         const key = cols.find((c) => /(^|_)id$/i.test(c.name))?.name ?? first;
         return {
@@ -145,6 +156,7 @@
     { type: "join", name: "Join with another table", hint: "Visual" },
     { type: "append", name: "Append another table's rows", hint: "Visual" },
     { type: "check", name: "Check data quality", hint: "Visual" },
+    { type: "test", name: "Statistical test", hint: "Visual" },
     { type: "chart", name: "Chart", hint: "Visual" },
     { type: "sql", name: "SQL", hint: "Code" },
     { type: "python", name: "Python", hint: "Code" },
@@ -207,7 +219,7 @@
             <span class="min-w-0 flex-1">
               <span class="block truncate font-semibold">{t.source.path}</span>
               <span class="block text-xs text-ink-faint">
-                {#if t.source.sheet}{`${t.source.sheet}, `}{/if}{formatCount(t.source.rows)} rows{#if (ws.view?.sources.length ?? 0) > 1}, as <code class="code">{t.source.id}</code>{/if}
+                {#if t.source.query}{"query, "}{:else if t.source.sheet}{`${t.source.sheet}, `}{/if}{formatCount(t.source.rows)} {t.source.rows === 1 ? "row" : "rows"}{#if (ws.view?.sources.length ?? 0) > 1}, as <code class="code">{t.source.id}</code>{/if}
               </span>
             </span>
           </button>
@@ -241,7 +253,7 @@
                   {:else if s.state === "waiting on review"}
                     Waiting on a review
                   {:else if s.rows !== null && s.mode !== "chart"}
-                    {formatCount(s.rows)} rows{s.state === "stale"
+                    {formatCount(s.rows)} {s.rows === 1 ? "row" : "rows"}{s.state === "stale"
                       ? ", outdated"
                       : ev?.cached === false
                         ? `, ${ev.duration_ms} ms`
@@ -255,6 +267,12 @@
                   {/if}
                 </span>
               </span>
+              {#if ws.openComments(`step:${s.id}`)}
+                <span class="flex items-center gap-0.5 text-xs text-ink-soft" title="Open comments">
+                  <MessageSquare size={12} aria-hidden="true" />{ws.openComments(`step:${s.id}`)}
+                  <span class="sr-only">open comments</span>
+                </span>
+              {/if}
               {#if s.mode === "sql" || s.mode === "python"}
                 <span class="tag" title="Edited as code, not with visual controls">{s.mode === "sql" ? "SQL" : "Py"}</span>
               {/if}

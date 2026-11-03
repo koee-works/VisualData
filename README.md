@@ -3,7 +3,7 @@
 An integrated workspace for exploring, transforming, analyzing and visualizing data through visual controls, SQL/Python code, and notebooks, without losing the thread of the analysis.
 
 - Product briefs (v0.2.0): [docs/briefs/](docs/briefs/)
-- Decisions: [ADR-0001 deployment model](docs/adr/0001-deployment-model.md), [ADR-0002 build cache](docs/adr/0002-build-cache.md), [ADR-0003 desktop frontend](docs/adr/0003-frontend.md), [ADR-0004 code review and SQL sandbox](docs/adr/0004-code-review-and-sandbox.md), [ADR-0005 several sources and multi-input steps](docs/adr/0005-multi-input-steps.md), [ADR-0006 formulas and core transforms](docs/adr/0006-formulas-and-core-transforms.md), [ADR-0007 linter and console](docs/adr/0007-linter-and-console.md), [ADR-0008 reshaping and window calculations](docs/adr/0008-reshaping-and-window-calculations.md), [ADR-0009 charts, column details, checks, parameters and export](docs/adr/0009-charts-profiles-checks-parameters-export.md)
+- Decisions: [ADR-0001 deployment model](docs/adr/0001-deployment-model.md), [ADR-0002 build cache](docs/adr/0002-build-cache.md), [ADR-0003 desktop frontend](docs/adr/0003-frontend.md), [ADR-0004 code review and SQL sandbox](docs/adr/0004-code-review-and-sandbox.md), [ADR-0005 several sources and multi-input steps](docs/adr/0005-multi-input-steps.md), [ADR-0006 formulas and core transforms](docs/adr/0006-formulas-and-core-transforms.md), [ADR-0007 linter and console](docs/adr/0007-linter-and-console.md), [ADR-0008 reshaping and window calculations](docs/adr/0008-reshaping-and-window-calculations.md), [ADR-0009 charts, column details, checks, parameters and export](docs/adr/0009-charts-profiles-checks-parameters-export.md), [ADR-0010 history, comments, tests, environment, databases and refresh](docs/adr/0010-history-collaboration-environment-refresh.md)
 - Current state of the first engineering slice: [STATUS.md](STATUS.md)
 
 ## Layout
@@ -68,6 +68,20 @@ Charts can be bars, lines, areas, points, histograms or box plots, split by a co
 
 ![A check that finds orders with no region, with the rows that break it](docs/screenshots/17-check.png)
 
+### Statistical tests and databases
+
+A **Statistical test** step compares two averages (Welch's t-test), averages across groups (analysis of variance), whether two categories are related (chi-square) or whether two numbers move together (correlation). It gives the statistic, the p-value and a sentence reading it, and matches SciPy. **SQLite and DuckDB database files** are sources too, read by table or by a read-only query.
+
+![A test of whether average units differ by region](docs/screenshots/22-test.png)
+
+### Undo, history and comments
+
+**Undo** and **Redo** (Ctrl/Cmd+Z) take back any change, and the console's **History** lists every saved version with what changed, so an earlier one can be restored. **Comments** on steps and sources, with replies, stay with the project for whoever opens it next. **Python environment** in the ⋯ menu shows which interpreter runs Python steps and what it has installed, and lets you choose another.
+
+### Refreshing without the app
+
+`vda-run <project> --export <step>=<file>` re-reads the sources, reruns what changed and writes the file, but only when every step succeeds. Python code runs only if you approved it. **Refresh on a schedule** in the ⋯ menu writes the line for cron, launchd or Task Scheduler. Scheduled runs show in the run log.
+
 ### Sharing the notebook
 
 **Export** on the notebook saves a **report**, one web page with the text, tables, check results and charts that opens anywhere and prints as it is, or a **Jupyter notebook** that reruns the analysis with DuckDB and pandas outside the app. With `VDA_SAVE_DIR` set, notebooks are saved into that folder without a dialog (for scripted use).
@@ -88,7 +102,7 @@ Open a project at startup with `vda-desktop --open <folder>`. The end-to-end tes
 
 ## Run the core
 
-Requirements: stable Rust (built with 1.97), a C++ compiler, and Python 3 with pandas and pyarrow. The tests use `python3`, or whatever `VDA_PYTHON` names.
+Requirements: stable Rust (built with 1.97), a C++ compiler, and Python 3 with pandas and pyarrow. The tests use `python3`, or whatever `VDA_PYTHON` names; with scipy and duckdb installed they also check the statistical tests against SciPy and run the exported Jupyter notebook.
 
 ```sh
 cargo test

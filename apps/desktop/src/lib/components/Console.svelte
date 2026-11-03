@@ -1,7 +1,7 @@
 <script lang="ts">
   import { ChevronDown, ChevronUp, CircleX, EyeOff, Info, TriangleAlert } from "@lucide/svelte";
   import type { Workspace } from "../workspace.svelte";
-  import type { Problem, RunView } from "../api/types";
+  import type { Problem, RunView, VersionView } from "../api/types";
 
   // Docked under the step's result: what the linter finds, what steps
   // printed, and the history of runs.
@@ -12,7 +12,16 @@
     { id: "problems", label: "Problems" },
     { id: "output", label: "Output" },
     { id: "log", label: "Run log" },
+    { id: "history", label: "History" },
   ] as const;
+
+  // Saved versions of the analysis; refetched after every change.
+  let versions = $state<VersionView[]>([]);
+  $effect(() => {
+    void ws.revision;
+    if (!ws.consoleOpen || ws.consoleTab !== "history") return;
+    ws.backend.history(200).then((v) => (versions = v), () => (versions = []));
+  });
 
   let runs = $state<RunView[]>([]);
   $effect(() => {
@@ -148,6 +157,25 @@
             </div>
           {/each}
         {/if}
+      {:else if ws.consoleTab === "history"}
+        {#if !versions.length}
+          <p class="px-4 py-3 text-sm text-ink-soft">No saved versions yet. Every change you save is kept here, and earlier versions can be restored.</p>
+        {:else}
+          <ol class="text-sm" aria-label="Saved versions">
+            {#each versions as v (v.version)}
+              <li class="flex items-center gap-3 border-b border-rule px-3 py-1.5">
+                <span class="w-40 shrink-0 text-ink-soft">{when(v.time_unix_ms)}</span>
+                <span class="min-w-0 flex-1 truncate" title={v.what}>{v.what}</span>
+                {#if v.current}
+                  <span class="text-xs text-ink-faint">Current</span>
+                {:else}
+                  <button class="btn btn-quiet !min-h-6 !px-2 text-xs" disabled={ws.running} onclick={() => ws.restoreVersion(v.version)}>Restore</button>
+                {/if}
+              </li>
+            {/each}
+          </ol>
+          <p class="px-4 py-2 text-xs text-ink-faint">Kept in the project's history folder, so they travel with it. Restoring keeps results that still match, and can be undone.</p>
+        {/if}
       {:else}
         {#if !runs.length}
           <p class="px-4 py-3 text-sm text-ink-soft">No runs yet.</p>
@@ -165,6 +193,7 @@
                 >
                   <span class="w-40 shrink-0">{when(r.started_unix_ms)}</span>
                   <span class={r.succeeded ? "text-fresh" : "text-failed"}>{r.succeeded ? "Succeeded" : failed ? `${failed} failed` : "Did not finish"}</span>
+                  {#if r.trigger === "scheduled"}<span class="tag" title="Run by vda-run, without the app">Scheduled</span>{/if}
                   <span class="text-ink-soft">
                     {ran} ran, {r.steps.length - ran - failed} reused or skipped, {(ms / 1000).toFixed(1)} s
                   </span>

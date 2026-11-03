@@ -23,6 +23,12 @@ import type {
   CheckReport,
   ColumnDetail,
   Parameter,
+  Comment,
+  Every,
+  PythonView,
+  ScheduleView,
+  SourceFormat,
+  VersionView,
 } from "./types";
 import { SOURCE_ID } from "./types";
 
@@ -107,9 +113,34 @@ interface MockSource {
   id: string;
   path: string;
   sheet?: string;
+  query?: string | null;
   columns: Column[];
   rows: Row[];
 }
+
+/** What a saved change keeps (results are not part of it). */
+interface MockSnapshot {
+  name: string;
+  sources: MockSource[];
+  steps: MockStep[];
+  cells: NotebookCell[];
+  parameters: Parameter[];
+}
+
+/** Methods that change the analysis, and how each is described. */
+const MUTATORS: [string, (a: unknown[]) => string][] = [
+  ["addStep", (a) => `Added ${(a[1] as string | null) ?? `a ${(a[2] as StepOp).type} step`}`],
+  ["updateStep", (a) => `Edited ${(a[1] as string | null) ?? `step \`${a[0]}\``}`],
+  ["removeStep", (a) => `Deleted step \`${a[0]}\``],
+  ["setCells", () => "Edited the notebook"],
+  ["rename", (a) => `Renamed the analysis to "${a[0]}"`],
+  ["setParameters", () => "Changed parameters"],
+  ["renameParameter", () => "Renamed a parameter"],
+  ["addSource", (a) => `Added source ${String(a[0]).split(/[\\/]/).pop()}`],
+  ["removeSource", (a) => `Removed source \`${a[0]}\``],
+  ["updateSource", (a) => (a[1] ? `Renamed source \`${a[0]}\` to \`${a[1]}\`` : `Chose sheet ${a[2]}`)],
+  ["setSourceRead", (a) => (a[2] ? "Changed the query" : `Read table ${a[1]}`)],
+];
 
 export class MockBackend implements Backend {
   name = "Regional revenue";
@@ -129,7 +160,154 @@ export class MockBackend implements Backend {
   private cancelled = false;
 
   parameters: Parameter[] = [];
+  undoStack: { snap: MockSnapshot; what: string }[] = [];
+  redoStack: { snap: MockSnapshot; what: string }[] = [];
+  versions: (VersionView & { snap: MockSnapshot })[] = [];
+  commentList: Comment[] = [];
+  author = "you";
+  python: PythonView = {
+    interpreter: "python3",
+    executable: "/usr/bin/python3",
+    version: "3.13.1",
+    packages: [
+      { name: "pandas", purpose: "Python steps (required)", required: true, version: "3.0.5" },
+      { name: "pyarrow", purpose: "Python steps (required)", required: true, version: "22.0.0" },
+      { name: "numpy", purpose: "numerical work", required: false, version: "2.3.4" },
+      { name: "scipy", purpose: "statistics", required: false, version: null },
+      { name: "duckdb", purpose: "rerunning exported Jupyter notebooks", required: false, version: null },
+    ],
+    problem: null,
+    chosen_by: "default",
+    candidates: ["/projects/regional-revenue/.venv/bin/python", "/opt/conda/envs/stats/bin/python"],
+  };
   checkReports = new Map<string, CheckReport>();
+
+  constructor() {
+    // Every change is recorded for undo and history, as the app does.
+    const self = this as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
+    for (const [name, what] of MUTATORS) {
+      const f = self[name]!.bind(this);
+      self[name] = async (...args: unknown[]) => {
+        const before = this.snapshot();
+        const r = await f(...args);
+        if (JSON.stringify(before) !== JSON.stringify(this.snapshot())) this.recordEdit(before, what(args));
+        if (Array.isArray(r)) return [await this.view(), r[1]];
+        return this.view();
+      };
+    }
+  }
+
+  private snapshot(): MockSnapshot {
+    // JSON, not structuredClone: definitions passed in from the UI may be reactive proxies.
+    return JSON.parse(JSON.stringify({ name: this.name, sources: this.sources, steps: this.steps, cells: this.cells, parameters: this.parameters }));
+  }
+
+  private restore(s: MockSnapshot) {
+    const c = structuredClone(s);
+    Object.assign(this, { name: c.name, sources: c.sources, steps: c.steps, cells: c.cells, parameters: c.parameters });
+  }
+
+  private addVersion(what: string, snap: MockSnapshot) {
+    const version = (this.versions[0]?.version ?? 0) + 1;
+    this.versions.unshift({ version, time_unix_ms: Date.now(), what, current: false, snap: structuredClone(snap) });
+  }
+
+  private recordEdit(before: MockSnapshot, what: string) {
+    if (!this.versions.length) this.addVersion("As first opened", before);
+    this.undoStack.push({ snap: before, what });
+    this.redoStack = [];
+    this.addVersion(what, this.snapshot());
+  }
+
+  async undo(): Promise<AnalysisView> {
+    const e = this.undoStack.pop();
+    if (!e) throw { message: "there is nothing to undo" };
+    this.redoStack.push({ snap: this.snapshot(), what: e.what });
+    this.restore(e.snap);
+    this.addVersion(`Undid: ${e.what}`, this.snapshot());
+    return this.view();
+  }
+
+  async redo(): Promise<AnalysisView> {
+    const e = this.redoStack.pop();
+    if (!e) throw { message: "there is nothing to redo" };
+    this.undoStack.push({ snap: this.snapshot(), what: e.what });
+    this.restore(e.snap);
+    this.addVersion(`Redid: ${e.what}`, this.snapshot());
+    return this.view();
+  }
+
+  async history(limit: number): Promise<VersionView[]> {
+    const now = JSON.stringify(this.snapshot());
+    let marked = false;
+    return this.versions.slice(0, limit).map(({ snap, ...v }) => {
+      const current = !marked && JSON.stringify(snap) === now;
+      marked ||= current;
+      return { ...v, current };
+    });
+  }
+
+  async restoreVersion(version: number): Promise<AnalysisView> {
+    const v = this.versions.find((x) => x.version === version);
+    if (!v) throw { message: `there is no saved version ${version}` };
+    const before = this.snapshot();
+    this.restore(v.snap);
+    this.recordEdit(before, `Restored version ${version}`);
+    return this.view();
+  }
+
+  async comments(): Promise<Comment[]> {
+    return this.commentList.map((c) => ({ ...c }));
+  }
+
+  async addComment(target: string, text: string, replyTo: string | null): Promise<Comment[]> {
+    if (!text.trim()) throw { message: "write a comment first" };
+    const parent = replyTo ? this.commentList.find((c) => c.id === replyTo) : null;
+    if (replyTo && !parent) throw { message: "the comment being replied to no longer exists" };
+    const n = Math.max(0, ...this.commentList.map((c) => Number(c.id.slice(1)))) + 1;
+    this.commentList.push({ id: `c${n}`, target: parent?.target ?? target, reply_to: replyTo, author: this.author, time_unix_ms: Date.now(), text: text.trim(), resolved: false });
+    return this.comments();
+  }
+
+  async resolveComment(id: string, resolved: boolean): Promise<Comment[]> {
+    for (const c of this.commentList) if (c.id === id || c.reply_to === id) c.resolved = resolved;
+    return this.comments();
+  }
+
+  async deleteComment(id: string): Promise<Comment[]> {
+    const c = this.commentList.find((x) => x.id === id);
+    if (!c) throw { message: "that comment no longer exists" };
+    if (c.author !== this.author) throw { message: `only ${c.author} can delete this comment; you can resolve it instead` };
+    this.commentList = this.commentList.filter((x) => x.id !== id && x.reply_to !== id);
+    return this.comments();
+  }
+
+  async pythonEnvironment(): Promise<PythonView> {
+    return structuredClone(this.python);
+  }
+
+  async setPython(path: string): Promise<PythonView> {
+    if (path.includes("missing")) throw { message: `cannot use ${path}: it has no pandas or pyarrow; install with: ${path} -m pip install pandas pyarrow` };
+    this.python = { ...this.python, interpreter: path, executable: path, chosen_by: "chosen", candidates: this.python.candidates.filter((c) => c !== path) };
+    for (const [id, r] of this.results) if (this.steps.find((s) => s.id === id)?.op.type === "python") r.def = "";
+    return this.pythonEnvironment();
+  }
+
+  async schedule(every: Every, hour: number, minute: number, exports: [string, string][]): Promise<ScheduleView> {
+    const when = { hourly: `${minute} * * * *`, daily: `${minute} ${hour} * * *`, weekdays: `${minute} ${hour} * * 1-5`, weekly: `${minute} ${hour} * * 1` }[every];
+    const command = ["vda-run", "/projects/regional-revenue", ...exports.flatMap(([id, p]) => ["--export", `${id}=${p}`])].join(" ");
+    return { command, entry: `${when} ${command} >> /projects/regional-revenue/runs/scheduled.log 2>&1`, how: "Add this line with: crontab -e", scheduler: "cron" };
+  }
+
+  async setSourceRead(id: string, table: string | null, query: string | null): Promise<AnalysisView> {
+    const s = this.sourceById(id);
+    if (!/\.(sqlite|db|duckdb)$/.test(s.path)) throw { message: `\`${id}\` is not a database` };
+    if (query && !/^\s*select\b/i.test(query)) throw { message: "the query must only read (SELECT); it cannot change the database" };
+    if (!query && !table) throw { message: "choose a table, or write a query" };
+    s.query = query || null;
+    if (table) s.sheet = table;
+    return this.view();
+  }
   /** Reports and notebooks written, for tests: [path, contents]. */
   documents: [string, string][] = [];
 
@@ -180,7 +358,7 @@ export class MockBackend implements Backend {
         inputs: s.inputs,
         label: s.label,
         op: s.op,
-        mode: ["filter", "aggregate", "join", "append", "derive", "select", "sort", "window", "dedupe", "pivot", "unpivot", "check"].includes(s.op.type)
+        mode: ["filter", "aggregate", "join", "append", "derive", "select", "sort", "window", "dedupe", "pivot", "unpivot", "check", "test"].includes(s.op.type)
           ? "visual"
           : (s.op.type as "sql" | "python" | "chart"),
         state: this.state(s),
@@ -200,8 +378,9 @@ export class MockBackend implements Backend {
         rows: x.rows.length,
         columns: x.columns,
         external: false,
-        format: x.path.endsWith(".xlsx") ? "excel" : "csv",
+        format: (x.path.endsWith(".xlsx") ? "excel" : /\.(sqlite|db)$/.test(x.path) ? "sqlite" : x.path.endsWith(".duckdb") ? "duckdb" : "csv") as SourceFormat,
         sheet: x.sheet ?? null,
+        query: x.query ?? null,
       })),
       steps,
       cells: this.cells,
@@ -211,6 +390,8 @@ export class MockBackend implements Backend {
         .map((s) => ({ step_id: s.id, label: s.label, inputs: s.inputs, code: s.op.type === "python" ? s.op.code : "" })),
       trust_all: this.trustAll,
       parameters: this.parameters.map((p) => ({ ...p })),
+      undo: this.undoStack.at(-1)?.what ?? null,
+      redo: this.redoStack.at(-1)?.what ?? null,
     };
   }
 
@@ -320,12 +501,15 @@ export class MockBackend implements Backend {
     if (!/^[a-z]/.test(id)) id = `data_${id}`;
     const base = id;
     for (let n = 2; this.sources.some((s) => s.id === id) || this.steps.some((s) => s.id === id); n++) id = `${base}_${n}`;
-    this.sources.push({ id, path: `${id === base ? stem : id}.csv`, ...regionsTable() });
+    const ext = /\.(sqlite|db|duckdb|xlsx)$/i.exec(csv)?.[0] ?? ".csv";
+    const db = /\.(sqlite|db|duckdb)$/i.test(ext);
+    this.sources.push({ id, path: `${id === base ? stem : id}${ext}`, ...(db ? { sheet: "regions" } : {}), ...regionsTable() });
     return this.view();
   }
 
   async sourceSheets(id: string): Promise<string[]> {
     const s = this.sourceById(id);
+    if (/\.(sqlite|db|duckdb)$/.test(s.path)) return ["regions", "targets"];
     return s.path.endsWith(".xlsx") ? ["Notes", "Targets"] : [];
   }
 
@@ -713,6 +897,37 @@ export class MockBackend implements Backend {
       );
       return { def: this.def(s.id), columns: input.columns, rows };
     }
+    if (op.type === "test") {
+      // A stand-in: real statistics are computed in Rust (stat_test.rs).
+      const ai = col(op.a);
+      const bi = col(op.b);
+      const pairs = input.rows.filter((r) => r[ai]!.t !== "null" && r[bi]!.t !== "null");
+      const f = (c: Cell) => num(c) ?? 0;
+      const T = (n: string, t: Column["type"]): Column => ({ name: n, type: t });
+      if (op.test === "correlation") {
+        const xs = pairs.map((r) => f(r[ai]!));
+        const ys = pairs.map((r) => f(r[bi]!));
+        const mx = xs.reduce((a, b) => a + b, 0) / xs.length;
+        const my = ys.reduce((a, b) => a + b, 0) / ys.length;
+        const sxy = xs.reduce((a, x, i) => a + (x - mx) * (ys[i]! - my), 0);
+        const sxx = xs.reduce((a, x) => a + (x - mx) ** 2, 0);
+        const syy = ys.reduce((a, y) => a + (y - my) ** 2, 0);
+        const r = sxy / Math.sqrt(sxx * syy);
+        return {
+          def: this.def(s.id),
+          columns: [T("n", "BIGINT"), T("r", "DOUBLE"), T("t", "DOUBLE"), T("df", "BIGINT"), T("p_value", "DOUBLE"), T("reading", "VARCHAR")],
+          rows: [[{ t: "int", v: String(xs.length) }, { t: "float", v: r }, { t: "float", v: 0 }, { t: "int", v: String(xs.length - 2) }, { t: "float", v: 0.5 }, { t: "text", v: `(mock) r = ${r.toFixed(2)}` }]],
+        };
+      }
+      const groups = [...new Set(pairs.map((r) => String((r[bi] as { v: unknown }).v)))].sort();
+      if (op.test === "compare_means" && groups.length !== 2)
+        throw new Error(`comparing two averages needs exactly two groups, and \`${op.b}\` has ${groups.length} (${groups.slice(0, 6).join(", ")})`);
+      return {
+        def: this.def(s.id),
+        columns: [T("groups", "BIGINT"), T("n", "BIGINT"), T("p_value", "DOUBLE"), T("reading", "VARCHAR")],
+        rows: [[{ t: "int", v: String(groups.length) }, { t: "int", v: String(pairs.length) }, { t: "float", v: 0.04 }, { t: "text", v: `(mock) ${op.test} of ${op.a} by ${op.b}` }]],
+      };
+    }
     if (op.type === "check") {
       // A stand-in: formulas are not evaluated (they pass); keys and row counts are.
       const results = op.rules.map((r, i) => {
@@ -904,7 +1119,7 @@ export class MockBackend implements Backend {
       onStep(e);
     }
     const summary = { run_id: `run-${Date.now()}`, succeeded: events.every((e) => e.status === "succeeded"), steps: events };
-    this.runs.unshift({ ...summary, started_unix_ms: Date.now() });
+    this.runs.unshift({ ...summary, started_unix_ms: Date.now(), trigger: null });
     return summary;
   }
 
@@ -954,6 +1169,10 @@ export class MockBackend implements Backend {
       const f = this.steps[0]!;
       if (f.op.type === "filter") f.op.predicates[1]!.value = { int: "100" };
     }
+    // As a project that was just opened: nothing to undo yet.
+    this.undoStack = [];
+    this.redoStack = [];
+    this.versions = [];
   }
 
   async startupProject(): Promise<string | null> {

@@ -62,7 +62,11 @@ class Session:
         raise AssertionError(f"not found within {timeout}s: {xpath}\n{last}")
 
     def click(self, xpath):
-        call("POST", f"/session/{self.id}/element/{self.find(xpath)}/click", {})
+        el = self.find(xpath)
+        # Panels scroll on their own; WebKit's driver does not scroll inside them.
+        ref = {"element-6066-11e4-a52e-4f735466cecf": el}
+        call("POST", f"/session/{self.id}/execute/sync", {"script": "arguments[0].scrollIntoView({block: 'nearest'})", "args": [ref]})
+        call("POST", f"/session/{self.id}/element/{el}/click", {})
 
     def text(self, xpath):
         # textContent, not WebDriver's visible text: WebKit's driver drops
@@ -180,6 +184,7 @@ def step(n, msg):
 def main():
     app, project, shots = sys.argv[1:4]
     join_project = sys.argv[4] if len(sys.argv) > 4 else None
+    slice4_project = sys.argv[5] if len(sys.argv) > 5 else None
     os.makedirs(shots, exist_ok=True)
     # A fresh approvals file: this "user" has approved nothing yet.
     approvals = os.path.join(shots, "approvals.json")
@@ -188,6 +193,9 @@ def main():
     with_app(app, project, shots, approvals, lambda s: received_project(s, shots))
     if join_project:
         with_app(app, join_project, shots, approvals, lambda s: joins(s, shots))
+    if slice4_project:
+        with_app(app, slice4_project, shots, approvals, lambda s: slice4(s, shots))
+        refresh_without_the_app(app, slice4_project, approvals)
     print("PASS: end-to-end scenario")
 
 
@@ -459,6 +467,98 @@ def joins(s, shots):
     assert "<title>Revenue against target</title>" in html and "<svg" in html and "<script" not in html, html[:400]
     notebook = json.load(open(nb, encoding="utf-8"))
     assert notebook["nbformat"] == 4 and any("read_csv" in "".join(c["source"]) for c in notebook["cells"]), notebook["cells"][:2]
+
+
+def slice4(s, shots):
+    table = "//div[@role='table']"
+    editor = "//section[@aria-label='Step editor']"
+    s.wait_text(STATUS, "results need a run")
+
+    step(25, "A SQLite database is a source: a table first, then a query on it")
+    s.click(node("shop.sqlite"))
+    s.wait_text("//section[@aria-label='Source']", "SQLite database. 5 rows")
+    s.driver_select("//select[@aria-label='What to read']", "__query")
+    s.set_input("//textarea[@id='source-query']", "SELECT region, target FROM targets WHERE since < '2026-06-01' ORDER BY target DESC")
+    s.click("//button[normalize-space()='Read with this query']")
+    s.wait_text("//section[@aria-label='Source']", "SQLite database. 4 rows")
+    s.screenshot(f"{shots}/19-database.png")
+
+    step(26, "Undo and redo: deleting a step comes back, and goes again")
+    s.click("//button[normalize-space()='Run analysis']")
+    s.wait_text(STATUS, "All results current")
+    s.click(node("Revenue by region"))
+    s.click("//button[@aria-label='Delete step']")
+    s.wait_gone(node("Revenue by region"))
+    s.click("//button[@aria-label='Undo']")
+    s.find(node("Revenue by region"))
+    s.wait_text(STATUS, "All results current")  # the saved result is reused
+    s.click("//button[@aria-label='Redo']")
+    s.wait_gone(node("Revenue by region"))
+    s.click("//button[@aria-label='Undo']")
+    s.find(node("Revenue by region"))
+
+    step(27, "History lists every saved version, and an earlier one can be restored")
+    s.click("//button[@aria-label='More']")
+    s.click("//div[@role='menuitem' and contains(., 'History')]")
+    versions = "//ol[@aria-label='Saved versions']"
+    s.wait_text(versions, "Undid: Deleted Revenue by region")
+    assert "Changed the query reading shop.sqlite" in s.text(versions), s.text(versions)
+    s.screenshot(f"{shots}/20-history.png")
+    s.click(f"{versions}/li[contains(., 'As first opened')]//button[normalize-space()='Restore']")
+    s.find("//p[contains(., 'Restored version')]")
+    s.click(node("shop.sqlite"))
+    s.wait_text("//section[@aria-label='Source']", "SQLite database. 5 rows")
+    s.click("//button[@aria-label='Undo']")
+    s.wait_text("//section[@aria-label='Source']", "SQLite database. 4 rows")
+
+    step(28, "A comment on a step shows in the pipeline")
+    s.click(node("Big orders"))
+    s.set_input("//textarea[@aria-label='New comment']", "Why 3 units? Sales used 5 last quarter.")
+    s.click("//section[@aria-label='Comments']//button[normalize-space()='Comment']")
+    s.wait_text("//section[@aria-label='Comments']", "Why 3 units?")
+    s.find(node("Big orders") + "//span[@title='Open comments']")
+    s.click("//section[@aria-label='Comments']//button[normalize-space()='Reply']")
+    s.set_input("//textarea[@aria-label='Reply']", "Matches the new pricing tiers.")
+    s.click("//section[@aria-label='Comments']//form//button[normalize-space()='Reply']")
+    s.wait_text("//section[@aria-label='Comments']", "Matches the new pricing tiers.")
+    s.screenshot(f"{shots}/21-comments.png")
+
+    step(29, "A statistical test: do average units differ by region?")
+    s.click(node("sales.csv"))
+    s.click("//button[@aria-label='Add a step']")
+    s.click("//div[@role='menuitem' and contains(., 'Statistical test')]")
+    s.wait_gone("//*[@role='menu']")
+    s.click("//header//button[normalize-space()='Run analysis']")
+    s.wait_text(STATUS, "All results current")
+    s.wait_text(table, "p_value")
+    s.wait_text(table, "average of units")
+    s.screenshot(f"{shots}/22-test.png")
+
+    step(30, "The Python environment, and the entry that refreshes the project on a schedule")
+    s.click("//button[@aria-label='More']")
+    s.click("//div[@role='menuitem' and contains(., 'Python environment')]")
+    s.wait_text("//table[@aria-label='Packages']", "pandas")
+    s.screenshot(f"{shots}/23-python.png")
+    s.click("//button[normalize-space()='Done']")
+    s.wait_gone("//*[@role='dialog']")
+    s.click("//button[@aria-label='More']")
+    s.click("//div[@role='menuitem' and contains(., 'Refresh on a schedule')]")
+    s.wait_text("//pre[@aria-label='Schedule entry']", "vda-run")
+    entry = s.text("//pre[@aria-label='Schedule entry']")
+    assert entry.startswith("0 7 * * 1-5 ") and "scheduled.log" in entry, entry
+    s.screenshot(f"{shots}/24-schedule.png")
+    s.click("//button[normalize-space()='Done']")
+
+
+def refresh_without_the_app(app, project, approvals):
+    step(31, "vda-run refreshes the project without the app, and the run log says so")
+    runner = os.path.join(os.path.dirname(app), "vda-run")
+    out = os.path.join(project, "latest.csv")
+    r = subprocess.run([runner, project, "--export", f"by_region={out}"], env=dict(os.environ, VDA_APPROVALS=approvals), capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "all results current" in r.stdout and open(out).read().startswith("region,revenue"), r.stdout
+    runs = [json.load(open(os.path.join(project, "runs", f))) for f in os.listdir(os.path.join(project, "runs")) if f.endswith(".json")]
+    assert any(x.get("trigger") == "scheduled" for x in runs)
 
 
 if __name__ == "__main__":

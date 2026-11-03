@@ -4,6 +4,7 @@
   import type { ColumnDetail, SourceView } from "../api/types";
   import { formatCount } from "../format";
   import ProfileTable from "./ProfileTable.svelte";
+  import Comments from "./Comments.svelte";
 
   let { ws, source }: { ws: Workspace; source: SourceView } = $props();
 
@@ -28,11 +29,20 @@
   $effect(() => {
     const id = source.id;
     void ws.revision;
-    if (source.format !== "excel") return void (sheets = []);
+    if (source.format !== "excel" && source.format !== "sqlite" && source.format !== "duckdb") return void (sheets = []);
     ws.backend.sourceSheets(id).then((s) => (sheets = s), () => (sheets = []));
   });
   let valid = $derived(/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && name.toLowerCase() !== "input");
-  const formatNames = { csv: "CSV", parquet: "Parquet", json: "JSON", excel: "Spreadsheet" };
+  const formatNames = { csv: "CSV", parquet: "Parquet", json: "JSON", excel: "Spreadsheet", sqlite: "SQLite database", duckdb: "DuckDB database" };
+  let isDb = $derived(source.format === "sqlite" || source.format === "duckdb");
+  // A database is read by table, or by a query that runs on it (read-only).
+  let byQuery = $state(false);
+  let query = $state("");
+  $effect.pre(() => {
+    void source.id;
+    byQuery = !!source.query;
+    query = source.query ?? `SELECT *\nFROM ${source.sheet ?? "table_name"}\nLIMIT 1000`;
+  });
   let several = $derived((ws.view?.sources.length ?? 0) > 1);
   let withMissing = $derived(profile?.filter((p) => p.missing > 0).length ?? 0);
 </script>
@@ -42,11 +52,11 @@
     <div class="min-w-0 flex-1">
     <h2 class="text-lg font-semibold">{source.path}</h2>
     <p class="max-w-[42rem] text-sm text-ink-soft">
-      {formatNames[source.format]} file. {formatCount(source.rows)} rows, {source.columns.length} columns.
+      {formatNames[source.format]}{isDb ? "" : " file"}. {formatCount(source.rows)} rows, {source.columns.length} columns.
       {#if profile}
         {withMissing ? `${withMissing} column${withMissing === 1 ? " has" : "s have"} missing values.` : "No missing values."}
       {/if}
-      Types were detected on import.
+      {isDb ? "Copied from the database when it changes; types follow the database's." : "Types were detected on import."}
     </p>
     <div class="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
       <form
@@ -62,7 +72,28 @@
           <button class="btn !min-h-7" disabled={!valid || ws.running}>Rename</button>
         {/if}
       </form>
-      {#if sheets.length}
+      {#if isDb}
+        <label class="flex items-center gap-2">
+          <span class="text-ink-soft">Read</span>
+          <select
+            class="field"
+            aria-label="What to read"
+            value={byQuery ? "__query" : (source.sheet ?? sheets[0])}
+            disabled={ws.running}
+            onchange={(e) => {
+              const v = e.currentTarget.value;
+              if (v === "__query") byQuery = true;
+              else {
+                byQuery = false;
+                ws.setSourceRead(source.id, v, null);
+              }
+            }}
+          >
+            {#each sheets as s (s)}<option value={s}>table {s}</option>{/each}
+            <option value="__query">a query…</option>
+          </select>
+        </label>
+      {:else if sheets.length}
         <label class="flex items-center gap-2">
           <span class="text-ink-soft">Sheet</span>
           <select
@@ -76,6 +107,24 @@
         </label>
       {/if}
     </div>
+    {#if isDb && byQuery}
+      <form
+        class="mt-3 max-w-[48rem]"
+        onsubmit={(e) => {
+          e.preventDefault();
+          ws.setSourceRead(source.id, null, query);
+        }}
+      >
+        <label for="source-query" class="mb-1 block text-sm text-ink-soft">
+          A query on the database. It can only read: it cannot change the database or open other files.
+        </label>
+        <textarea id="source-query" class="field code w-full" rows="4" spellcheck="false" bind:value={query}></textarea>
+        <div class="mt-1.5 flex gap-2">
+          <button class="btn" disabled={ws.running || !query.trim() || query === source.query}>Read with this query</button>
+          {#if source.query}<span class="self-center text-xs text-ink-faint">The rows below come from this query.</span>{/if}
+        </div>
+      </form>
+    {/if}
     {#if !valid}
       <p class="mt-1 text-sm text-failed">Start with a letter and use only letters, digits and _.</p>
     {:else if name !== source.id && readers}
@@ -98,5 +147,6 @@
   </header>
   <div class="flex-1 overflow-auto">
     <ProfileTable details={profile} columns={source.columns} loading={profile === null} />
+    <div class="px-5 pb-6"><Comments {ws} target="source:{source.id}" /></div>
   </div>
 </section>

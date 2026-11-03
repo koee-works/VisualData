@@ -46,6 +46,9 @@ pub fn eval_step(step: &Step, inputs: &[Table]) -> Result<Table, Error> {
         StepKind::Dedupe { keys, order_by } => dedupe(input, keys, order_by),
         StepKind::Unpivot { columns, .. } => unpivot(input, columns, &schema),
         StepKind::Check { .. } => input.rows.clone(),
+        StepKind::Test { .. } => {
+            return Err(Error::Unsupported(format!("step `{}`: a test runs its summaries as steps (stat_test.rs)", step.id)))
+        }
         _ => unreachable!("output_schema returned Some for a non-table step"),
     };
     Ok(Table { schema, rows })

@@ -218,7 +218,7 @@ impl Engine for DuckDbEngine {
 
     fn import_csv(&mut self, src: &Path, out: &Path) -> Result<Dataset, Error> {
         self.copy_to(&format!("SELECT * FROM read_csv({}, {CSV_OPTIONS})", lit(src)), out)
-            .map_err(|e| Error::Data(format!("cannot import {}: {e}", src.display())))
+            .map_err(|e| Error::Data(format!("cannot import {}: {}", src.display(), csv_error(&e.to_string()))))
     }
 
     fn import_source(&mut self, src: &Path, format: SourceFormat, sheet: Option<&str>, out: &Path) -> Result<Dataset, Error> {
@@ -325,6 +325,18 @@ impl Engine for DuckDbEngine {
 /// WITH and FROM-first forms), so COPY, ATTACH, SET, INSTALL, PRAGMA and
 /// similar are refused before anything runs, and a second statement cannot
 /// be smuggled in after the first.
+/// DuckDB's CSV errors list its whole search space; keep what helps.
+fn csv_error(m: &str) -> String {
+    if m.contains("not possible to automatically detect the CSV parsing dialect") {
+        return "its layout could not be worked out. Common causes: rows with a different number of columns, \
+                line endings that change partway (some rows end in CRLF, others in LF), or an unusual separator"
+            .into();
+    }
+    // Keep the first lines; drop DuckDB's list of options to try.
+    let cut = m.find("\nPossible fixes").or_else(|| m.find("\n\nLINE 1")).unwrap_or(m.len());
+    m[..cut].trim().to_string()
+}
+
 pub fn check_single_select(conn: &Connection, sql: &str) -> Result<(), String> {
     let sql = sql.trim().trim_end_matches(';');
     let raw: String = conn

@@ -1,4 +1,4 @@
-import type { Cell, ColumnType, Literal, StepOp, StepView, WindowFunc } from "./api/types";
+import type { Cell, ColumnType, Literal, StepOp, StepView, TestKind, WindowFunc } from "./api/types";
 
 /** A cell's full value, for tooltips. */
 export function exactCell(c: Cell): string {
@@ -174,6 +174,29 @@ export function describe(op: StepOp): string {
     }
     case "check":
       return op.rules.length === 1 ? "Check 1 rule" : `Check ${op.rules.length} rules`;
+    case "test":
+      return testSentence(op.test, op.a, op.b);
+  }
+}
+
+/** The statistical tests, as the interface names them. */
+export const testWords: Record<TestKind, { name: string; a: string; b: string; hint: string }> = {
+  compare_means: { name: "Compare two averages", a: "The average of", b: "between the two groups of", hint: "Welch's t-test" },
+  compare_groups: { name: "Compare averages across groups", a: "The average of", b: "across the groups of", hint: "One-way analysis of variance" },
+  independence: { name: "Are two categories related?", a: "Whether", b: "is related to", hint: "Chi-square test of independence" },
+  correlation: { name: "Do two numbers move together?", a: "Whether", b: "moves with", hint: "Pearson correlation" },
+};
+
+function testSentence(t: TestKind, a: string, b: string): string {
+  switch (t) {
+    case "compare_means":
+      return `Compare the average of ${a || "…"} between ${b || "two groups"}`;
+    case "compare_groups":
+      return `Compare the average of ${a || "…"} across ${b || "groups"}`;
+    case "independence":
+      return `Test whether ${a || "…"} and ${b || "…"} are related`;
+    case "correlation":
+      return `Correlation of ${a || "…"} and ${b || "…"}`;
   }
 }
 

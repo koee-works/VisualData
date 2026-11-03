@@ -12,3 +12,6 @@ duckdb = { version = "=1.20000.1", features = ["bundled", "parquet", "json"] }
 calamine = { version = "=0.38.0", default-features = false }
 # Writing Excel files when results are exported; constant memory streams rows.
 rust_xlsxwriter = { version = "=0.102.0", features = ["constant_memory"] }
+# SQLite database sources, with SQLite compiled in (DuckDB's SQLite
+# extension would have to be downloaded at run time).
+rusqlite = { version = "=0.39.0", features = ["bundled", "limits", "column_decltype"] }

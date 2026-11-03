@@ -69,6 +69,66 @@ async fn source_sheets(s: State<'_, Shared>, id: String) -> Res<Vec<String>> {
 }
 
 #[tauri::command]
+async fn set_source_read(s: State<'_, Shared>, id: String, table: Option<String>, query: Option<String>) -> Res<AnalysisView> {
+    with(&s, |a| a.set_source_read(&id, table, query))
+}
+
+#[tauri::command]
+async fn undo(s: State<'_, Shared>) -> Res<AnalysisView> {
+    with(&s, |a| a.undo())
+}
+
+#[tauri::command]
+async fn redo(s: State<'_, Shared>) -> Res<AnalysisView> {
+    with(&s, |a| a.redo())
+}
+
+#[tauri::command]
+async fn history(s: State<'_, Shared>, limit: usize) -> Res<Vec<vda_app::VersionView>> {
+    with(&s, |a| a.history(limit))
+}
+
+#[tauri::command]
+async fn restore_version(s: State<'_, Shared>, version: u64) -> Res<AnalysisView> {
+    with(&s, |a| a.restore_version(version))
+}
+
+#[tauri::command]
+async fn comments(s: State<'_, Shared>) -> Res<Vec<vda_app::CommentView>> {
+    with(&s, |a| a.comments())
+}
+
+#[tauri::command]
+async fn add_comment(s: State<'_, Shared>, target: String, text: String, reply_to: Option<String>) -> Res<Vec<vda_app::CommentView>> {
+    with(&s, |a| a.add_comment(&target, &text, reply_to))
+}
+
+#[tauri::command]
+async fn resolve_comment(s: State<'_, Shared>, id: String, resolved: bool) -> Res<Vec<vda_app::CommentView>> {
+    with(&s, |a| a.resolve_comment(&id, resolved))
+}
+
+#[tauri::command]
+async fn delete_comment(s: State<'_, Shared>, id: String) -> Res<Vec<vda_app::CommentView>> {
+    with(&s, |a| a.delete_comment(&id))
+}
+
+#[tauri::command]
+async fn python_environment(s: State<'_, Shared>) -> Res<vda_app::PythonView> {
+    with(&s, |a| a.python_environment())
+}
+
+#[tauri::command]
+async fn set_python(s: State<'_, Shared>, path: PathBuf) -> Res<vda_app::PythonView> {
+    with(&s, |a| a.set_python(&path))
+}
+
+#[tauri::command]
+async fn schedule(s: State<'_, Shared>, every: String, hour: u32, minute: u32, exports: Vec<(String, PathBuf)>) -> Res<vda_app::refresh::ScheduleView> {
+    with(&s, |a| a.schedule(&every, hour, minute, &exports))
+}
+
+#[tauri::command]
 async fn update_source(s: State<'_, Shared>, id: String, new_id: Option<String>, sheet: Option<String>) -> Res<AnalysisView> {
     with(&s, |a| a.update_source(&id, new_id, sheet))
 }
@@ -281,6 +341,18 @@ fn main() {
             export_notebook,
             save_report,
             preset_save_path,
+            set_source_read,
+            undo,
+            redo,
+            history,
+            restore_version,
+            comments,
+            add_comment,
+            resolve_comment,
+            delete_comment,
+            python_environment,
+            set_python,
+            schedule,
             run,
             cancel
         ])

@@ -117,6 +117,73 @@ impl Writer<'_> {
                 ),
                 None => "# Run the analysis in the app to include this chart.".into(),
             },
+            StepKind::Test { test, a, b } => {
+                // SciPy, as an analyst would check it; the app computes the same
+                // statistics from engine summaries (stat_test.rs).
+                let (qa, qb) = (quote_ident(a), quote_ident(b));
+                let pairs = py(&format!("SELECT {qa} AS x, {qb} AS g FROM input WHERE {qa} IS NOT NULL AND {qb} IS NOT NULL"));
+                let groups = py(&format!(
+                    "SELECT {qb} AS g, list({qa}) AS xs FROM input WHERE {qa} IS NOT NULL AND {qb} IS NOT NULL GROUP BY 1 ORDER BY 1 ASC NULLS LAST"
+                ));
+                let (pa, pb) = (py(a), py(b));
+                let body = match test {
+                    crate::model::TestKind::CompareMeans => format!(
+                        "groups = con.sql({groups}).fetchall()\n\
+                         assert len(groups) == 2, f\"comparing two averages needs exactly two groups; there are {{len(groups)}}\"\n\
+                         (g1, x1), (g2, x2) = groups\n\
+                         t = stats.ttest_ind(x1, x2, equal_var=False)  # Welch's t-test\n\
+                         m1, m2 = float(np.mean(x1)), float(np.mean(x2))\n\
+                         g1, g2 = label(g1), label(g2)\n\
+                         reading = (f\"The average of {{A}} differs between {{g1}} and {{g2}} ({{p_text(t.pvalue)}}).\" if t.pvalue < 0.05\n\
+                                    else f\"No clear difference in the average of {{A}} between {{g1}} and {{g2}} ({{p_text(t.pvalue)}}).\")\n\
+                         result = table(group_1=g1, n_1=len(x1), mean_1=m1, group_2=g2, n_2=len(x2), mean_2=m2, difference=m1 - m2,\n\
+                                        t=float(t.statistic), df=float(t.df), p_value=float(t.pvalue), reading=reading)"
+                    ),
+                    crate::model::TestKind::CompareGroups => format!(
+                        "groups = con.sql({groups}).fetchall()\n\
+                         f = stats.f_oneway(*[xs for _, xs in groups])  # one-way analysis of variance\n\
+                         k, n = len(groups), sum(len(xs) for _, xs in groups)\n\
+                         reading = (f\"The average of {{A}} differs among the {{k}} groups of {{B}} ({{p_text(f.pvalue)}}).\" if f.pvalue < 0.05\n\
+                                    else f\"No clear difference in the average of {{A}} among the {{k}} groups of {{B}} ({{p_text(f.pvalue)}}).\")\n\
+                         result = table(groups=k, n=n, f=float(f.statistic), df_between=k - 1, df_within=n - k, p_value=float(f.pvalue), reading=reading)"
+                    ),
+                    crate::model::TestKind::Independence => format!(
+                        "d = con.sql({pairs}).df()\n\
+                         tab = pd.crosstab(d.x, d.g)\n\
+                         chi = stats.chi2_contingency(tab, correction=False)  # chi-square test of independence\n\
+                         n = int(tab.values.sum())\n\
+                         v = (chi.statistic / (n * (min(tab.shape) - 1))) ** 0.5\n\
+                         smallest = float(chi.expected_freq.min())\n\
+                         reading = (f\"{{A}} and {{B}} are related ({{p_text(chi.pvalue)}}; strength {{v:.2f}} on a 0–1 scale).\" if chi.pvalue < 0.05\n\
+                                    else f\"No clear relation between {{A}} and {{B}} ({{p_text(chi.pvalue)}}).\")\n\
+                         if smallest < 5:\n    reading += \" Some expected counts are below 5, so the p-value is rough.\"\n\
+                         result = table(n=n, categories_1=tab.shape[0], categories_2=tab.shape[1], chi_square=float(chi.statistic), df=int(chi.dof),\n\
+                                        p_value=float(chi.pvalue), cramers_v=float(v), smallest_expected=smallest, reading=reading)"
+                    ),
+                    crate::model::TestKind::Correlation => format!(
+                        "d = con.sql({pairs}).df()\n\
+                         r = stats.pearsonr(d.x.astype(float), d.g.astype(float))  # Pearson correlation\n\
+                         rr, n = float(r.statistic), len(d)\n\
+                         strength = \"strong\" if abs(rr) >= 0.7 else \"moderate\" if abs(rr) >= 0.4 else \"weak\" if abs(rr) >= 0.1 else \"very weak\"\n\
+                         reading = (f\"A {{strength}} correlation: {{B}} {{'rises' if rr >= 0 else 'falls'}} as {{A}} rises (r = {{rr:.2f}}, {{p_text(r.pvalue)}}).\" if r.pvalue < 0.05\n\
+                                    else f\"No clear correlation between {{A}} and {{B}} (r = {{rr:.2f}}, {{p_text(r.pvalue)}}).\")\n\
+                         t = rr * ((n - 2) / (1 - rr * rr)) ** 0.5 if abs(rr) < 1 else None\n\
+                         result = table(n=n, r=rr, t=t, df=n - 2, p_value=float(r.pvalue), reading=reading)"
+                    ),
+                };
+                format!(
+                    "{input_view}import numpy as np\nfrom scipy import stats\nA, B = {pa}, {pb}\n\n\
+                     def p_text(p):\n    return \"p < 0.001\" if p < 0.001 else f\"p = {{p:.3f}}\"\n\n\
+                     def label(v):\n    return str(v).lower() if isinstance(v, bool) else str(v)\n\n\
+                     def table(**cols):\n    \"\"\"One row, typed as the app's result.\"\"\"\n    \
+                     out = pd.DataFrame({{k: [v] for k, v in cols.items()}})\n    \
+                     for k, v in cols.items():\n        \
+                     if isinstance(v, bool) or v is None:\n            out[k] = out[k].astype(\"Float64\")\n        \
+                     elif isinstance(v, (int, np.integer)):\n            out[k] = out[k].astype(\"Int64\")\n    \
+                     return out\n\n{body}\nsave({}, result)\n{show}",
+                    py(id)
+                )
+            }
             StepKind::Check { rules, stop } => {
                 let schemas = self.input_schemas(step)?;
                 let input = &schemas[0];
@@ -232,6 +299,22 @@ pub fn notebook(session: &mut Session) -> Result<Json, Error> {
             SourceFormat::Csv => format!("read_csv({{lit(path)}}, {CSV_OPTIONS})"),
             SourceFormat::Parquet => "read_parquet({lit(path)})".to_string(),
             SourceFormat::Json => format!("read_json({{lit(path)}}, {JSON_OPTIONS})"),
+            SourceFormat::Sqlite | SourceFormat::DuckDb => {
+                let sql = match (&src.query, &src.sheet) {
+                    (Some(q), _) => q.trim().trim_end_matches(';').to_string(),
+                    (None, Some(t)) => format!("SELECT * FROM {}", quote_ident(t)),
+                    (None, None) => {
+                        return Err(Error::Validation(format!("source `{}`: choose its table before exporting a notebook", src.id)));
+                    }
+                };
+                let open = if src.format == SourceFormat::Sqlite {
+                    format!("import sqlite3\nsave({}, pd.read_sql_query({}, sqlite3.connect(f\"file:{{{path}}}?mode=ro\", uri=True)))\n", py(&src.id), py(&sql))
+                } else {
+                    format!("db = duckdb.connect(str({path}), read_only=True)\nsave({}, db.sql({}).df())\ndb.close()\n", py(&src.id), py(&sql))
+                };
+                sources.push_str(&format!("# Database: the {} the app reads (read-only).\n{open}", if src.query.is_some() { "query" } else { "table" }));
+                continue;
+            }
             SourceFormat::Excel => {
                 sources.push_str(&format!(
                     "# Spreadsheet: read with pandas (column types may differ slightly from the app's import).\nsave({}, pd.read_excel({path}, sheet_name={}))\n",

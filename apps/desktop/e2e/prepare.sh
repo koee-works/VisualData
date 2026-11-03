@@ -57,3 +57,42 @@ if [ "${2:-}" != "" ]; then
 }
 JSON
 fi
+
+# Optional third project: a SQLite source, for undo, history, comments,
+# statistical tests and refreshing without the app.
+# Usage: prepare.sh <project-dir> <join-project-dir> <slice4-project-dir>
+if [ "${3:-}" != "" ]; then
+  s4="$3"
+  rm -rf "$s4" && mkdir -p "$s4"
+  cp "$root/examples/regional-revenue/sales.csv" "$s4/"
+  python3 - "$s4/shop.sqlite" <<'PY'
+import sqlite3, sys
+c = sqlite3.connect(sys.argv[1])
+c.executescript("""
+CREATE TABLE targets (region TEXT, target INTEGER, since DATE);
+INSERT INTO targets VALUES ('East', 2400, '2026-01-01'), ('West', 2000, '2026-01-01'),
+  ('North', 1800, '2026-04-01'), ('South', 1500, '2026-04-01'), ('Central', 1200, '2026-07-01');
+CREATE TABLE notes (region TEXT, note TEXT);
+INSERT INTO notes VALUES ('Central', 'new region');
+""")
+c.commit()
+PY
+  cat > "$s4/analysis.json" <<'JSON'
+{
+  "format_version": 2,
+  "name": "Orders and targets",
+  "sources": [
+    {"id": "source", "path": "sales.csv", "format": "csv"},
+    {"id": "shop", "path": "shop.sqlite", "format": "sqlite", "table": "targets"}
+  ],
+  "parameters": [],
+  "steps": [
+    {"id": "big", "inputs": ["source"], "label": "Big orders",
+     "op": {"type": "filter", "predicates": [{"column": "units", "op": ">=", "value": {"int": "3"}}]}},
+    {"id": "by_region", "inputs": ["big"], "label": "Revenue by region",
+     "op": {"type": "aggregate", "group_by": ["region"], "measures": [{"func": "SUM", "column": "revenue", "alias": "revenue"}]}}
+  ],
+  "cells": [{"type": "step", "step": "by_region"}]
+}
+JSON
+fi

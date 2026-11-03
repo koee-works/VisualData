@@ -14,8 +14,7 @@ import type {
   StepEvent,
   StepOp,
   CheckReport,
-  ColumnDetail,
-} from "./types";
+  ColumnDetail, Comment, PythonView, ScheduleView, VersionView } from "./types";
 
 /** Commands registered in apps/desktop/src-tauri/src/main.rs. */
 export const tauriBackend: Backend = {
@@ -57,7 +56,10 @@ export const tauriBackend: Backend = {
       multiple: false,
       directory: false,
       filters: [
-        { name: "Data files", extensions: ["csv", "parquet", "json", "jsonl", "ndjson", "xlsx", "xlsm", "xls", "ods"] },
+        {
+          name: "Data files",
+          extensions: ["csv", "parquet", "json", "jsonl", "ndjson", "xlsx", "xlsm", "xls", "ods", "sqlite", "sqlite3", "db", "db3", "duckdb", "ddb"],
+        },
       ],
     });
     return typeof p === "string" ? p : null;
@@ -85,6 +87,18 @@ export const tauriBackend: Backend = {
   columnDetails: (id) => invoke<ColumnDetail[]>("column_details", { id }),
   exportNotebook: (path) => invoke<void>("export_notebook", { path }),
   saveReport: (path, html) => invoke<void>("save_report", { path, html }),
+  setSourceRead: (id, table, query) => invoke<AnalysisView>("set_source_read", { id, table, query }),
+  undo: () => invoke<AnalysisView>("undo"),
+  redo: () => invoke<AnalysisView>("redo"),
+  history: (limit) => invoke<VersionView[]>("history", { limit }),
+  restoreVersion: (version) => invoke<AnalysisView>("restore_version", { version }),
+  comments: () => invoke<Comment[]>("comments"),
+  addComment: (target, text, replyTo) => invoke<Comment[]>("add_comment", { target, text, replyTo }),
+  resolveComment: (id, resolved) => invoke<Comment[]>("resolve_comment", { id, resolved }),
+  deleteComment: (id) => invoke<Comment[]>("delete_comment", { id }),
+  pythonEnvironment: () => invoke<PythonView>("python_environment"),
+  setPython: (path) => invoke<PythonView>("set_python", { path }),
+  schedule: (every, hour, minute, exports) => invoke<ScheduleView>("schedule", { every, hour, minute, exports }),
   async pickDocumentPath(defaultName, kind) {
     const preset = await invoke<string | null>("preset_save_path", { name: defaultName });
     if (preset) return preset;

@@ -165,7 +165,7 @@ fn spreadsheets_parquet_and_json_are_sources_and_a_sheet_can_be_chosen() {
     let txt = fresh("notes").with_extension("docx");
     fs::write(&txt, "x").unwrap();
     let err = app.add_source(&txt).unwrap_err().message;
-    assert!(err.contains("reads CSV, Parquet, JSON and spreadsheet files"), "{err}");
+    assert!(err.contains("reads CSV, Parquet, JSON, spreadsheet, SQLite and DuckDB files"), "{err}");
 }
 
 #[test]

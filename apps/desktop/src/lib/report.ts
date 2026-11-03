@@ -56,6 +56,11 @@ p { margin: 0.5rem 0; max-width: 68ch; }
 .step h3 { margin-top: 0; }
 .reads { color: var(--soft); font-size: 0.875rem; margin-top: 0; }
 .stale { border-left: 3px solid var(--stale); padding: 0.25rem 0.75rem; color: var(--stale); font-size: 0.875rem; }
+.comments { margin-top: 0.75rem; border-left: 3px solid var(--rule); padding: 0.1rem 0 0.1rem 0.75rem; font-size: 0.875rem; color: var(--soft); }
+.comments .label { font-weight: 600; color: var(--ink); margin: 0; }
+.comments ul { list-style: none; padding: 0; margin: 0.25rem 0 0; }
+.comments .when { color: var(--faint); }
+.comments .reply { margin-left: 1rem; }
 .checks { padding-left: 1.1rem; }
 .checks li { margin: 0.4rem 0; }
 .checks li.failed strong { color: var(--stale); }
@@ -75,6 +80,16 @@ code { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 0.875e
 footer { margin-top: 3rem; border-top: 1px solid var(--rule); padding-top: 0.75rem; color: var(--faint); font-size: 0.8125rem; }
 @media print { main { padding-top: 0; } .step { break-inside: avoid; } details { display: none; } }
 `;
+
+/** Open comments on a step or source, with their replies. */
+function commentsHtml(ws: Workspace, target: string): string {
+  const open = ws.comments.filter((c) => c.target === target && !c.reply_to && !c.resolved);
+  if (!open.length) return "";
+  const one = (c: { author: string; text: string; time_unix_ms: number }) =>
+    `<p><strong>${esc(c.author)}</strong> <span class="when">${esc(new Date(c.time_unix_ms).toLocaleDateString("en-US", { dateStyle: "medium" }))}</span><br>${esc(c.text).replace(/\n/g, "<br>")}</p>`;
+  const items = open.map((c) => `<li>${one(c)}${ws.comments.filter((r) => r.reply_to === c.id).map((r) => `<div class="reply">${one(r)}</div>`).join("")}</li>`);
+  return `<aside class="comments"><p class="label">Open comments</p><ul>${items.join("")}</ul></aside>`;
+}
 
 /** A check's rules: passed or not, with a few rows that break each. */
 function checkResults(r: CheckReport): string {
@@ -117,6 +132,7 @@ async function stepSection(ws: Workspace, s: StepView): Promise<string> {
   }
   const code = s.op.type === "python" ? { lang: "Python", text: s.op.code } : s.op.type === "sql" ? { lang: "SQL", text: s.op.sql } : null;
   if (code) parts.push(`<details><summary>${code.lang}</summary><pre>${esc(code.text)}</pre></details>`);
+  parts.push(commentsHtml(ws, `step:${s.id}`));
   parts.push("</section>");
   return parts.join("\n");
 }

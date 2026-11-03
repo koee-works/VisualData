@@ -119,6 +119,7 @@ export type StepOp =
   | { type: "pivot"; rows: string[]; column: string; value: string | null; func: AggFunc }
   | { type: "unpivot"; columns: string[]; name: string; value: string }
   | { type: "check"; stop: boolean; rules: Rule[] }
+  | { type: "test"; test: TestKind; a: string; b: string }
   | { type: "sql"; sql: string }
   | { type: "python"; code: string; timeout_ms: number }
   | {
@@ -132,6 +133,11 @@ export type StepOp =
       /** One value per x (and color), computed over every row. */
       summary?: AggFunc | null;
     };
+
+/** compare_means: Welch's t-test of `a` between the two groups of `b`;
+ * compare_groups: one-way ANOVA; independence: chi-square of categories
+ * `a` and `b`; correlation: Pearson's r of numbers `a` and `b`. */
+export type TestKind = "compare_means" | "compare_groups" | "independence" | "correlation";
 
 export type Rule =
   | { rule: "expect"; formula: string }
@@ -214,6 +220,9 @@ export interface AnalysisView {
   /** Python runs without review until the app quits (never saved). */
   trust_all: boolean;
   parameters: Parameter[];
+  /** What undo and redo would do, if anything. */
+  undo: string | null;
+  redo: string | null;
 }
 
 /** Code the user is asked to read before it runs. */
@@ -261,6 +270,8 @@ export interface RunView {
   started_unix_ms: number;
   succeeded: boolean;
   steps: StepEvent[];
+  /** "scheduled" for runs by vda-run. */
+  trigger: string | null;
 }
 
 export interface RunSummary {
@@ -278,11 +289,59 @@ export interface SourceView {
   /** Kept outside the project folder. */
   external: boolean;
   format: SourceFormat;
-  /** For spreadsheets, the sheet that is read. */
+  /** For spreadsheets, the sheet that is read; for databases, the table. */
   sheet: string | null;
+  /** For databases, the query read instead of a table. */
+  query: string | null;
 }
 
-export type SourceFormat = "csv" | "parquet" | "json" | "excel";
+export type SourceFormat = "csv" | "parquet" | "json" | "excel" | "sqlite" | "duckdb";
+
+/** A saved version of the analysis (newest first in lists). */
+export interface VersionView {
+  version: number;
+  time_unix_ms: number;
+  what: string;
+  current: boolean;
+}
+
+export interface Comment {
+  id: string;
+  /** `step:<id>`, `source:<id>` or `analysis`. */
+  target: string;
+  reply_to: string | null;
+  author: string;
+  time_unix_ms: number;
+  text: string;
+  resolved: boolean;
+}
+
+export interface PythonPackage {
+  name: string;
+  purpose: string;
+  required: boolean;
+  version: string | null;
+}
+
+export interface PythonView {
+  interpreter: string;
+  executable: string | null;
+  version: string | null;
+  packages: PythonPackage[];
+  problem: string | null;
+  /** "env" (VDA_PYTHON), "chosen" in the app, or "default". */
+  chosen_by: "env" | "chosen" | "default";
+  candidates: string[];
+}
+
+export type Every = "hourly" | "daily" | "weekdays" | "weekly";
+
+export interface ScheduleView {
+  command: string;
+  entry: string;
+  how: string;
+  scheduler: "cron" | "launchd" | "schtasks";
+}
 
 /** Id of an analysis's first source. */
 export const SOURCE_ID = "source";

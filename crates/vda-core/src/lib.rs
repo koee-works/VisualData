@@ -7,6 +7,7 @@ pub mod chart;
 pub mod check;
 pub mod compile;
 pub mod csv;
+pub mod database;
 pub mod dataset;
 pub mod demo;
 pub mod duck;
@@ -29,6 +30,8 @@ pub mod reference;
 pub mod rename;
 pub mod review;
 pub mod session;
+pub mod stat_test;
+pub mod stats;
 pub mod table;
 
 use std::fmt;

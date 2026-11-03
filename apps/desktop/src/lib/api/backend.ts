@@ -14,8 +14,7 @@ import type {
   StepOp,
   CheckReport,
   ColumnDetail,
-  Parameter,
-} from "./types";
+  Parameter, Comment, Every, PythonView, ScheduleView, VersionView } from "./types";
 
 export interface RunHandlers {
   onStep: (e: StepEvent) => void;
@@ -80,6 +79,21 @@ export interface Backend {
   saveReport(path: string, html: string): Promise<void>;
   /** Ask where to save a report or notebook. */
   pickDocumentPath(defaultName: string, kind: "html" | "ipynb"): Promise<string | null>;
+  /** What a database source reads: a table, or a query (which wins). */
+  setSourceRead(id: string, table: string | null, query: string | null): Promise<AnalysisView>;
+  undo(): Promise<AnalysisView>;
+  redo(): Promise<AnalysisView>;
+  /** Saved versions, newest first. */
+  history(limit: number): Promise<VersionView[]>;
+  restoreVersion(version: number): Promise<AnalysisView>;
+  comments(): Promise<Comment[]>;
+  addComment(target: string, text: string, replyTo: string | null): Promise<Comment[]>;
+  resolveComment(id: string, resolved: boolean): Promise<Comment[]>;
+  deleteComment(id: string): Promise<Comment[]>;
+  pythonEnvironment(): Promise<PythonView>;
+  setPython(path: string): Promise<PythonView>;
+  /** The scheduler entry that refreshes the project with vda-run. */
+  schedule(every: Every, hour: number, minute: number, exports: [string, string][]): Promise<ScheduleView>;
 }
 
 /** Errors from the backend carry a user-facing message. */

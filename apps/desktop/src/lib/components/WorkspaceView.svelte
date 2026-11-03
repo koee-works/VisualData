@@ -9,6 +9,8 @@
   import Notebook from "./Notebook.svelte";
   import SourceOverview from "./SourceOverview.svelte";
   import ReviewDialog from "./ReviewDialog.svelte";
+  import PythonDialog from "./PythonDialog.svelte";
+  import ScheduleDialog from "./ScheduleDialog.svelte";
   import Console from "./Console.svelte";
 
   let { ws }: { ws: Workspace } = $props();
@@ -28,6 +30,8 @@
 <svelte:window onpointermove={drag} onpointerup={() => (dragging = false)} />
 
 <ReviewDialog {ws} />
+<PythonDialog {ws} />
+<ScheduleDialog {ws} />
 
 <div class="grid h-full grid-rows-[auto_1fr]">
   <TopBar {ws} />

@@ -92,6 +92,11 @@ pub fn import_with_defaults<E: Engine + ?Sized>(
             "this engine cannot read JSON ({})",
             src.display()
         ))),
+        // The session copies databases out itself (database.rs).
+        SourceFormat::Sqlite | SourceFormat::DuckDb => Err(Error::Unsupported(format!(
+            "{} is a database; it is read through the session",
+            src.display()
+        ))),
     }
 }
 

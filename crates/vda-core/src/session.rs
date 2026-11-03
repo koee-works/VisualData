@@ -107,6 +107,8 @@ pub struct RunRecord {
     pub steps: Vec<StepRun>,
     /// Problems that did not fail a step, e.g. a result that could not be saved.
     pub warnings: Vec<String>,
+    /// What started the run when it was not the app: "scheduled" for `vda-run`.
+    pub trigger: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -131,6 +133,7 @@ impl RunRecord {
             ("run_id", Json::str(self.run_id.clone())),
             ("started_unix_ms", Json::Num(self.started_unix_ms as f64)),
             ("environment", Json::obj(vec![("engine", Json::str(self.engine.clone())), ("python", opt(&self.python))])),
+            ("trigger", opt(&self.trigger)),
             (
                 "sources",
                 Json::Arr(
@@ -197,6 +200,7 @@ impl RunRecord {
             started_unix_ms: j.get("started_unix_ms").and_then(Json::as_f64).unwrap_or(0.0) as u128,
             engine: env.req_str("engine")?.to_string(),
             python: opt(env, "python"),
+            trigger: opt(j, "trigger"),
             sources,
             steps: j
                 .req_arr("steps")?
@@ -471,7 +475,11 @@ impl Session {
         for src in &self.analysis.sources {
             if src.format != SourceFormat::Csv {
                 let hash = out.get_mut(&src.id).unwrap();
-                *hash = sha256_hex(format!("{hash}\n{}\n{}", src.format.name(), src.sheet.as_deref().unwrap_or("")).as_bytes());
+                let mut text = format!("{hash}\n{}\n{}", src.format.name(), src.sheet.as_deref().unwrap_or(""));
+                if let Some(q) = &src.query {
+                    text.push_str(&format!("\nquery:{q}"));
+                }
+                *hash = sha256_hex(text.as_bytes());
             }
         }
         Ok(out)
@@ -493,7 +501,14 @@ impl Session {
         let how = match src.format {
             SourceFormat::Csv => CSV_OPTIONS.to_string(),
             SourceFormat::Json => format!("json\n{JSON_OPTIONS}"),
-            f => format!("{}\n{}", f.name(), src.sheet.as_deref().unwrap_or("")),
+            f => {
+                let mut how = format!("{}\n{}", f.name(), src.sheet.as_deref().unwrap_or(""));
+                // A database read by a query is a different copy than its table.
+                if let Some(q) = &src.query {
+                    how.push_str(&format!("\nquery:{q}"));
+                }
+                how
+            }
         };
         for part in ["vda-source-v1", &self.source_hash(id)?, &self.engine.fingerprint(), &how] {
             h.update(part.as_bytes());
@@ -516,7 +531,26 @@ impl Session {
             _ => {
                 let tmp = self.artifacts.temp_path(&key);
                 let src = self.analysis.source(id).unwrap().clone();
-                let ds = self.engine.import_source(&self.source_path(id)?, src.format, src.sheet.as_deref(), &tmp).inspect_err(|_| {
+                let path = self.source_path(id)?;
+                let ds = if src.format.is_database() {
+                    // Copied out of the database once per version of the file.
+                    let raw = self.artifacts.temp_path(&format!("{key}-db"));
+                    let what = match &src.query {
+                        Some(q) => crate::database::Read::Query(q),
+                        None => crate::database::Read::Table(src.sheet.as_deref()),
+                    };
+                    let copied = crate::database::copy_to_parquet(&path, src.format, what, &raw)
+                        .map_err(|e| match e {
+                            Error::Validation(m) => Error::Validation(format!("source `{id}`: {m}")),
+                            e => e,
+                        })
+                        .and_then(|_| self.engine.adopt_parquet(&raw, &tmp));
+                    let _ = fs::remove_file(&raw);
+                    copied
+                } else {
+                    self.engine.import_source(&path, src.format, src.sheet.as_deref(), &tmp)
+                }
+                .inspect_err(|_| {
                     let _ = fs::remove_file(&tmp);
                 })?;
                 self.artifacts.commit_table(&key, ds)?
@@ -690,6 +724,7 @@ impl Session {
             sources,
             steps: Vec::new(),
             warnings: Vec::new(),
+            trigger: None,
         };
         let mut halted: Option<String> = None;
 
@@ -805,6 +840,23 @@ impl Session {
                     }
                     let ds = self.engine.run_step(&step, &inputs, &tmp)?;
                     Ok(Output::Table(self.artifacts.commit_table(key, ds)?))
+                }
+                StepKind::Test { .. } => {
+                    let artifacts = &self.artifacts;
+                    let mut n = 0;
+                    let mut scratch = || {
+                        n += 1;
+                        artifacts.temp_path(&format!("{key}-test{n}"))
+                    };
+                    let table = crate::stat_test::evaluate(self.engine.as_mut(), &step, &input, &mut scratch)?;
+                    if let Some(crate::table::Value::Text(reading)) = table.rows.first().and_then(|r| r.last()) {
+                        self.step_output = Some(reading.clone());
+                    }
+                    let raw = self.artifacts.temp_path(&format!("{key}-raw"));
+                    crate::duck::write_parquet(&table, &raw)?;
+                    let adopted = self.engine.adopt_parquet(&raw, &tmp);
+                    let _ = fs::remove_file(&raw);
+                    Ok(Output::Table(self.artifacts.commit_table(key, adopted?)?))
                 }
                 StepKind::Python { code, timeout_ms } => {
                     let runner = self.python.as_ref().ok_or_else(|| {

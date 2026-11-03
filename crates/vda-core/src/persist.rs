@@ -234,6 +234,12 @@ pub fn step_kind_to_json(kind: &StepKind) -> Json {
             ("name", Json::str(name.clone())),
             ("value", Json::str(value.clone())),
         ]),
+        StepKind::Test { test, a, b } => Json::obj(vec![
+            ("type", Json::str("test")),
+            ("test", Json::str(test.name())),
+            ("a", Json::str(a.clone())),
+            ("b", Json::str(b.clone())),
+        ]),
         StepKind::Check { rules, stop } => Json::obj(vec![
             ("type", Json::str("check")),
             ("stop", Json::Bool(*stop)),
@@ -398,6 +404,11 @@ pub fn step_kind_from_json(j: &Json) -> Result<StepKind, Error> {
             name: j.req_str("name")?.to_string(),
             value: j.req_str("value")?.to_string(),
         },
+        "test" => StepKind::Test {
+            test: crate::model::TestKind::parse(j.req_str("test")?).ok_or_else(|| Error::Format("unknown statistical test".into()))?,
+            a: j.req_str("a")?.to_string(),
+            b: j.req_str("b")?.to_string(),
+        },
         "check" => StepKind::Check {
             stop: j.get("stop") == Some(&Json::Bool(true)),
             rules: j
@@ -476,7 +487,10 @@ pub fn analysis_to_json(a: &Analysis) -> Json {
                             ("format", Json::str(src.format.name())),
                         ];
                         if let Some(sheet) = &src.sheet {
-                            pairs.push(("sheet", Json::str(sheet.clone())));
+                            pairs.push((if src.format.is_database() { "table" } else { "sheet" }, Json::str(sheet.clone())));
+                        }
+                        if let Some(q) = &src.query {
+                            pairs.push(("query", Json::str(q.clone())));
                         }
                         Json::obj(pairs)
                     })
@@ -542,7 +556,8 @@ pub fn analysis_from_json(j: &Json) -> Result<Analysis, Error> {
                     id: s.req_str("id")?.to_string(),
                     path: s.req_str("path")?.to_string(),
                     format,
-                    sheet: s.get("sheet").and_then(Json::as_str).map(str::to_string),
+                    sheet: s.get("sheet").or_else(|| s.get("table")).and_then(Json::as_str).map(str::to_string),
+                    query: s.get("query").and_then(Json::as_str).map(str::to_string),
                 })
             })
             .collect::<Result<_, Error>>()?
