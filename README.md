@@ -3,12 +3,14 @@
 An integrated workspace for exploring, transforming, analyzing and visualizing data through visual controls, SQL/Python code, and notebooks, without losing the thread of the analysis.
 
 - Product briefs (v0.2.0): [docs/briefs/](docs/briefs/)
-- Decisions: [ADR-0001 deployment model](docs/adr/0001-deployment-model.md), [ADR-0002 build cache](docs/adr/0002-build-cache.md)
+- Decisions: [ADR-0001 deployment model](docs/adr/0001-deployment-model.md), [ADR-0002 build cache](docs/adr/0002-build-cache.md), [ADR-0003 desktop frontend](docs/adr/0003-frontend.md)
 - Current state of the first engineering slice: [STATUS.md](STATUS.md)
 
 ## Layout
 
 ```
+apps/desktop/             desktop app: Svelte 5 UI (src/), Tauri 2 shell (src-tauri/), end-to-end test (e2e/)
+crates/vda-app/           commands the UI calls, as plain Rust functions with serde types
 crates/vda-core/          Rust core: model, compiler, planner, sessions, DuckDB engine, Python runner
   src/                    see STATUS.md for a module map
   tests/acceptance.rs     the 7-step shared acceptance scenario, saved results, reopen (DuckDB engine)
@@ -22,7 +24,25 @@ docs/adr/                 architecture decision records
 .github/workflows/ci.yml  CI with build caching (ADR-0002)
 ```
 
-## Run it
+## The desktop app
+
+![The workspace after editing a filter: everything downstream is marked outdated](docs/screenshots/4-outdated.png)
+
+One window: the pipeline on the left (each step's state as a coloured bar, hatched when outdated), the selected step's editor on top, and its result below, paged from disk. Visual steps have forms; SQL and Python steps are code with their input and output stated. The Notebook tab arranges text and step results for reading. More screenshots in [docs/screenshots](docs/screenshots).
+
+Linux needs WebKitGTK (`libwebkit2gtk-4.1-dev` and the other [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)); macOS and Windows need nothing extra.
+
+```sh
+cd apps/desktop
+npm install
+npm run tauri dev                  # the app, with hot reload
+npm run dev                        # the UI alone in a browser, against an in-memory mock (?demo=1 seeds an analysis)
+npm run check && npm test          # types and unit tests
+```
+
+Open a project at startup with `vda-desktop --open <folder>`. The end-to-end test drives the real app through WebDriver: see `apps/desktop/e2e/` and the `desktop` CI job.
+
+## Run the core
 
 Requirements: stable Rust (built with 1.97), a C++ compiler, and Python 3 with pandas and pyarrow. The tests use `python3`, or whatever `VDA_PYTHON` names.
 

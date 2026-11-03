@@ -1,7 +1,7 @@
 <script lang="ts">
   import { untrack } from "svelte";
   import type { Cell, Column, Page } from "../api/types";
-  import { formatCell, formatCount, isNumericType, typeLabel } from "../format";
+  import { exactCell, formatCell, formatCount, isNumericType, typeLabel } from "../format";
 
   let {
     fetchPage,
@@ -132,7 +132,7 @@
                   role="cell"
                   class:right={cell.t === "int" || cell.t === "float"}
                   class:missing={cell.t === "null"}
-                  title={cell.t === "null" ? "Missing" : formatCell(cell)}
+                  title={cell.t === "null" ? "Missing" : exactCell(cell)}
                 >
                   {cell.t === "null" ? "missing" : formatCell(cell)}
                 </span>

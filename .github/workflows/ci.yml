@@ -49,14 +49,74 @@ jobs:
       - name: Install Python step dependencies
         run: python -m pip install pandas pyarrow
 
+      # The desktop crate needs WebKitGTK; it is built and tested in the
+      # desktop job below.
       - name: Test
         env:
           VDA_PYTHON: python
-        run: cargo test --locked
+        run: cargo test --locked -p vda-core -p vda-app
 
       - name: Clippy
-        run: cargo clippy --locked --all-targets -- -D warnings
+        run: cargo clippy --locked -p vda-core -p vda-app --all-targets -- -D warnings
 
       - name: sccache stats
         if: always()
         run: sccache --show-stats
+
+  desktop:
+    name: desktop app (Linux, end to end)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install WebKitGTK, WebDriver and a virtual display
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
+            libayatana-appindicator3-dev librsvg2-dev webkit2gtk-driver xvfb
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: mozilla-actions/sccache-action@v0.0.11
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install pandas pyarrow
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Frontend checks, tests and build
+        working-directory: apps/desktop
+        run: |
+          npm ci
+          npm run check
+          npm test
+          npm run build
+
+      - name: Build the app with the frontend embedded
+        run: cargo build --locked -p vda-desktop --features custom-protocol
+
+      - name: Clippy (desktop)
+        run: cargo clippy --locked -p vda-desktop --all-targets -- -D warnings
+
+      - name: End-to-end scenario
+        env:
+          VDA_PYTHON: python
+        run: |
+          cargo install tauri-driver --locked
+          apps/desktop/e2e/prepare.sh "$RUNNER_TEMP/e2e-project"
+          xvfb-run -a -s "-screen 0 1440x900x24" \
+            python apps/desktop/e2e/run_e2e.py "$PWD/target/debug/vda-desktop" "$RUNNER_TEMP/e2e-project" e2e-screenshots
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-screenshots
+          path: e2e-screenshots

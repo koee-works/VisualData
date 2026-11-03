@@ -43,6 +43,12 @@ crates/vda-core/      unchanged
 - UI: Vitest with the mock backend for component logic; `svelte-check` for types.
 - End to end: the real Tauri app is launched under Xvfb in CI-like conditions and screenshotted through the mixed workflow.
 
+## Notes from the first slice
+
+- **shadcn-svelte's registry was unreachable** from the build environment, so the components in `src/lib/components` are built directly on **bits-ui** (the accessible primitives shadcn-svelte wraps) with Tailwind. They follow shadcn-svelte's conventions, so registry components can replace them one at a time.
+- **Charts use `vega-interpreter`** so the content security policy can forbid `eval`.
+- **While a run is in progress, other commands wait** for it to finish (one project, one lock). The UI does not issue data requests during a run. Reading results during a run needs a read-only connection per request; revisit if runs grow long.
+
 ## Options not chosen
 
 - **React**: named in the briefs, but nothing in the product depends on its ecosystem, and it would split conventions across the portfolio's Tauri apps.

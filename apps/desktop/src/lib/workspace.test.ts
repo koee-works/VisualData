@@ -1,0 +1,104 @@
+import { describe, expect, it } from "vitest";
+import { flushSync } from "svelte";
+import { MockBackend } from "./api/mock";
+import { Workspace } from "./workspace.svelte";
+import type { StepOp } from "./api/types";
+
+const filter: StepOp = {
+  type: "filter",
+  predicates: [{ column: "region", op: "IS NOT NULL", value: null }],
+};
+const aggregate: StepOp = {
+  type: "aggregate",
+  group_by: ["region"],
+  measures: [{ func: "COUNT", column: null, alias: "orders" }],
+};
+
+async function workspace() {
+  const ws = new Workspace(new MockBackend());
+  await ws.open("/projects/x");
+  return ws;
+}
+
+describe("Workspace", () => {
+  it("adds steps reading the selected node and selects the new step", async () => {
+    const ws = await workspace();
+    const f = await ws.addStep(filter);
+    expect(f?.id).toBe("filter_1");
+    expect(ws.selected).toBe("filter_1");
+    const a = await ws.addStep(aggregate);
+    expect(a?.input).toBe("filter_1");
+    flushSync();
+    expect(ws.ordered.map((s) => s.id)).toEqual(["filter_1", "aggregate_1"]);
+    expect(ws.depth["aggregate_1"]).toBe(2);
+  });
+
+  it("runs with per-step progress, then marks downstream results outdated after an edit", async () => {
+    const ws = await workspace();
+    await ws.addStep(filter);
+    await ws.addStep(aggregate);
+    const seen: string[] = [];
+    const run = ws.run();
+    expect(ws.running).toBe(true);
+    await run;
+    for (const id of Object.keys(ws.progress)) seen.push(id);
+    expect(seen).toEqual(["filter_1", "aggregate_1"]);
+    expect(ws.running).toBe(false);
+    expect(ws.view!.steps.map((s) => s.state)).toEqual(["fresh", "fresh"]);
+
+    await ws.saveStep("filter_1", "Only East", {
+      type: "filter",
+      predicates: [{ column: "region", op: "=", value: "East" }],
+    });
+    expect(ws.view!.steps.map((s) => s.state)).toEqual(["stale", "stale"]);
+    const page = await ws.backend.page("aggregate_1", 0, 10);
+    expect(page.stale).toBe(true);
+
+    await ws.run();
+    expect(ws.view!.steps.map((s) => s.state)).toEqual(["fresh", "fresh"]);
+    const after = await ws.backend.page("aggregate_1", 0, 10);
+    expect(after.rows).toHaveLength(1);
+  });
+
+  it("reports failures with the action and keeps the analysis", async () => {
+    const ws = await workspace();
+    await ws.addStep(filter);
+    await ws.addStep(aggregate);
+    ws.selected = "filter_1";
+    await ws.removeStep("filter_1");
+    expect(ws.error?.action).toBe("Delete step");
+    expect(ws.error?.message).toContain("aggregate_1");
+    expect(ws.view!.steps).toHaveLength(2);
+
+    ws.selected = "aggregate_1";
+    await ws.addStep({ type: "python", code: "raise ValueError()", timeout_ms: 1000 });
+    await ws.run();
+    const py = ws.view!.steps.find((s) => s.id === "python_1")!;
+    expect(py.state).toBe("failed");
+    expect(py.detail).toContain("ValueError");
+    expect(ws.progress["python_1"]?.status).toBe("failed");
+  });
+
+  it("moves selection to the input when a step is deleted", async () => {
+    const ws = await workspace();
+    await ws.addStep(filter);
+    await ws.addStep(aggregate);
+    await ws.removeStep("aggregate_1");
+    expect(ws.selected).toBe("filter_1");
+    expect(ws.error).toBeNull();
+  });
+
+  it("cancels a run in progress", async () => {
+    const backend = new MockBackend();
+    backend.stepDelay = 20;
+    const ws = new Workspace(backend);
+    await ws.open("/p");
+    await ws.addStep(filter);
+    await ws.addStep(aggregate);
+    const run = ws.run();
+    await ws.cancel();
+    await run;
+    expect(Object.values(ws.progress).every((e) => e.status === "skipped")).toBe(true);
+    expect(ws.view!.steps.every((s) => s.state === "not run")).toBe(true);
+  });
+});

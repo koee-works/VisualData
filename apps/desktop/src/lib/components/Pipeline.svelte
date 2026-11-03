@@ -114,9 +114,11 @@
               {:else if s.state === "blocked"}
                 Waiting on a failed step
               {:else if s.rows !== null && s.mode !== "chart"}
-                {formatCount(s.rows)} rows{s.state === "stale" ? ", outdated" : ""}{ev?.cached === false
-                  ? `, ${ev.duration_ms} ms`
-                  : ""}
+                {formatCount(s.rows)} rows{s.state === "stale"
+                  ? ", outdated"
+                  : ev?.cached === false
+                    ? `, ${ev.duration_ms} ms`
+                    : ""}
               {:else if s.state === "stale"}
                 Outdated
               {:else if s.mode === "chart" && s.state === "fresh"}

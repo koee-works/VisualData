@@ -16,7 +16,7 @@ From the "Shared team acceptance" section of the v0.2.0 briefs. Tests: `crates/v
 | 6 | Change an upstream step; downstream stale until rerun | Done | `step6_…`, `undoing_an_edit_reuses_the_earlier_saved_results` |
 | 7 | Controlled failure: diagnose, cancel or correct, recover | Done | `step7_…` (2 tests), `unreadable_saved_result_is_recomputed` |
 
-All 59 tests pass (`cargo test`). The demo writes a complete project folder: `cargo run -p vda-core --example slice -- <dir>`.
+All 63 Rust tests pass (`cargo test --workspace`), plus 11 frontend unit tests and the desktop end-to-end scenario (below). The demo writes a complete project folder: `cargo run -p vda-core --example slice -- <dir>`.
 
 ## What exists
 
@@ -44,6 +44,25 @@ All 59 tests pass (`cargo test`). The demo writes a complete project folder: `ca
 - integer SUM overflow is an error in both, never a silent wrap; SUM of a date is rejected before execution;
 - validation errors are worded identically on both;
 - the combined SQL shown to users, run as one query in DuckDB, returns exactly what the steps return one by one.
+
+## Desktop app
+
+Svelte 5 in Tauri 2 ([ADR-0003](docs/adr/0003-frontend.md)), built and run on Linux (WebKitGTK 2.52).
+
+| Part | State |
+|---|---|
+| Command layer (`crates/vda-app`) | Every UI action as a plain Rust function with serde types; 4 tests drive a full workflow without a window |
+| Tauri shell | Commands, runs on a worker thread with per-step progress events, cancel, open dialogs, `--open <dir>`; strict content security policy (no eval) |
+| Pipeline | Tree of steps with state bars (current, outdated hatched, failed, blocked, running), row counts, run times; add steps of each kind from the selected node |
+| Step editors | Visual filter (typed values with inline errors), group and summarize, chart; SQL and Python with their input/output contract; save with Ctrl/Cmd+S; delete blocked while other steps depend on it |
+| Results | Virtualized grid fetching 200-row pages as you scroll (scaled scrolling for tens of millions of rows); column types; inspectable SQL; charts via Vega-Lite; outdated banner with "Run now" |
+| Source | Column profile (types, missing values, distinct counts, ranges) and data |
+| Notebook | Markdown and step cells in document order, previews of each result, reordering; text is escaped before rendering |
+| Not yet | Creating projects from the welcome screen is wired but was not exercised end to end (file dialogs cannot be scripted under Xvfb); no undo; no column resizing; keyboard navigation inside the grid |
+
+**End to end** (`apps/desktop/e2e/run_e2e.py`, the real app under Xvfb through tauri-driver): open a project → all steps not run → run → all current → inspect an aggregate's rows and SQL → edit the upstream filter → all four steps outdated, banner shown → rerun from the banner → notebook with text, tables and chart → chart step → Python step. Passes; screenshots in `docs/screenshots/`.
+
+Found and fixed while building it: an effect loop in the grid (reading the page cache while clearing it), Vega cloning Svelte's reactive proxies, charts widening the window, and long decimals (now six places on screen, full value on hover).
 
 ## Large-data baseline
 
@@ -101,7 +120,9 @@ Before this change, results were in-memory tables. The regional-revenue sample w
 | **SQL file access** | Custom SQL can read any file the user can (`read_csv('/any/path')`). Acceptable for the user's own analyses under ADR-0001. | Restrict with DuckDB's `enable_external_access` / allowed paths for untrusted analyses, together with the trust prompt. |
 | **Windows** | Not run. The memory cap is Unix only (`ulimit -v`); CI runs Windows as allowed-to-fail. | Job Object limits, then make the Windows job required. |
 | **Seeds / nondeterminism** | Not recorded. Replay detects divergence but cannot explain it. | Record seeds where users set them; flag known nondeterministic functions. |
-| **Desktop app / UI** | Not started. Frontend framework not chosen (ADR-0001). | ADR-0003 (React vs Svelte 5), then a Tauri shell calling `vda-core`. |
+| **Desktop: macOS and Windows** | Built and tested on Linux only. | Add macOS and Windows to the desktop CI job; produce signed bundles. |
+| **Desktop: reading during a run** | Other commands wait for a run to finish (one lock per project). | Read-only connections per request if long runs need live inspection. |
+| **Desktop: step labels** | A custom step name is kept when the step changes, so it can stop describing the step (e.g. "at least 20" after changing to 100). | Offer to update the name when the definition changes, or show the description alongside. |
 
 ## Known issues
 

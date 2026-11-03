@@ -1,5 +1,10 @@
 import type { Cell, ColumnType, Literal, StepOp, StepView } from "./api/types";
 
+/** A cell's full value, for tooltips. */
+export function exactCell(c: Cell): string {
+  return c.t === "float" ? String(c.v) : formatCell(c);
+}
+
 /** Display a cell the way the core does (whole floats keep one decimal). */
 export function formatCell(c: Cell): string {
   switch (c.t) {
@@ -8,7 +13,10 @@ export function formatCell(c: Cell): string {
     case "bool":
       return c.v ? "true" : "false";
     case "float":
-      return Number.isInteger(c.v) && Math.abs(c.v) < 1e15 ? c.v.toFixed(1) : String(c.v);
+      if (Number.isInteger(c.v) && Math.abs(c.v) < 1e15) return c.v.toFixed(1);
+      // At most six decimals on screen; the exact value is in the cell's title.
+      if (Math.abs(c.v) >= 1e-6 && Math.abs(c.v) < 1e15) return String(Number(c.v.toFixed(6)));
+      return String(c.v);
     default:
       return c.v;
   }
