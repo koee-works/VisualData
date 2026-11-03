@@ -5,14 +5,17 @@
 use std::path::{Path, PathBuf};
 use vda_core::duck::DuckDbEngine;
 use vda_core::engine::{Engine, ReferenceEngine};
-use vda_core::model::{AggFunc, CmpOp, Measure, Predicate, Step, StepKind, SOURCE_ID};
+use vda_core::model::{AggFunc, CmpOp, JoinKey, JoinKind, Measure, Predicate, Step, StepKind, SOURCE_ID};
 use vda_core::table::{Table, Value};
 
 /// The engines exchange Parquet datasets; these tests compare small results,
 /// so they adapt that interface to in-memory tables.
 trait TableIo {
     fn import_table(&mut self, src: &Path) -> Result<Table, vda_core::Error>;
-    fn run_table(&mut self, step: &Step, input: &Table) -> Result<Table, vda_core::Error>;
+    fn run_tables(&mut self, step: &Step, inputs: &[&Table]) -> Result<Table, vda_core::Error>;
+    fn run_table(&mut self, step: &Step, input: &Table) -> Result<Table, vda_core::Error> {
+        self.run_tables(step, &[input])
+    }
 }
 
 fn scratch(name: &str) -> PathBuf {
@@ -29,11 +32,14 @@ impl<E: Engine> TableIo for E {
         let ds = self.import_csv(src, &out)?;
         vda_core::duck::read_parquet(&ds.path)
     }
-    fn run_table(&mut self, step: &Step, input: &Table) -> Result<Table, vda_core::Error> {
-        let (raw, inp, out) = (scratch("raw"), scratch("in"), scratch("out"));
-        vda_core::duck::write_parquet(input, &raw)?;
-        let ds_in = self.adopt_parquet(&raw, &inp)?;
-        let ds = self.run_step(step, &ds_in, &out)?;
+    fn run_tables(&mut self, step: &Step, inputs: &[&Table]) -> Result<Table, vda_core::Error> {
+        let mut datasets = Vec::new();
+        for t in inputs {
+            let (raw, inp) = (scratch("raw"), scratch("in"));
+            vda_core::duck::write_parquet(t, &raw)?;
+            datasets.push(self.adopt_parquet(&raw, &inp)?);
+        }
+        let ds = self.run_step(step, &datasets, &scratch("out"))?;
         vda_core::duck::read_parquet(&ds.path)
     }
 }
@@ -136,7 +142,7 @@ fn run_both(source: &Path, case: &str, kind: StepKind) {
     let r_src = reference.import_table(source).unwrap();
     let d_src = duck.import_table(source).unwrap();
     assert_same(&format!("{case} (import)"), &r_src, &d_src);
-    let step = Step { id: "s".into(), input: SOURCE_ID.into(), label: None, kind };
+    let step = Step { id: "s".into(), inputs: vec![SOURCE_ID.into()], label: None, kind };
     let r = reference.run_table(&step, &r_src).unwrap_or_else(|e| panic!("{case}: reference: {e}"));
     let d = duck.run_table(&step, &d_src).unwrap_or_else(|e| panic!("{case}: duckdb: {e}"));
     assert_same(case, &r, &d);
@@ -184,7 +190,7 @@ fn integer_sum_overflow_is_an_error_in_both() {
     let src = write("big.csv", "k,n\na,9223372036854775000\na,1000\n");
     let step = Step {
         id: "s".into(),
-        input: SOURCE_ID.into(),
+        inputs: vec![SOURCE_ID.into()],
         label: None,
         kind: StepKind::Aggregate { group_by: vec!["k".into()], measures: vec![m(AggFunc::Sum, Some("n"), "total")] },
     };
@@ -201,7 +207,7 @@ fn validation_messages_match() {
     let src = write("edge.csv", EDGE_CSV);
     let step = Step {
         id: "s".into(),
-        input: SOURCE_ID.into(),
+        inputs: vec![SOURCE_ID.into()],
         label: None,
         kind: StepKind::Filter { predicates: vec![pred("missing", CmpOp::Eq, Value::Int(1))] },
     };
@@ -222,7 +228,7 @@ fn inspectable_sql_executes_to_the_same_result() {
     a.cells.clear();
     a.steps.push(Step {
         id: "ranked".into(),
-        input: "by_region".into(),
+        inputs: vec!["by_region".into()],
         label: None,
         kind: StepKind::Sql {
             sql: "WITH r AS (SELECT region, revenue, rank() OVER (ORDER BY revenue DESC) AS pos FROM input)\nSELECT * FROM r ORDER BY pos DESC".into(),
@@ -309,7 +315,7 @@ fn sum_of_dates_is_rejected_before_execution() {
     let src = write("dates.csv", DATES_CSV);
     let step = Step {
         id: "s".into(),
-        input: SOURCE_ID.into(),
+        inputs: vec![SOURCE_ID.into()],
         label: None,
         kind: StepKind::Aggregate { group_by: vec![], measures: vec![m(AggFunc::Sum, Some("d"), "x")] },
     };
@@ -317,4 +323,142 @@ fn sum_of_dates_is_rejected_before_execution() {
     let t = duck.import_table(&src).unwrap();
     let err = duck.run_table(&step, &t).unwrap_err().to_string();
     assert!(err.contains("needs a numeric column") && err.contains("DATE"), "{err}");
+}
+
+// ---------------------------------------------------------------- joins
+
+const ORDERS_CSV: &str = "\
+order_id,cust,region,amount
+1,10,East,5.5
+2,11,West,7
+3,10,East,
+4,,North,2
+5,12,East,1
+6,99,South,3
+";
+
+/// `id` is decimal on purpose (joined with an integer column); `region`
+/// clashes with the left side; customer 10 appears twice.
+const CUSTOMERS_CSV: &str = "\
+id,name,region,tier
+10.0,Ada,East,gold
+10.0,Ada (old),East,
+11.0,Bo,West,silver
+13.0,Cy,North,gold
+,Nobody,,
+";
+
+fn join(how: JoinKind, on: &[(&str, &str)]) -> StepKind {
+    StepKind::Join { how, on: on.iter().map(|(l, r)| JoinKey { left: (*l).into(), right: (*r).into() }).collect() }
+}
+
+fn join_both(case: &str, left_csv: &str, right_csv: &str, kind: StepKind) -> Table {
+    let (l, r) = (write(&format!("{case}-l.csv"), left_csv), write(&format!("{case}-r.csv"), right_csv));
+    let mut reference = ReferenceEngine::new();
+    let mut duck = DuckDbEngine::new().unwrap();
+    let (rl, rr) = (reference.import_table(&l).unwrap(), reference.import_table(&r).unwrap());
+    let (dl, dr) = (duck.import_table(&l).unwrap(), duck.import_table(&r).unwrap());
+    let step = Step { id: "j".into(), inputs: vec!["orders".into(), "customers".into()], label: None, kind };
+    let a = reference.run_tables(&step, &[&rl, &rr]).unwrap_or_else(|e| panic!("{case}: reference: {e}"));
+    let b = duck.run_tables(&step, &[&dl, &dr]).unwrap_or_else(|e| panic!("{case}: duckdb: {e}"));
+    assert_same(case, &a, &b);
+    a
+}
+
+#[test]
+fn joins_agree() {
+    use JoinKind::*;
+    let inner = join_both("inner", ORDERS_CSV, CUSTOMERS_CSV, join(Inner, &[("cust", "id")]));
+    // Customer 10 matches twice; NULL keys never match; 12 and 99 have no customer.
+    let ids: Vec<String> = inner.rows.iter().map(|r| r[0].to_string()).collect();
+    assert_eq!(ids, ["1", "1", "2", "3", "3"]);
+    let names: Vec<&str> = inner.schema.fields.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["order_id", "cust", "region", "amount", "name", "region_customers", "tier"]);
+
+    let left = join_both("left", ORDERS_CSV, CUSTOMERS_CSV, join(Left, &[("cust", "id")]));
+    assert_eq!(left.rows.len(), 8, "every order, twice for customer 10");
+    assert_eq!(left.rows[5][4], Value::Null, "order 4 has no customer");
+
+    let full = join_both("full", ORDERS_CSV, CUSTOMERS_CSV, join(Full, &[("cust", "id")]));
+    assert_eq!(full.rows.len(), 10, "8 left rows, then Cy and Nobody");
+    // The key is filled from the right side, as a decimal (integer joined with decimal).
+    assert_eq!(full.rows[8][1], Value::Float(13.0));
+    assert_eq!(full.rows[9][1], Value::Null);
+
+    join_both("two keys", ORDERS_CSV, CUSTOMERS_CSV, join(Inner, &[("cust", "id"), ("region", "region")]));
+    let none = join_both("no matches", ORDERS_CSV, "id,name\n500,X\n", join(Inner, &[("cust", "id")]));
+    assert!(none.rows.is_empty());
+    let none = join_both("no matches, full", ORDERS_CSV, "id,name\n500,X\n", join(Full, &[("cust", "id")]));
+    assert_eq!(none.rows.len(), 7);
+}
+
+#[test]
+fn join_validation_messages_match() {
+    let (l, r) = (write("v-l.csv", ORDERS_CSV), write("v-r.csv", CUSTOMERS_CSV));
+    for (kind, expect) in [
+        (join(JoinKind::Inner, &[("region", "id")]), "cannot join VARCHAR column `region` with DOUBLE column `id`"),
+        (join(JoinKind::Inner, &[("cust", "nope")]), "column `nope` not found"),
+        (join(JoinKind::Inner, &[]), "at least one pair"),
+    ] {
+        let step = Step { id: "j".into(), inputs: vec!["orders".into(), "customers".into()], label: None, kind };
+        let mut reference = ReferenceEngine::new();
+        let (rl, rr) = (reference.import_table(&l).unwrap(), reference.import_table(&r).unwrap());
+        let a = reference.run_tables(&step, &[&rl, &rr]).unwrap_err().to_string();
+        let mut duck = DuckDbEngine::new().unwrap();
+        let (dl, dr) = (duck.import_table(&l).unwrap(), duck.import_table(&r).unwrap());
+        let b = duck.run_tables(&step, &[&dl, &dr]).unwrap_err().to_string();
+        assert_eq!(a, b);
+        assert!(a.contains(expect), "{a}");
+    }
+}
+
+/// The inspectable SQL of a join, and of steps after it, executes to the
+/// same result as running the steps one by one.
+#[test]
+fn inspectable_sql_with_a_join_executes_to_the_same_result() {
+    use vda_core::model::{Analysis, Source};
+    let (l, r) = (write("p-orders.csv", ORDERS_CSV), write("p-customers.csv", CUSTOMERS_CSV));
+    let a = Analysis {
+        name: "join".into(),
+        sources: vec![
+            Source { id: "orders".into(), path: l.to_string_lossy().into() },
+            Source { id: "customers".into(), path: r.to_string_lossy().into() },
+        ],
+        steps: vec![
+            Step {
+                id: "gold".into(),
+                inputs: vec!["customers".into()],
+                label: None,
+                kind: StepKind::Filter { predicates: vec![pred("tier", CmpOp::Eq, Value::Text("gold".into()))] },
+            },
+            Step { id: "j".into(), inputs: vec!["orders".into(), "gold".into()], label: None, kind: join(JoinKind::Left, &[("cust", "id")]) },
+            Step {
+                id: "per_name".into(),
+                inputs: vec!["j".into(), "customers".into()],
+                label: None,
+                kind: StepKind::Sql {
+                    sql: "SELECT j.name, COUNT(*) AS n, (SELECT COUNT(*) FROM customers) AS all_customers \
+                          FROM input AS j GROUP BY j.name ORDER BY j.name NULLS LAST"
+                        .into(),
+                },
+            },
+        ],
+        cells: vec![],
+    };
+    let mut duck = DuckDbEngine::new().unwrap();
+    let mut tables = std::collections::HashMap::new();
+    tables.insert("orders".to_string(), duck.import_table(&l).unwrap());
+    tables.insert("customers".to_string(), duck.import_table(&r).unwrap());
+    for step in &a.steps {
+        let inputs: Vec<&Table> = step.inputs.iter().map(|i| &tables[i]).collect();
+        let t = duck.run_tables(step, &inputs).unwrap_or_else(|e| panic!("{}: {e}", step.id));
+        tables.insert(step.id.clone(), t);
+        let combined = vda_core::compile::pipeline_sql_with(&a, &step.id, &|id| tables.get(id).map(|t| t.schema.clone()))
+            .unwrap();
+        let direct = DuckDbEngine::new().unwrap().query(&combined).unwrap_or_else(|e| panic!("{e}\n{combined}"));
+        assert_same(&format!("pipeline for {}", step.id), &tables[&step.id], &direct);
+    }
+    assert_eq!(tables["per_name"].rows[0][2], Value::Int(5), "SQL reads a second input by its id");
+    // Without the inputs' columns a join has no SQL form yet.
+    assert!(vda_core::compile::pipeline_sql(&a, "j").is_err());
 }

@@ -40,26 +40,25 @@ fn mixed_workflow_through_commands() {
     let dir = fresh_dir("workflow");
     let mut app = test_app();
     let view = app.create_project(&dir, &sample(), "Regional revenue").unwrap();
-    assert_eq!(view.source.rows, 60);
+    assert_eq!(view.sources[0].rows, 60);
     assert!(dir.join("sales.csv").exists(), "the CSV is copied into the project");
 
-    let profile = app.source_profile().unwrap();
+    let profile = app.source_profile("source").unwrap();
     let region = profile.iter().find(|p| p.name == "region").unwrap();
     assert_eq!((region.dtype.as_str(), region.missing), ("VARCHAR", 2));
 
-    app.add_step("source", Some("Valid orders".into()), &filter_op(20)).unwrap();
-    app.add_step("filter_1", None, &aggregate_op()).unwrap();
-    app.add_step(
-        "aggregate_1",
+    app.add_step(&["source".to_string()], Some("Valid orders".into()), &filter_op(20)).unwrap();
+    app.add_step(&["filter_1".to_string()], None, &aggregate_op()).unwrap();
+    app.add_step(&["aggregate_1".to_string()],
         None,
         &json!({"type": "python", "timeout_ms": 30000,
                 "code": "result = df.assign(share=df['revenue'] / df['revenue'].sum())"}),
     )
     .unwrap();
-    app.add_step("python_1", None, &json!({"type": "chart", "mark": "bar", "x": "region", "y": "share", "title": null}))
+    app.add_step(&["python_1".to_string()], None, &json!({"type": "chart", "mark": "bar", "x": "region", "y": "share", "title": null}))
         .unwrap();
     let view = app
-        .add_step("filter_1", None, &json!({"type": "sql", "sql": "SELECT region, max(revenue) AS biggest FROM input GROUP BY region ORDER BY biggest DESC"}))
+        .add_step(&["filter_1".to_string()], None, &json!({"type": "sql", "sql": "SELECT region, max(revenue) AS biggest FROM input GROUP BY region ORDER BY biggest DESC"}))
         .unwrap();
     let ids: Vec<&str> = view.steps.iter().map(|s| s.id.as_str()).collect();
     assert_eq!(ids, ["filter_1", "aggregate_1", "python_1", "chart_1", "sql_1"]);
@@ -85,7 +84,7 @@ fn mixed_workflow_through_commands() {
     assert_eq!(page.columns[1].name, "orders");
     assert_eq!(page.rows[0][0], Cell::Text("East".into()));
     assert_eq!(page.rows[0][1], Cell::Int("19".into()));
-    let src = app.source_page(0, 3).unwrap();
+    let src = app.source_page("source", 0, 3).unwrap();
     assert_eq!((src.rows.len(), src.total_rows), (3, 60));
     assert!(matches!(src.rows[0][1], Cell::Date(ref d) if d == "2026-07-03"));
     assert!(app.page("filter_1", 0, 1_000_000).unwrap().rows.len() <= vda_app::MAX_PAGE_ROWS as usize);
@@ -94,7 +93,7 @@ fn mixed_workflow_through_commands() {
     assert_eq!(spec["mark"]["type"], "bar");
 
     // Editing the filter makes everything downstream stale, and pages say so.
-    app.update_step("filter_1", Some("Valid orders".into()), &filter_op(100)).unwrap();
+    app.update_step("filter_1", Some("Valid orders".into()), &filter_op(100), None).unwrap();
     let view = app.view().unwrap();
     assert!(view.steps.iter().all(|s| s.state == "stale"));
     assert!(app.page("aggregate_1", 0, 10).unwrap().stale);
@@ -113,21 +112,21 @@ fn invalid_edits_are_rejected_with_a_reason() {
     app.create_project(&dir, &sample(), "x").unwrap();
 
     let bad_column = json!({"type": "filter", "predicates": [{"column": "regoin", "op": "=", "value": "East"}]});
-    let err = app.add_step("source", None, &bad_column).unwrap_err().message;
+    let err = app.add_step(&["source".to_string()], None, &bad_column).unwrap_err().message;
     assert!(err.contains("regoin") && err.contains("available"), "{err}");
 
-    let err = app.add_step("nope", None, &aggregate_op()).unwrap_err().message;
+    let err = app.add_step(&["nope".to_string()], None, &aggregate_op()).unwrap_err().message;
     assert!(err.contains("unknown step"), "{err}");
 
-    app.add_step("source", None, &filter_op(20)).unwrap();
-    app.add_step("filter_1", None, &aggregate_op()).unwrap();
+    app.add_step(&["source".to_string()], None, &filter_op(20)).unwrap();
+    app.add_step(&["filter_1".to_string()], None, &aggregate_op()).unwrap();
     let err = app.remove_step("filter_1").unwrap_err().message;
     assert!(err.contains("aggregate_1"), "{err}");
 
-    let err = app.update_step("filter_1", None, &json!({"type": "sql", "sql": "SELECT 1"})).unwrap_err().message;
+    let err = app.update_step("filter_1", None, &json!({"type": "sql", "sql": "SELECT 1"}), None).unwrap_err().message;
     assert!(err.contains("cannot change"), "{err}");
 
-    let err = app.add_step("source", None, &json!({"type": "frobnicate"})).unwrap_err().message;
+    let err = app.add_step(&["source".to_string()], None, &json!({"type": "frobnicate"})).unwrap_err().message;
     assert!(err.contains("unknown step type"), "{err}");
 
     // Nothing invalid was saved.
@@ -142,7 +141,7 @@ fn notebook_cells_can_be_edited() {
     let dir = fresh_dir("cells");
     let mut app = test_app();
     app.create_project(&dir, &sample(), "x").unwrap();
-    app.add_step("source", None, &filter_op(20)).unwrap();
+    app.add_step(&["source".to_string()], None, &filter_op(20)).unwrap();
     let view = app
         .set_cells(&json!([
             {"type": "markdown", "text": "## Question\nWhich regions matter?"},

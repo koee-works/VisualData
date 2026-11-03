@@ -11,12 +11,17 @@ export interface Backend {
   createProject(dir: string, csv: string, name: string): Promise<AnalysisView>;
   openProject(dir: string): Promise<AnalysisView>;
   view(): Promise<AnalysisView>;
-  sourceProfile(): Promise<ProfileRow[]>;
-  sourcePage(offset: number, limit: number): Promise<Page>;
+  sourceProfile(sourceId: string): Promise<ProfileRow[]>;
+  sourcePage(sourceId: string, offset: number, limit: number): Promise<Page>;
+  /** Copy a CSV into the project as another source. */
+  addSource(csv: string): Promise<AnalysisView>;
+  removeSource(id: string): Promise<AnalysisView>;
   page(stepId: string, offset: number, limit: number): Promise<Page>;
   chart(stepId: string): Promise<unknown>;
-  addStep(input: string, label: string | null, op: StepOp): Promise<AnalysisView>;
-  updateStep(id: string, label: string | null, op: StepOp): Promise<AnalysisView>;
+  /** `inputs[0]` is the main input. */
+  addStep(inputs: string[], label: string | null, op: StepOp): Promise<AnalysisView>;
+  /** `inputs` replaces the step's inputs when given. */
+  updateStep(id: string, label: string | null, op: StepOp, inputs?: string[]): Promise<AnalysisView>;
   removeStep(id: string): Promise<AnalysisView>;
   setCells(cells: NotebookCell[]): Promise<AnalysisView>;
   rename(name: string): Promise<AnalysisView>;

@@ -10,23 +10,83 @@
 //! - SUM/AVG/MIN/MAX skip NULLs and return NULL when nothing is left.
 //! - NULL group keys form their own group, sorted last.
 //! - SUM over integers stays integer (overflow is an error, not a wrap).
+//! - Join keys match when every pair compares equal; NULL never matches.
+//!   Output keeps left rows in order, each followed by its matches in right
+//!   order, then (full join) unmatched right rows in order.
 
 use crate::compile::output_schema;
-use crate::model::{AggFunc, CmpOp, Measure, Predicate, Step, StepKind};
-use crate::table::{Table, Value};
+use crate::model::{AggFunc, CmpOp, JoinKey, JoinKind, Measure, Predicate, Step, StepKind};
+use crate::table::{DataType, Schema, Table, Value};
 use crate::Error;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
-pub fn eval_step(step: &Step, input: &Table) -> Result<Table, Error> {
-    let schema = output_schema(step, &input.schema)?
+/// Evaluate a visual table step on its inputs (in input order).
+pub fn eval_step(step: &Step, inputs: &[Table]) -> Result<Table, Error> {
+    let schemas: Vec<Schema> = inputs.iter().map(|t| t.schema.clone()).collect();
+    let schema = output_schema(step, &schemas)?
         .ok_or_else(|| Error::Unsupported(format!("step `{}` is not a visual table step", step.id)))?;
+    let input = &inputs[0];
     let rows = match &step.kind {
         StepKind::Filter { predicates } => filter(input, predicates),
         StepKind::Aggregate { group_by, measures } => aggregate(input, group_by, measures)?,
+        StepKind::Join { how, on } => join(*how, on, &inputs[0], &inputs[1], &schema),
         _ => unreachable!("output_schema returned Some for a non-table step"),
     };
     Ok(Table { schema, rows })
+}
+
+fn join(how: JoinKind, on: &[JoinKey], left: &Table, right: &Table, out: &Schema) -> Vec<Vec<Value>> {
+    let lk: Vec<usize> = on.iter().map(|k| left.schema.index_of(&k.left).unwrap()).collect();
+    let rk: Vec<usize> = on.iter().map(|k| right.schema.index_of(&k.right).unwrap()).collect();
+    let right_keep: Vec<usize> = (0..right.schema.fields.len()).filter(|i| !rk.contains(i)).collect();
+    let matches = |l: &[Value], r: &[Value]| {
+        lk.iter().zip(&rk).all(|(&a, &b)| l[a].sql_cmp(&r[b]) == Some(Ordering::Equal))
+    };
+    // Typed as the output column: a full join widens mixed integer/decimal keys.
+    let fit = |v: Value, col: usize| match (out.fields[col].dtype, v) {
+        (DataType::Float, Value::Int(i)) => Value::Float(i as f64),
+        (_, v) => v,
+    };
+    let row_of = |l: Option<&Vec<Value>>, r: Option<&Vec<Value>>| -> Vec<Value> {
+        let mut row = Vec::with_capacity(out.fields.len());
+        for i in 0..left.schema.fields.len() {
+            let mut v = l.map(|l| l[i].clone()).unwrap_or(Value::Null);
+            if how == JoinKind::Full && v.is_null() {
+                if let (Some(k), Some(r)) = (lk.iter().position(|&x| x == i), r) {
+                    v = r[rk[k]].clone();
+                }
+            }
+            row.push(fit(v, i));
+        }
+        for &j in &right_keep {
+            row.push(r.map(|r| r[j].clone()).unwrap_or(Value::Null));
+        }
+        row
+    };
+    let mut rows = Vec::new();
+    let mut right_matched = vec![false; right.rows.len()];
+    for l in &left.rows {
+        let mut any = false;
+        for (j, r) in right.rows.iter().enumerate() {
+            if matches(l, r) {
+                any = true;
+                right_matched[j] = true;
+                rows.push(row_of(Some(l), Some(r)));
+            }
+        }
+        if !any && how != JoinKind::Inner {
+            rows.push(row_of(Some(l), None));
+        }
+    }
+    if how == JoinKind::Full {
+        for (j, r) in right.rows.iter().enumerate() {
+            if !right_matched[j] {
+                rows.push(row_of(None, Some(r)));
+            }
+        }
+    }
+    rows
 }
 
 fn holds(p: &Predicate, v: &Value) -> bool {
@@ -139,7 +199,7 @@ mod tests {
     }
 
     fn step(kind: StepKind) -> Step {
-        Step { id: "s".into(), input: SOURCE_ID.into(), label: None, kind }
+        Step { id: "s".into(), inputs: vec![SOURCE_ID.into()], label: None, kind }
     }
 
     #[test]
@@ -147,12 +207,12 @@ mod tests {
         let s = step(StepKind::Filter {
             predicates: vec![Predicate { column: "amount".into(), op: CmpOp::Gt, value: Value::Int(5) }],
         });
-        let out = eval_step(&s, &data()).unwrap();
+        let out = eval_step(&s, &[data()]).unwrap();
         assert_eq!(out.rows.len(), 2); // 10.5 and 7; NULL amount excluded
         let ne = step(StepKind::Filter {
             predicates: vec![Predicate { column: "region".into(), op: CmpOp::Ne, value: Value::Text("East".into()) }],
         });
-        assert_eq!(eval_step(&ne, &data()).unwrap().rows.len(), 2); // NULL region excluded
+        assert_eq!(eval_step(&ne, &[data()]).unwrap().rows.len(), 2); // NULL region excluded
     }
 
     #[test]
@@ -166,7 +226,7 @@ mod tests {
                 Measure { func: AggFunc::Avg, column: Some("amount".into()), alias: "avg_amount".into() },
             ],
         });
-        let out = eval_step(&s, &data()).unwrap();
+        let out = eval_step(&s, &[data()]).unwrap();
         assert_eq!(
             out.rows,
             vec![
@@ -187,6 +247,6 @@ mod tests {
                 Measure { func: AggFunc::Sum, column: Some("amount".into()), alias: "total".into() },
             ],
         });
-        assert_eq!(eval_step(&s, &empty).unwrap().rows, vec![vec![Value::Int(0), Value::Null]]);
+        assert_eq!(eval_step(&s, std::slice::from_ref(&empty)).unwrap().rows, vec![vec![Value::Int(0), Value::Null]]);
     }
 }

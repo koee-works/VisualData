@@ -1,7 +1,6 @@
 <script lang="ts">
   import { Tabs } from "bits-ui";
   import type { Workspace } from "../workspace.svelte";
-  import { SOURCE_ID } from "../api/types";
   import { errorMessage } from "../api/backend";
   import DataGrid from "./DataGrid.svelte";
   import ProfileTable from "./ProfileTable.svelte";
@@ -10,7 +9,7 @@
   let { ws }: { ws: Workspace } = $props();
 
   let step = $derived(ws.selectedStep);
-  let isSource = $derived(ws.selected === SOURCE_ID);
+  let isSource = $derived(!!ws.selectedSource);
   let isChart = $derived(step?.mode === "chart");
   let hasResult = $derived(isSource || (step !== null && (step.rows !== null || (isChart && step.state !== "not run"))));
   let stale = $derived(!!step && step.state === "stale");
@@ -36,7 +35,7 @@
 
   let fetchPage = $derived(
     isSource
-      ? (o: number, l: number) => ws.backend.sourcePage(o, l)
+      ? (o: number, l: number) => ws.backend.sourcePage(ws.selected, o, l)
       : (o: number, l: number) => ws.backend.page(ws.selected, o, l),
   );
   let resetKey = $derived(`${ws.selected}:${ws.revision}`);

@@ -98,6 +98,11 @@ export function describe(op: StepOp): string {
       const ms = op.measures.map((m) => (m.func === "COUNT" && !m.column ? "count" : `${m.func.toLowerCase()} of ${m.column}`));
       return `${ms.join(", ") || "Groups"}${op.group_by.length ? ` by ${op.group_by.join(", ")}` : ""}`;
     }
+    case "join": {
+      const kind = { inner: "Join", left: "Left join", full: "Full join" }[op.how];
+      const keys = op.on.map((k) => (k.left === k.right ? k.left : `${k.left} = ${k.right}`));
+      return keys.length ? `${kind} on ${keys.join(", ")}` : kind;
+    }
     case "sql":
       return "Custom SQL";
     case "python":

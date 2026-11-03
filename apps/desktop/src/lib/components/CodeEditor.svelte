@@ -2,8 +2,11 @@
   let {
     code = $bindable(),
     language,
-    inputName,
-  }: { code: string; language: "sql" | "python"; inputName: string } = $props();
+    inputs,
+  }: { code: string; language: "sql" | "python"; inputs: { id: string; name: string }[] } = $props();
+
+  let first = $derived(inputs[0]!);
+  let more = $derived(inputs.slice(1));
 
   // Tab inserts spaces instead of leaving the editor; Escape still leaves.
   function onkeydown(e: KeyboardEvent) {
@@ -19,10 +22,13 @@
 <div class="space-y-2">
   <p class="text-sm text-ink-soft">
     {#if language === "sql"}
-      Reads <code class="code">{inputName}</code> as the table <code class="code">input</code>. The query's result is
-      this step's result.
+      Reads {first.name} as the table <code class="code">input</code>{#if more.length}, and
+        {#each more as m, i (m.id)}{#if i > 0}, {/if}{m.name} as <code class="code">{m.id}</code>{/each}{/if}. The query's
+      result is this step's result.
     {:else}
-      Receives <code class="code">{inputName}</code> as the pandas DataFrame <code class="code">df</code>. Assign a
+      Receives {first.name} as the pandas DataFrame <code class="code">df</code>{#if more.length}. Every input is in the
+        dict <code class="code">dfs</code>:
+        {#each inputs as m, i (m.id)}{#if i > 0}, {/if}<code class="code">dfs["{m.id}"]</code>{/each}{/if}. Assign a
       DataFrame to <code class="code">result</code>.
     {/if}
     Custom code is not converted back into visual controls.

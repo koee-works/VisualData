@@ -5,8 +5,9 @@
 //! timeout, cooperative cancellation, and on Unix an address-space limit.
 //! This is lifecycle isolation, NOT a security sandbox.
 //!
-//! Contract with user code: the upstream result is available as `df`
-//! (a pandas DataFrame); the code must assign a DataFrame to `result`.
+//! Contract with user code: the first input is available as `df` and every
+//! input in the dict `dfs` by its id (pandas DataFrames); the code must
+//! assign a DataFrame to `result`.
 //!
 //! Data crosses the boundary as Parquet: the child reads the upstream result
 //! file in place and writes its own. pandas loads the whole input into memory,
@@ -42,14 +43,16 @@ def finish(code, message=None, show_traceback=False):
     os._exit(code)
 
 try:
-    inp, out, code_path = sys.argv[1], sys.argv[2], sys.argv[3]
+    out, code_path = sys.argv[1], sys.argv[2]
+    pairs = sys.argv[3:]
     import pandas as pd
     # Nullable dtypes keep integers with missing values as integers (Int64)
     # instead of silently turning them into floats.
-    df = pd.read_parquet(inp, dtype_backend="numpy_nullable")
+    dfs = {pairs[i]: pd.read_parquet(pairs[i + 1], dtype_backend="numpy_nullable") for i in range(0, len(pairs), 2)}
+    df = dfs[pairs[0]]
     with open(code_path, encoding="utf-8") as f:
         code = f.read()
-    ns = {"df": df, "pd": pd, "__name__": "__vda_step__"}
+    ns = {"df": df, "dfs": dfs, "pd": pd, "__name__": "__vda_step__"}
 except BaseException:
     finish(4, "VDA_SETUP: could not prepare the Python step", show_traceback=True)
 
@@ -112,11 +115,27 @@ impl PythonRunner {
     /// `output`. The input is read in place; nothing is copied. Paths must be
     /// absolute (the child runs in its own working directory).
     pub fn run_files(&self, code: &str, input: &Path, output: &Path, timeout: Duration, cancel: &AtomicBool) -> Result<(), Error> {
+        self.run_inputs(code, &[("input".to_string(), input.to_path_buf())], output, timeout, cancel)
+    }
+
+    /// Run `code` with several Parquet inputs: the first is `df`, and all are
+    /// in `dfs` under their names.
+    pub fn run_inputs(
+        &self,
+        code: &str,
+        inputs: &[(String, PathBuf)],
+        output: &Path,
+        timeout: Duration,
+        cancel: &AtomicBool,
+    ) -> Result<(), Error> {
+        if inputs.is_empty() {
+            return Err(Error::Python("a Python step needs at least one input".into()));
+        }
         let seq = RUN_SEQ.fetch_add(1, Ordering::SeqCst);
         let dir = self.work_root.join(format!("py-{}-{seq}", std::process::id()));
         fs::create_dir_all(&dir)?;
         let dir = fs::canonicalize(&dir)?;
-        let result = self.run_in(&dir, code, input, output, timeout, cancel);
+        let result = self.run_in(&dir, code, inputs, output, timeout, cancel);
         let _ = fs::remove_dir_all(&dir);
         result
     }
@@ -137,7 +156,15 @@ impl PythonRunner {
         result
     }
 
-    fn run_in(&self, dir: &Path, code: &str, inp: &Path, out: &Path, timeout: Duration, cancel: &AtomicBool) -> Result<(), Error> {
+    fn run_in(
+        &self,
+        dir: &Path,
+        code: &str,
+        inputs: &[(String, PathBuf)],
+        out: &Path,
+        timeout: Duration,
+        cancel: &AtomicBool,
+    ) -> Result<(), Error> {
         let (code_path, wrapper, err_path) = (dir.join("step.py"), dir.join("wrapper.py"), dir.join("stderr.txt"));
         fs::write(&code_path, code)?;
         fs::write(&wrapper, WRAPPER)?;
@@ -155,10 +182,11 @@ impl PythonRunner {
             c.arg("-I");
             c
         };
-        cmd.arg(&wrapper)
-            .arg(inp)
-            .arg(out)
-            .arg(&code_path)
+        cmd.arg(&wrapper).arg(out).arg(&code_path);
+        for (name, path) in inputs {
+            cmd.arg(name).arg(path);
+        }
+        cmd
             .current_dir(dir)
             .env_clear()
             .env("PATH", "/usr/local/bin:/usr/bin:/bin")

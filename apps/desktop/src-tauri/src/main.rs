@@ -49,13 +49,23 @@ async fn view(s: State<'_, Shared>) -> Res<AnalysisView> {
 }
 
 #[tauri::command]
-async fn source_profile(s: State<'_, Shared>) -> Res<Vec<ProfileRow>> {
-    with(&s, |a| a.source_profile())
+async fn source_profile(s: State<'_, Shared>, source_id: String) -> Res<Vec<ProfileRow>> {
+    with(&s, |a| a.source_profile(&source_id))
 }
 
 #[tauri::command]
-async fn source_page(s: State<'_, Shared>, offset: u64, limit: u64) -> Res<Page> {
-    with(&s, |a| a.source_page(offset, limit))
+async fn source_page(s: State<'_, Shared>, source_id: String, offset: u64, limit: u64) -> Res<Page> {
+    with(&s, |a| a.source_page(&source_id, offset, limit))
+}
+
+#[tauri::command]
+async fn add_source(s: State<'_, Shared>, csv: String) -> Res<AnalysisView> {
+    with(&s, |a| a.add_source(std::path::Path::new(&csv)))
+}
+
+#[tauri::command]
+async fn remove_source(s: State<'_, Shared>, id: String) -> Res<AnalysisView> {
+    with(&s, |a| a.remove_source(&id))
 }
 
 #[tauri::command]
@@ -69,13 +79,19 @@ async fn chart(s: State<'_, Shared>, step_id: String) -> Res<Value> {
 }
 
 #[tauri::command]
-async fn add_step(s: State<'_, Shared>, input: String, label: Option<String>, op: Value) -> Res<AnalysisView> {
-    with(&s, |a| a.add_step(&input, label, &op))
+async fn add_step(s: State<'_, Shared>, inputs: Vec<String>, label: Option<String>, op: Value) -> Res<AnalysisView> {
+    with(&s, |a| a.add_step(&inputs, label, &op))
 }
 
 #[tauri::command]
-async fn update_step(s: State<'_, Shared>, id: String, label: Option<String>, op: Value) -> Res<AnalysisView> {
-    with(&s, |a| a.update_step(&id, label, &op))
+async fn update_step(
+    s: State<'_, Shared>,
+    id: String,
+    label: Option<String>,
+    op: Value,
+    inputs: Option<Vec<String>>,
+) -> Res<AnalysisView> {
+    with(&s, |a| a.update_step(&id, label, &op, inputs))
 }
 
 #[tauri::command]
@@ -154,6 +170,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             startup_project,
             approve,
+            add_source,
+            remove_source,
             set_trust_all,
             create_project,
             open_project,

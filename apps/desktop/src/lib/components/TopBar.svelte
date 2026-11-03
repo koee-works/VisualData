@@ -34,7 +34,11 @@
     onchange={() => name.trim() && name !== ws.view?.name && ws.rename(name.trim())}
   />
   <p class="hidden text-sm text-ink-soft md:block" title={ws.view?.project_dir}>
-    {ws.view?.source.path}, {formatCount(ws.view?.source.rows ?? 0)} rows
+    {#if (ws.view?.sources.length ?? 0) === 1}
+      {ws.view?.sources[0]?.path}, {formatCount(ws.view?.sources[0]?.rows ?? 0)} rows
+    {:else}
+      {ws.view?.sources.length} sources
+    {/if}
   </p>
   <p
     class="text-sm"

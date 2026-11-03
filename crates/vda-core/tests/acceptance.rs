@@ -10,7 +10,7 @@ use vda_core::csv::read_table;
 use vda_core::demo::regional_revenue;
 use vda_core::duck::DuckDbEngine;
 use vda_core::engine::{Engine, ReferenceEngine};
-use vda_core::model::{CmpOp, Predicate, StepKind};
+use vda_core::model::{CmpOp, Predicate, StepKind, SOURCE_ID};
 use vda_core::persist::{load_analysis, save_analysis};
 use vda_core::python::PythonRunner;
 use vda_core::session::{replay, Output, ReplayOutcome, RunRecord, RunStatus, Session, StepState};
@@ -47,9 +47,9 @@ fn state(s: &Session, id: &str) -> StepState {
 fn step1_import_and_profile() {
     let dir = project("profile");
     let mut s = session(&dir);
-    let src = s.source_dataset().unwrap();
+    let src = s.source_dataset(SOURCE_ID).unwrap();
     assert_eq!(src.rows, 60);
-    let profile = s.source_profile().unwrap();
+    let profile = s.source_profile(SOURCE_ID).unwrap();
     let col = |n: &str| profile.iter().find(|p| p.name == n).unwrap();
     assert_eq!(col("units").dtype, DataType::Int);
     assert_eq!(col("revenue").dtype, DataType::Float);
@@ -264,7 +264,7 @@ fn custom_sql_step_runs_on_duckdb() {
     let mut s = session(&dir);
     s.analysis.steps.push(vda_core::model::Step {
         id: "top".into(),
-        input: "share".into(),
+        inputs: vec!["share".into()],
         label: Some("Top two regions".into()),
         kind: StepKind::Sql {
             sql: "WITH ranked AS (SELECT *, row_number() OVER (ORDER BY revenue DESC) AS rank FROM input)\n\
@@ -301,7 +301,7 @@ fn reference_engine_still_rejects_custom_sql() {
     let mut s = Session::new(regional_revenue("sales.csv"), &dir, Box::new(ReferenceEngine::new()), python(&dir)).unwrap();
     s.analysis.steps.push(vda_core::model::Step {
         id: "top".into(),
-        input: "by_region".into(),
+        inputs: vec!["by_region".into()],
         label: None,
         kind: StepKind::Sql { sql: "SELECT * FROM input LIMIT 2".into() },
     });

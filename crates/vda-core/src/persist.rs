@@ -10,7 +10,10 @@ use crate::Error;
 use std::fs;
 use std::path::Path;
 
-pub const FORMAT_VERSION: f64 = 1.0;
+/// Format 2 (multi-input): `sources` is a list of `{id, path}` and each step
+/// has `inputs`. Format 1 had one `source` and one `input` per step; it is
+/// still read, and its source gets the id `source`.
+pub const FORMAT_VERSION: f64 = 2.0;
 
 pub fn value_to_json(v: &Value) -> Json {
     match v {
@@ -90,6 +93,18 @@ pub fn step_kind_to_json(kind: &StepKind) -> Json {
                 ),
             ),
         ]),
+        StepKind::Join { how, on } => Json::obj(vec![
+            ("type", Json::str("join")),
+            ("how", Json::str(how.name())),
+            (
+                "on",
+                Json::Arr(
+                    on.iter()
+                        .map(|k| Json::obj(vec![("left", Json::str(k.left.clone())), ("right", Json::str(k.right.clone()))]))
+                        .collect(),
+                ),
+            ),
+        ]),
         StepKind::Sql { sql } => Json::obj(vec![("type", Json::str("sql")), ("sql", Json::str(sql.clone()))]),
         StepKind::Python { code, timeout_ms } => Json::obj(vec![
             ("type", Json::str("python")),
@@ -143,6 +158,14 @@ pub fn step_kind_from_json(j: &Json) -> Result<StepKind, Error> {
                 })
                 .collect::<Result<_, Error>>()?,
         },
+        "join" => StepKind::Join {
+            how: JoinKind::parse(j.req_str("how")?).ok_or_else(|| Error::Format("unknown join type".into()))?,
+            on: j
+                .req_arr("on")?
+                .iter()
+                .map(|k| Ok(JoinKey { left: k.req_str("left")?.to_string(), right: k.req_str("right")?.to_string() }))
+                .collect::<Result<_, Error>>()?,
+        },
         "sql" => StepKind::Sql { sql: j.req_str("sql")?.to_string() },
         "python" => StepKind::Python {
             code: j.req_str("code")?.to_string(),
@@ -162,7 +185,21 @@ pub fn analysis_to_json(a: &Analysis) -> Json {
     Json::obj(vec![
         ("format_version", Json::Num(FORMAT_VERSION)),
         ("name", Json::str(a.name.clone())),
-        ("source", Json::obj(vec![("path", Json::str(a.source.path.clone())), ("format", Json::str("csv"))])),
+        (
+            "sources",
+            Json::Arr(
+                a.sources
+                    .iter()
+                    .map(|src| {
+                        Json::obj(vec![
+                            ("id", Json::str(src.id.clone())),
+                            ("path", Json::str(src.path.clone())),
+                            ("format", Json::str("csv")),
+                        ])
+                    })
+                    .collect(),
+            ),
+        ),
         (
             "steps",
             Json::Arr(
@@ -171,7 +208,7 @@ pub fn analysis_to_json(a: &Analysis) -> Json {
                     .map(|s| {
                         Json::obj(vec![
                             ("id", Json::str(s.id.clone())),
-                            ("input", Json::str(s.input.clone())),
+                            ("inputs", Json::Arr(s.inputs.iter().map(|i| Json::str(i.clone())).collect())),
                             ("label", s.label.clone().map(Json::Str).unwrap_or(Json::Null)),
                             ("op", step_kind_to_json(&s.kind)),
                         ])
@@ -200,20 +237,38 @@ pub fn analysis_to_json(a: &Analysis) -> Json {
 
 pub fn analysis_from_json(j: &Json) -> Result<Analysis, Error> {
     let version = j.get("format_version").and_then(Json::as_f64).unwrap_or(0.0);
-    if version.trunc() != FORMAT_VERSION.trunc() {
-        return Err(Error::Format(format!("unsupported analysis format version {version}")));
+    let v1 = version.trunc() == 1.0;
+    if !v1 && version.trunc() != FORMAT_VERSION.trunc() {
+        return Err(Error::Format(format!(
+            "unsupported analysis format version {version}; this app reads versions 1 and 2"
+        )));
     }
-    let source = j.get("source").ok_or_else(|| Error::Format("missing source".into()))?;
+    let sources = if v1 {
+        let source = j.get("source").ok_or_else(|| Error::Format("missing source".into()))?;
+        vec![Source::primary(source.req_str("path")?)]
+    } else {
+        j.req_arr("sources")?
+            .iter()
+            .map(|s| Ok(Source { id: s.req_str("id")?.to_string(), path: s.req_str("path")?.to_string() }))
+            .collect::<Result<_, Error>>()?
+    };
     Ok(Analysis {
         name: j.req_str("name")?.to_string(),
-        source: Source { path: source.req_str("path")?.to_string() },
+        sources,
         steps: j
             .req_arr("steps")?
             .iter()
             .map(|s| {
                 Ok(Step {
                     id: s.req_str("id")?.to_string(),
-                    input: s.req_str("input")?.to_string(),
+                    inputs: if v1 {
+                        vec![s.req_str("input")?.to_string()]
+                    } else {
+                        s.req_arr("inputs")?
+                            .iter()
+                            .map(|i| i.as_str().map(str::to_string).ok_or_else(|| Error::Format("bad inputs".into())))
+                            .collect::<Result<_, Error>>()?
+                    },
                     label: s.get("label").and_then(Json::as_str).map(str::to_string),
                     kind: step_kind_from_json(s.get("op").ok_or_else(|| Error::Format("missing op".into()))?)?,
                 })

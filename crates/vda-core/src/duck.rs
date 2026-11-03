@@ -220,23 +220,33 @@ impl Engine for DuckDbEngine {
             .map_err(|e| Error::Data(format!("cannot import {}: {e}", src.display())))
     }
 
-    fn run_step(&mut self, step: &Step, input: &Dataset, out: &Path) -> Result<Dataset, Error> {
+    fn run_step(&mut self, step: &Step, inputs: &[Dataset], out: &Path) -> Result<Dataset, Error> {
+        if inputs.len() != step.inputs.len() || inputs.is_empty() {
+            return Err(Error::Validation(format!("step `{}`: inputs do not match its definition", step.id)));
+        }
         // Visual steps are validated first so users get the same actionable
         // message as with the reference engine, not a raw SQL error.
-        compile::output_schema(step, &input.schema)?;
-        let sql = compile::step_sql(&step.kind)
+        let schemas: Vec<_> = inputs.iter().map(|d| d.schema.clone()).collect();
+        compile::output_schema(step, &schemas)?;
+        let sql = compile::step_sql_for(step, &schemas)?
             .ok_or_else(|| Error::Unsupported(format!("step `{}` does not execute as SQL", step.id)))?;
         if let StepKind::Sql { .. } = step.kind {
             check_single_select(&self.conn, &sql).map_err(|m| Error::Validation(format!("step `{}`: {m}", step.id)))?;
         }
-        self.conn
-            .execute_batch(&format!(
-                "CREATE OR REPLACE TEMP VIEW input AS SELECT * FROM read_parquet({});",
-                lit(&input.path)
-            ))
-            .map_err(db_err("cannot read input"))?;
+        // The first input is `input`; every input is also visible by its id.
+        let mut views = vec![("input".to_string(), &inputs[0])];
+        views.extend(step.inputs.iter().map(|id| quote_ident(id)).zip(inputs));
+        let create: String = views
+            .iter()
+            .map(|(name, ds)| format!("CREATE OR REPLACE TEMP VIEW {name} AS SELECT * FROM read_parquet({});", lit(&ds.path)))
+            .collect();
+        let drop: String = views.iter().map(|(name, _)| format!("DROP VIEW IF EXISTS {name};")).collect();
+        if let Err(e) = self.conn.execute_batch(&create) {
+            let _ = self.conn.execute_batch(&drop);
+            return Err(db_err("cannot read input")(e));
+        }
         let result = self.copy_to(&sql, out);
-        let _ = self.conn.execute_batch("DROP VIEW IF EXISTS input;");
+        let _ = self.conn.execute_batch(&drop);
         result.map_err(|e| match (&step.kind, e) {
             (StepKind::Sql { .. }, Error::Data(m)) => Error::Validation(format!("step `{}`: {m}", step.id)),
             (_, e) => e,

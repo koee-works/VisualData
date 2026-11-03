@@ -1,7 +1,7 @@
 //! Compile visual operations to DuckDB SQL, validate them against an input
 //! schema, and build the inspectable SQL for a chain of steps.
 
-use crate::model::{AggFunc, Analysis, Step, StepKind, SOURCE_ID};
+use crate::model::{AggFunc, Analysis, JoinKind, Step, StepKind};
 use crate::table::{DataType, Field, Schema, Value};
 use crate::Error;
 
@@ -27,8 +27,9 @@ pub fn quote_literal(v: &Value) -> String {
     }
 }
 
-/// SQL for a single relational step, reading from the relation `input`.
-/// Returns `None` for steps that do not execute as SQL (Python, Chart).
+/// SQL for a single-input relational step, reading from the relation `input`.
+/// Returns `None` for steps that do not execute as SQL (Python, Chart) and for
+/// joins, whose SQL depends on their input columns (see [`step_sql_for`]).
 pub fn step_sql(kind: &StepKind) -> Option<String> {
     match kind {
         StepKind::Filter { predicates } => {
@@ -69,8 +70,108 @@ pub fn step_sql(kind: &StepKind) -> Option<String> {
             Some(sql)
         }
         StepKind::Sql { sql } => Some(sql.trim().trim_end_matches(';').to_string()),
-        StepKind::Python { .. } | StepKind::Chart { .. } => None,
+        StepKind::Join { .. } | StepKind::Python { .. } | StepKind::Chart { .. } => None,
     }
+}
+
+/// SQL for any relational step, given its input schemas in input order. The
+/// first input is the relation `input`; every input is also its own id.
+pub fn step_sql_for(step: &Step, inputs: &[Schema]) -> Result<Option<String>, Error> {
+    match &step.kind {
+        StepKind::Join { how, on } => {
+            let (left, right) = match inputs {
+                [l, r] => (l, r),
+                _ => return Err(Error::Validation(format!("step `{}`: a join reads two inputs", step.id))),
+            };
+            let plan = join_plan(step, left, right)?;
+            let mut cols = Vec::new();
+            for f in &left.fields {
+                let l = format!("l.{}", quote_ident(&f.name));
+                match on.iter().find(|k| k.left == f.name) {
+                    // In a full join a key exists on either side.
+                    Some(k) if *how == JoinKind::Full => {
+                        cols.push(format!("COALESCE({l}, r.{}) AS {}", quote_ident(&k.right), quote_ident(&f.name)))
+                    }
+                    _ => cols.push(l),
+                }
+            }
+            for (src, out) in &plan.right_columns {
+                let r = format!("r.{}", quote_ident(src));
+                cols.push(if src == out { r } else { format!("{r} AS {}", quote_ident(out)) });
+            }
+            let cond: Vec<String> = on
+                .iter()
+                .map(|k| format!("l.{} = r.{}", quote_ident(&k.left), quote_ident(&k.right)))
+                .collect();
+            // Row numbers fix the output order: left rows in their order, each
+            // followed by its matches in right order; unmatched right rows last.
+            Ok(Some(format!(
+                "SELECT {} FROM (SELECT *, row_number() OVER () AS __vda_l FROM input) AS l \
+                 {} (SELECT *, row_number() OVER () AS __vda_r FROM {}) AS r ON {} \
+                 ORDER BY l.__vda_l ASC NULLS LAST, r.__vda_r ASC NULLS LAST",
+                cols.join(", "),
+                how.sql(),
+                quote_ident(&step.inputs[1]),
+                cond.join(" AND ")
+            )))
+        }
+        kind => Ok(step_sql(kind)),
+    }
+}
+
+/// How a join's output columns are formed.
+struct JoinPlan {
+    /// Right non-key columns as (source name, output name).
+    right_columns: Vec<(String, String)>,
+    schema: Schema,
+}
+
+fn join_plan(step: &Step, left: &Schema, right: &Schema) -> Result<JoinPlan, Error> {
+    let StepKind::Join { how, on } = &step.kind else { unreachable!("join_plan is only called for joins") };
+    let id = &step.id;
+    if on.is_empty() {
+        return Err(Error::Validation(format!("step `{id}`: choose at least one pair of columns to join on")));
+    }
+    let mut fields: Vec<Field> = left.fields.clone();
+    for k in on {
+        let l = require(left, &k.left, id)?;
+        let r = require(right, &k.right, id)?;
+        let compatible = l.dtype == r.dtype || (l.dtype.is_numeric() && r.dtype.is_numeric());
+        if !compatible {
+            return Err(Error::Validation(format!(
+                "step `{id}`: cannot join {} column `{}` with {} column `{}`",
+                l.dtype.name(),
+                k.left,
+                r.dtype.name(),
+                k.right
+            )));
+        }
+        if *how == JoinKind::Full && l.dtype != r.dtype {
+            // COALESCE of an integer and a decimal is a decimal.
+            fields.iter_mut().find(|f| f.name == k.left).unwrap().dtype = DataType::Float;
+        }
+    }
+    let right_keys: Vec<&str> = on.iter().map(|k| k.right.as_str()).collect();
+    let suffix = &step.inputs[1];
+    let mut right_columns = Vec::new();
+    for f in &right.fields {
+        if right_keys.contains(&f.name.as_str()) {
+            continue; // equal to the left key it matched
+        }
+        let mut out = f.name.clone();
+        if fields.iter().any(|g| g.name == out) {
+            out = format!("{}_{suffix}", f.name);
+            if fields.iter().any(|g| g.name == out) {
+                return Err(Error::Validation(format!(
+                    "step `{id}`: column `{}` of `{suffix}` clashes with `{out}`; rename one before joining",
+                    f.name
+                )));
+            }
+        }
+        fields.push(Field { name: out.clone(), dtype: f.dtype });
+        right_columns.push((f.name.clone(), out));
+    }
+    Ok(JoinPlan { right_columns, schema: Schema { fields } })
 }
 
 fn require<'a>(schema: &'a Schema, col: &str, step: &str) -> Result<&'a Field, Error> {
@@ -94,12 +195,19 @@ fn literal_fits(col: DataType, v: &Value) -> bool {
     }
 }
 
-/// Validate a visual step against its actual input schema and return the
-/// output schema. Custom SQL/Python return `Ok(None)`: their schema is only
-/// known after they run.
-pub fn output_schema(step: &Step, input: &Schema) -> Result<Option<Schema>, Error> {
+/// Validate a visual step against its actual input schemas (in input order)
+/// and return the output schema. Custom SQL/Python return `Ok(None)`: their
+/// schema is only known after they run.
+pub fn output_schema(step: &Step, inputs: &[Schema]) -> Result<Option<Schema>, Error> {
     let id = &step.id;
+    let input = inputs
+        .first()
+        .ok_or_else(|| Error::Validation(format!("step `{id}` has no input")))?;
     match &step.kind {
+        StepKind::Join { .. } => match inputs {
+            [l, r] => Ok(Some(join_plan(step, l, r)?.schema)),
+            _ => Err(Error::Validation(format!("step `{id}`: a join reads two inputs"))),
+        },
         StepKind::Filter { predicates } => {
             for p in predicates {
                 let f = require(input, &p.column, id)?;
@@ -167,69 +275,96 @@ pub fn output_schema(step: &Step, input: &Schema) -> Result<Option<Schema>, Erro
     }
 }
 
-/// Inspectable SQL for a step: the chain of SQL-executable steps back to the
-/// source (or to the nearest Python step), as one query with CTEs.
-pub fn pipeline_sql(analysis: &Analysis, step_id: &str) -> Result<String, Error> {
-    let mut chain: Vec<&Step> = Vec::new();
-    let mut cursor = step_id;
-    let base: String;
-    loop {
-        if cursor == SOURCE_ID {
-            base = format!(
-                "SELECT * FROM read_csv({}, {CSV_OPTIONS})",
-                quote_literal(&Value::Text(analysis.source.path.clone()))
-            );
-            break;
+/// Inspectable SQL for a step: every SQL-executable step it depends on, back
+/// to the sources (or to the nearest Python steps), as one query with one CTE
+/// per step, named by step id. Joins need their input columns; without them
+/// (`schema_of` returns `None`) a join has no SQL form yet.
+pub fn pipeline_sql_with(
+    analysis: &Analysis,
+    step_id: &str,
+    schema_of: &dyn Fn(&str) -> Option<Schema>,
+) -> Result<String, Error> {
+    let target = analysis
+        .step(step_id)
+        .ok_or_else(|| Error::Validation(format!("unknown step `{step_id}`")))?;
+    match target.kind {
+        StepKind::Python { .. } => {
+            return Err(Error::Unsupported(format!("step `{step_id}` is custom Python; it has no SQL form")))
         }
-        let step = analysis
-            .step(cursor)
-            .ok_or_else(|| Error::Validation(format!("unknown step `{cursor}`")))?;
-        if let StepKind::Python { .. } = step.kind {
-            if chain.is_empty() {
-                return Err(Error::Unsupported(format!(
-                    "step `{}` is custom Python; it has no SQL form",
-                    step.id
-                )));
-            }
-            base = format!(
-                "SELECT * FROM {} /* materialized output of Python step `{}` */",
-                quote_ident(&format!("{}_output", step.id)),
-                step.id
-            );
-            break;
+        StepKind::Chart { .. } => {
+            return Err(Error::Unsupported(format!("step `{step_id}` is a chart; it has no SQL form")))
         }
-        if let StepKind::Chart { .. } = step.kind {
-            return Err(Error::Unsupported(format!("step `{}` is a chart; it has no SQL form", step.id)));
-        }
-        chain.push(step);
-        cursor = &step.input;
+        _ => {}
     }
-    chain.reverse();
-    let (last, earlier) = chain.split_last().expect("chain is never empty here");
     let label = |s: &Step| if s.kind.is_visual() { "visual" } else { "custom SQL" };
-    let mut ctes = vec![format!("input_0 AS ({base})")];
-    for (i, step) in earlier.iter().enumerate() {
-        let body = step_sql(&step.kind).expect("chain holds only SQL steps");
-        // Each step reads the previous CTE as `input`. The body is wrapped as a
-        // subquery so custom SQL with its own WITH clause stays valid.
-        let body = format!("WITH input AS (SELECT * FROM input_{i}) SELECT * FROM ({body})");
+    let body_of = |s: &Step| -> Result<String, Error> {
+        let schemas: Option<Vec<Schema>> = s.inputs.iter().map(|i| schema_of(i)).collect();
+        match (&s.kind, schemas) {
+            (StepKind::Join { .. }, None) => Err(Error::Unsupported(format!(
+                "step `{}` is a join; its SQL is shown once its inputs have run",
+                s.id
+            ))),
+            (_, schemas) => Ok(step_sql_for(s, &schemas.unwrap_or_default())?.expect("SQL step")),
+        }
+    };
+
+    // Dependencies first, each once.
+    let mut ctes: Vec<String> = Vec::new();
+    let mut done: std::collections::HashSet<String> = Default::default();
+    fn walk(
+        a: &Analysis,
+        id: &str,
+        done: &mut std::collections::HashSet<String>,
+        ctes: &mut Vec<String>,
+        body_of: &dyn Fn(&Step) -> Result<String, Error>,
+        label: &dyn Fn(&Step) -> &'static str,
+    ) -> Result<(), Error> {
+        if !done.insert(id.to_string()) {
+            return Ok(());
+        }
+        if let Some(src) = a.source(id) {
+            ctes.push(format!(
+                "-- source `{id}`\n{} AS (SELECT * FROM read_csv({}, {CSV_OPTIONS}))",
+                quote_ident(id),
+                quote_literal(&Value::Text(src.path.clone()))
+            ));
+            return Ok(());
+        }
+        let step = a.step(id).ok_or_else(|| Error::Validation(format!("unknown step `{id}`")))?;
+        if let StepKind::Python { .. } = step.kind {
+            ctes.push(format!(
+                "{} AS (SELECT * FROM {} /* materialized output of Python step `{id}` */)",
+                quote_ident(id),
+                quote_ident(&format!("{id}_output"))
+            ));
+            return Ok(());
+        }
+        for input in &step.inputs {
+            walk(a, input, done, ctes, body_of, label)?;
+        }
+        // The body is wrapped as a subquery so custom SQL with its own WITH
+        // clause stays valid; `input` is the step's first input.
         ctes.push(format!(
-            "-- step `{}` ({}, {})\ninput_{} AS ({body})",
-            step.id,
+            "-- step `{id}` ({}, {})\n{} AS (WITH input AS (SELECT * FROM {}) SELECT * FROM ({}))",
             step.kind.type_name(),
             label(step),
-            i + 1
+            quote_ident(id),
+            quote_ident(step.input()),
+            body_of(step)?
         ));
+        Ok(())
+    }
+    for input in &target.inputs {
+        walk(analysis, input, &mut done, &mut ctes, &body_of, &label)?;
     }
     ctes.push(format!(
-        "-- step `{}` ({}, {})\ninput AS (SELECT * FROM input_{})",
-        last.id,
-        last.kind.type_name(),
-        label(last),
-        earlier.len()
+        "-- step `{step_id}` ({}, {})\ninput AS (SELECT * FROM {})",
+        target.kind.type_name(),
+        label(target),
+        quote_ident(target.input())
     ));
     // The final step stays at the top level so its ORDER BY is honoured.
-    let body = step_sql(&last.kind).expect("chain holds only SQL steps");
+    let body = body_of(target)?;
     let head = ctes.join(",\n");
     let upper = body.to_ascii_uppercase();
     Ok(if upper.starts_with("WITH RECURSIVE") {
@@ -239,6 +374,11 @@ pub fn pipeline_sql(analysis: &Analysis, step_id: &str) -> Result<String, Error>
     } else {
         format!("WITH\n{head}\n{body}")
     })
+}
+
+/// [`pipeline_sql_with`] when no input columns are known (joins excluded).
+pub fn pipeline_sql(analysis: &Analysis, step_id: &str) -> Result<String, Error> {
+    pipeline_sql_with(analysis, step_id, &|_| None)
 }
 
 #[cfg(test)]
@@ -251,7 +391,7 @@ mod tests {
     }
 
     fn step(kind: StepKind) -> Step {
-        Step { id: "s".into(), input: SOURCE_ID.into(), label: None, kind }
+        Step { id: "s".into(), inputs: vec![crate::model::SOURCE_ID.into()], label: None, kind }
     }
 
     #[test]
@@ -288,24 +428,24 @@ mod tests {
         let bad_col = step(StepKind::Filter {
             predicates: vec![Predicate { column: "nope".into(), op: CmpOp::Eq, value: Value::Int(1) }],
         });
-        assert!(matches!(output_schema(&bad_col, &schema()), Err(Error::Validation(_))));
+        assert!(matches!(output_schema(&bad_col, &[schema()]), Err(Error::Validation(_))));
 
         let bad_type = step(StepKind::Filter {
             predicates: vec![Predicate { column: "region".into(), op: CmpOp::Gt, value: Value::Int(1) }],
         });
-        assert!(output_schema(&bad_type, &schema()).is_err());
+        assert!(output_schema(&bad_type, &[schema()]).is_err());
 
         let eq_null = step(StepKind::Filter {
             predicates: vec![Predicate { column: "units".into(), op: CmpOp::Eq, value: Value::Null }],
         });
-        let msg = output_schema(&eq_null, &schema()).unwrap_err().to_string();
+        let msg = output_schema(&eq_null, &[schema()]).unwrap_err().to_string();
         assert!(msg.contains("IS NULL"), "{msg}");
 
         let sum_text = step(StepKind::Aggregate {
             group_by: vec![],
             measures: vec![Measure { func: AggFunc::Sum, column: Some("region".into()), alias: "x".into() }],
         });
-        assert!(output_schema(&sum_text, &schema()).is_err());
+        assert!(output_schema(&sum_text, &[schema()]).is_err());
     }
 
     #[test]
@@ -317,7 +457,7 @@ mod tests {
                 Measure { func: AggFunc::Max, column: Some("amount".into()), alias: "max_amount".into() },
             ],
         });
-        let out = output_schema(&s, &schema()).unwrap().unwrap();
+        let out = output_schema(&s, &[schema()]).unwrap().unwrap();
         let types: Vec<DataType> = out.fields.iter().map(|f| f.dtype).collect();
         assert_eq!(types, vec![DataType::Text, DataType::Float, DataType::Float]);
     }

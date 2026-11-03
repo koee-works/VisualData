@@ -12,10 +12,10 @@ use serde_json::Value as J;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use vda_core::compile;
+use vda_core::{compile, plan};
 use vda_core::duck::{DuckDbEngine, EngineOptions};
 use vda_core::json::Json;
-use vda_core::model::{Analysis, Cell as NoteCell, Source, Step, StepKind, SOURCE_ID};
+use vda_core::model::{Analysis, Cell as NoteCell, Source, Step, StepKind};
 use vda_core::persist;
 use vda_core::python::{default_interpreter, PythonRunner};
 use vda_core::review::{self, Approvals, ReviewPolicy};
@@ -104,7 +104,8 @@ pub struct ProfileRow {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct StepView {
     pub id: String,
-    pub input: String,
+    /// Steps or sources this step reads; the first is its main input.
+    pub inputs: Vec<String>,
     pub label: Option<String>,
     /// The step definition in `analysis.json` format.
     pub op: J,
@@ -118,7 +119,8 @@ pub struct StepView {
     pub detail: Option<String>,
     pub rows: Option<u64>,
     pub columns: Option<Vec<Column>>,
-    /// Inspectable SQL back to the source or nearest Python step.
+    /// Inspectable SQL back to the sources or nearest Python steps. `None`
+    /// for Python and charts, and for joins until their inputs have run.
     pub sql: Option<String>,
     /// Steps that read this one's result.
     pub dependents: Vec<String>,
@@ -126,16 +128,21 @@ pub struct StepView {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SourceView {
+    /// How steps and custom SQL refer to this source.
+    pub id: String,
     pub path: String,
     pub rows: u64,
     pub columns: Vec<Column>,
+    /// Kept outside the project folder (custom SQL may still read it).
+    pub external: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AnalysisView {
     pub project_dir: String,
     pub name: String,
-    pub source: SourceView,
+    /// Data files, in the order they were added. The first is the original.
+    pub sources: Vec<SourceView>,
     pub steps: Vec<StepView>,
     /// Notebook cells in document order (`analysis.json` format).
     pub cells: J,
@@ -144,9 +151,6 @@ pub struct AnalysisView {
     pub review: Vec<ReviewItem>,
     /// Python runs without review until the app quits (never saved).
     pub trust_all: bool,
-    /// Set when the source file lives outside the project folder (custom
-    /// SQL may read it; nothing else outside the folder).
-    pub external_source: Option<String>,
 }
 
 /// Code the user is asked to read before it runs.
@@ -154,7 +158,7 @@ pub struct AnalysisView {
 pub struct ReviewItem {
     pub step_id: String,
     pub label: Option<String>,
-    pub input: String,
+    pub inputs: Vec<String>,
     pub code: String,
 }
 
@@ -262,15 +266,13 @@ impl App {
     }
 
     fn start(&mut self, analysis: Option<Analysis>, dir: &Path) -> Result<()> {
-        let source = match &analysis {
-            Some(a) => a.source.path.clone(),
-            None => persist::load_analysis(dir)?.source.path,
+        let sources = match &analysis {
+            Some(a) => a.sources.clone(),
+            None => persist::load_analysis(dir)?.sources,
         };
+        // SQL may read the project folder and any source kept elsewhere.
         let mut allowed = vec![dir.to_path_buf()];
-        let source = Path::new(&source);
-        if source.is_absolute() {
-            allowed.push(source.to_path_buf());
-        }
+        allowed.extend(sources.iter().map(|s| PathBuf::from(&s.path)).filter(|p| p.is_absolute()));
         let options = EngineOptions { allowed_paths: Some(allowed), ..self.engine_options.clone() };
         let engine = Box::new(DuckDbEngine::with_options(options)?);
         let python = Some(PythonRunner::new(self.interpreter.clone(), dir.join(".work")));
@@ -340,7 +342,7 @@ impl App {
         std::fs::copy(csv, dir.join(file))?;
         let analysis = Analysis {
             name: name.into(),
-            source: Source { path: file.to_string_lossy().into_owned() },
+            sources: vec![Source::primary(file.to_string_lossy())],
             steps: vec![],
             cells: vec![],
         };
@@ -361,8 +363,18 @@ impl App {
     pub fn view(&mut self) -> Result<AnalysisView> {
         let trust_all = self.trust_all;
         let s = self.session()?;
-        let source = s.source_dataset()?;
         let a = s.analysis.clone();
+        let mut sources = Vec::new();
+        for src in &a.sources {
+            let ds = s.source_dataset(&src.id)?;
+            sources.push(SourceView {
+                id: src.id.clone(),
+                path: src.path.clone(),
+                rows: ds.rows,
+                columns: columns(&ds.schema),
+                external: Path::new(&src.path).is_absolute(),
+            });
+        }
         let mut steps = Vec::new();
         for step in &a.steps {
             let state = s.state(&step.id)?;
@@ -376,7 +388,7 @@ impl App {
             };
             steps.push(StepView {
                 id: step.id.clone(),
-                input: step.input.clone(),
+                inputs: step.inputs.clone(),
                 label: step.label.clone(),
                 op: to_serde(&persist::step_kind_to_json(&step.kind)),
                 mode: mode(&step.kind).into(),
@@ -384,15 +396,15 @@ impl App {
                 detail,
                 rows,
                 columns: cols,
-                sql: compile::pipeline_sql(&a, &step.id).ok(),
-                dependents: a.steps.iter().filter(|o| o.input == step.id).map(|o| o.id.clone()).collect(),
+                sql: s.pipeline_sql(&step.id).ok(),
+                dependents: a.readers(&step.id).map(|o| o.id.clone()).collect(),
             });
         }
         let cells = to_serde(persist::analysis_to_json(&a).get("cells").expect("cells are always written"));
         Ok(AnalysisView {
             project_dir: s.project_dir().to_string_lossy().into_owned(),
             name: a.name.clone(),
-            source: SourceView { path: a.source.path.clone(), rows: source.rows, columns: columns(&source.schema) },
+            sources,
             steps,
             cells,
             python: s.python_fingerprint().map(str::to_string),
@@ -404,19 +416,18 @@ impl App {
                     StepKind::Python { code, .. } => Some(ReviewItem {
                         step_id: st.id.clone(),
                         label: st.label.clone(),
-                        input: st.input.clone(),
+                        inputs: st.inputs.clone(),
                         code: code.clone(),
                     }),
                     _ => None,
                 })
                 .collect(),
-            external_source: Path::new(&a.source.path).is_absolute().then(|| a.source.path.clone()),
             trust_all,
         })
     }
 
-    pub fn source_profile(&mut self) -> Result<Vec<ProfileRow>> {
-        let profile = self.session()?.source_profile()?;
+    pub fn source_profile(&mut self, source_id: &str) -> Result<Vec<ProfileRow>> {
+        let profile = self.session()?.source_profile(source_id)?;
         Ok(profile
             .into_iter()
             .map(|p| ProfileRow {
@@ -431,10 +442,10 @@ impl App {
             .collect())
     }
 
-    pub fn source_page(&mut self, offset: u64, limit: u64) -> Result<Page> {
+    pub fn source_page(&mut self, source_id: &str, offset: u64, limit: u64) -> Result<Page> {
         let s = self.session()?;
-        let total = s.source_dataset()?.rows;
-        let t = s.source_preview(offset, limit.min(MAX_PAGE_ROWS))?;
+        let total = s.source_dataset(source_id)?.rows;
+        let t = s.source_preview(source_id, offset, limit.min(MAX_PAGE_ROWS))?;
         Ok(page_of(&t, offset, total, false))
     }
 
@@ -462,16 +473,14 @@ impl App {
         (1..).map(|n| format!("{prefix}_{n}")).find(|id| a.step(id).is_none()).unwrap()
     }
 
-    /// Reject a visual step that cannot work on its input's current columns,
-    /// when that input's columns are known. Custom code is checked when it runs.
+    /// Reject a visual step that cannot work on its inputs' current columns,
+    /// when all of them are known. Custom code is checked when it runs.
     fn check_against_input(s: &mut Session, step: &Step) -> Result<()> {
-        let schema = if step.input == SOURCE_ID {
-            Some(s.source_dataset()?.schema)
-        } else {
-            s.output(&step.input).and_then(Output::as_dataset).map(|d| d.schema.clone())
-        };
-        if let Some(schema) = schema {
-            compile::output_schema(step, &schema)?;
+        let schemas: Option<Vec<_>> = step.inputs.iter().map(|i| s.schema_of(i)).collect();
+        if let Some(schemas) = schemas {
+            if schemas.len() == step.inputs.len() && step.kind.arity().0 <= schemas.len() {
+                compile::output_schema(step, &schemas)?;
+            }
         }
         Ok(())
     }
@@ -484,13 +493,15 @@ impl App {
         self.view()
     }
 
-    /// Add a step reading `input`, and a notebook cell showing it.
-    pub fn add_step(&mut self, input: &str, label: Option<String>, op: &J) -> Result<AnalysisView> {
+    /// Add a step reading `inputs` (the first is its main input), and a
+    /// notebook cell showing it.
+    pub fn add_step(&mut self, inputs: &[String], label: Option<String>, op: &J) -> Result<AnalysisView> {
         let kind = persist::step_kind_from_json(&from_serde(op)?)?;
         let s = self.session()?;
         let mut a = s.analysis.clone();
         let id = Self::next_id(&a, kind.type_name());
-        let step = Step { id: id.clone(), input: input.into(), label, kind };
+        let step = Step { id: id.clone(), inputs: inputs.to_vec(), label, kind };
+        plan::validate(&Analysis { steps: [a.steps.clone(), vec![step.clone()]].concat(), ..a.clone() })?;
         Self::check_against_input(s, &step)?;
         a.steps.push(step);
         a.cells.push(NoteCell::Step { step_id: id.clone() });
@@ -509,17 +520,22 @@ impl App {
         self.view()
     }
 
-    pub fn update_step(&mut self, id: &str, label: Option<String>, op: &J) -> Result<AnalysisView> {
+    /// Save a step's definition and label, and its inputs when given.
+    pub fn update_step(&mut self, id: &str, label: Option<String>, op: &J, inputs: Option<Vec<String>>) -> Result<AnalysisView> {
         let kind = persist::step_kind_from_json(&from_serde(op)?)?;
         let s = self.session()?;
         let mut a = s.analysis.clone();
         let Some(step) = a.step_mut(id) else { return fail(format!("unknown step `{id}`")) };
-        if mode(&step.kind) != mode(&kind) {
+        let is_join = |k: &StepKind| matches!(k, StepKind::Join { .. });
+        if mode(&step.kind) != mode(&kind) || is_join(&step.kind) != is_join(&kind) {
             return fail("a step cannot change between visual, SQL, Python and chart; add a new step instead");
         }
         let code_written = review::fingerprint(&step.kind) != review::fingerprint(&kind);
         step.kind = kind;
         step.label = label;
+        if let Some(inputs) = inputs {
+            step.inputs = inputs;
+        }
         let step = step.clone();
         Self::check_against_input(s, &step)?;
         self.commit_with_approval(a, id, code_written)
@@ -527,7 +543,7 @@ impl App {
 
     pub fn remove_step(&mut self, id: &str) -> Result<AnalysisView> {
         let mut a = self.session()?.analysis.clone();
-        if let Some(dep) = a.steps.iter().find(|s| s.input == id) {
+        if let Some(dep) = a.readers(id).next() {
             return fail(format!("step `{}` reads `{id}`; remove or repoint it first", dep.id));
         }
         a.steps.retain(|s| s.id != id);
@@ -543,6 +559,43 @@ impl App {
             m.insert("cells".into(), from_serde(cells)?);
         }
         a.cells = persist::analysis_from_json(&doc)?.cells;
+        self.commit(a)
+    }
+
+    /// Copy a CSV file into the project as another source. Its id comes
+    /// from the file name (`regions.csv` → `regions`), made unique.
+    pub fn add_source(&mut self, csv: &Path) -> Result<AnalysisView> {
+        let s = self.session()?;
+        let dir = s.project_dir().to_path_buf();
+        let mut a = s.analysis.clone();
+        let stem = csv.file_stem().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default();
+        let ext = csv.extension().map(|x| x.to_string_lossy().into_owned()).unwrap_or_else(|| "csv".into());
+        let id = unique_id(&a, &source_id_from(&stem));
+        // Keep the file's own name in the folder unless that is taken.
+        let mut file = format!("{stem}.{ext}");
+        if dir.join(&file).exists() && !same_file(&dir.join(&file), csv) {
+            file = format!("{id}.{ext}");
+        }
+        if !same_file(&dir.join(&file), csv) {
+            std::fs::copy(csv, dir.join(&file))?;
+        }
+        a.sources.push(Source { id, path: file });
+        self.commit(a)
+    }
+
+    /// Remove a source no step reads. Its file stays in the project folder.
+    pub fn remove_source(&mut self, id: &str) -> Result<AnalysisView> {
+        let mut a = self.session()?.analysis.clone();
+        if !a.is_source(id) {
+            return fail(format!("unknown source `{id}`"));
+        }
+        if a.sources.len() == 1 {
+            return fail("an analysis needs at least one source");
+        }
+        if let Some(dep) = a.readers(id).next() {
+            return fail(format!("step `{}` reads `{id}`; remove or repoint it first", dep.id));
+        }
+        a.sources.retain(|s| s.id != id);
         self.commit(a)
     }
 
@@ -569,4 +622,35 @@ impl App {
     pub fn cancel_handle(&mut self) -> Result<Arc<AtomicBool>> {
         Ok(self.session()?.cancel_handle())
     }
+}
+
+/// A source id from a file name: letters, digits and `_`, starting with a letter.
+fn source_id_from(stem: &str) -> String {
+    let mut id: String = stem
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
+        .collect::<String>()
+        .split('_')
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join("_");
+    if !id.starts_with(|c: char| c.is_ascii_alphabetic()) {
+        id = format!("data_{id}").trim_end_matches('_').to_string();
+    }
+    if id.eq_ignore_ascii_case("input") {
+        id = "input_data".into();
+    }
+    id
+}
+
+fn unique_id(a: &Analysis, base: &str) -> String {
+    let taken = |id: &str| a.is_source(id) || a.step(id).is_some();
+    if !taken(base) {
+        return base.to_string();
+    }
+    (2..).map(|n| format!("{base}_{n}")).find(|id| !taken(id)).unwrap()
+}
+
+fn same_file(a: &Path, b: &Path) -> bool {
+    matches!((std::fs::canonicalize(a), std::fs::canonicalize(b)), (Ok(x), Ok(y)) if x == y)
 }

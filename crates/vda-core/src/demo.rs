@@ -12,11 +12,11 @@ result = result.sort_values("revenue", ascending=False).reset_index(drop=True)
 pub fn regional_revenue(source_path: &str) -> Analysis {
     Analysis {
         name: "Regional revenue".into(),
-        source: Source { path: source_path.into() },
+        sources: vec![Source::primary(source_path)],
         steps: vec![
             Step {
                 id: "valid_orders".into(),
-                input: SOURCE_ID.into(),
+                inputs: vec![SOURCE_ID.into()],
                 label: Some("Orders with a region and revenue of at least 20".into()),
                 kind: StepKind::Filter {
                     predicates: vec![
@@ -27,7 +27,7 @@ pub fn regional_revenue(source_path: &str) -> Analysis {
             },
             Step {
                 id: "by_region".into(),
-                input: "valid_orders".into(),
+                inputs: vec!["valid_orders".into()],
                 label: Some("Revenue by region".into()),
                 kind: StepKind::Aggregate {
                     group_by: vec!["region".into()],
@@ -40,13 +40,13 @@ pub fn regional_revenue(source_path: &str) -> Analysis {
             },
             Step {
                 id: "share".into(),
-                input: "by_region".into(),
+                inputs: vec!["by_region".into()],
                 label: Some("Revenue share".into()),
                 kind: StepKind::Python { code: PYTHON_SHARE.into(), timeout_ms: 30_000 },
             },
             Step {
                 id: "share_chart".into(),
-                input: "share".into(),
+                inputs: vec!["share".into()],
                 label: Some("Revenue share by region".into()),
                 kind: StepKind::Chart {
                     mark: Mark::Bar,

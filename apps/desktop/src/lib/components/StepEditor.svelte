@@ -1,14 +1,14 @@
 <script lang="ts">
   import { untrack } from "svelte";
-  import { Trash2 } from "@lucide/svelte";
+  import { Trash2, X } from "@lucide/svelte";
   import type { Workspace } from "../workspace.svelte";
   import type { Column, StepOp, StepView } from "../api/types";
-  import { SOURCE_ID } from "../api/types";
   import { describe, stepTitle } from "../format";
   import FilterEditor from "./FilterEditor.svelte";
   import AggregateEditor from "./AggregateEditor.svelte";
   import CodeEditor from "./CodeEditor.svelte";
   import ChartEditor from "./ChartEditor.svelte";
+  import JoinEditor from "./JoinEditor.svelte";
 
   let { ws, step }: { ws: Workspace; step: StepView } = $props();
 
@@ -18,9 +18,12 @@
     label: step.label ?? "",
     id: step.id,
     json: JSON.stringify(step.op),
+    inputs: [...step.inputs],
   }));
   let draft = $state<StepOp>(initial.op);
   let label = $state(initial.label);
+  let inputs = $state<string[]>(initial.inputs);
+  let loadedInputs = JSON.stringify(initial.inputs);
   let invalid = $state(false);
   let saving = $state(false);
   let loadedFor = initial.id;
@@ -29,26 +32,30 @@
   // Reload when another step is selected or the saved definition changes.
   $effect.pre(() => {
     const opJson = JSON.stringify(step.op);
-    if (step.id !== loadedFor || opJson !== loadedOp) {
+    const inputsJson = JSON.stringify(step.inputs);
+    if (step.id !== loadedFor || opJson !== loadedOp || inputsJson !== loadedInputs) {
       draft = structuredClone($state.snapshot(step.op)) as StepOp;
       label = step.label ?? "";
+      inputs = [...step.inputs];
       invalid = false;
       loadedFor = step.id;
       loadedOp = opJson;
+      loadedInputs = inputsJson;
     }
   });
 
-  let dirty = $derived(JSON.stringify(draft) !== JSON.stringify(step.op) || label !== (step.label ?? ""));
+  let inputsChanged = $derived(JSON.stringify(inputs) !== JSON.stringify(step.inputs));
+  let dirty = $derived(JSON.stringify(draft) !== JSON.stringify(step.op) || label !== (step.label ?? "") || inputsChanged);
 
-  let input = $derived(ws.view?.steps.find((s) => s.id === step.input) ?? null);
-  let inputName = $derived(step.input === SOURCE_ID ? (ws.view?.source.path ?? "the source") : input ? stepTitle(input) : step.input);
-  let inputColumns: Column[] | null = $derived(
-    step.input === SOURCE_ID ? (ws.view?.source.columns ?? null) : (input?.columns ?? null),
-  );
+  let inputName = $derived(ws.nameOf(inputs[0]!));
+  let inputColumns: Column[] | null = $derived(ws.columnsOf(inputs[0]!));
+  // Tables this step may read without depending on itself.
+  let readable = $derived(ws.readable(step.id));
+  let extraChoices = $derived(readable.filter((o) => !inputs.includes(o.id)));
 
   async function save() {
     saving = true;
-    await ws.saveStep(step.id, label.trim() || null, $state.snapshot(draft) as StepOp);
+    await ws.saveStep(step.id, label.trim() || null, $state.snapshot(draft) as StepOp, inputsChanged ? [...inputs] : undefined);
     saving = false;
   }
 
@@ -86,7 +93,11 @@
 
   <div class="flex-1 overflow-y-auto px-5 py-4">
     <p class="mb-4 text-sm text-ink-soft">
-      Reads <button class="underline decoration-rule-strong underline-offset-2 hover:text-ink" onclick={() => (ws.selected = step.input)}>{inputName}</button>{#if inputColumns === null}.
+      Reads
+      {#each inputs as id, i (id)}{#if i > 0}{i === inputs.length - 1 ? " and " : ", "}{/if}<button
+          class="underline decoration-rule-strong underline-offset-2 hover:text-ink"
+          onclick={() => (ws.selected = id)}>{ws.nameOf(id)}</button
+        >{/each}{#if inputColumns === null && draft.type !== "join"}.
         Its columns appear after it runs, so type column names for now{/if}.
     </p>
 
@@ -114,23 +125,66 @@
       <FilterEditor bind:predicates={draft.predicates} columns={inputColumns} bind:invalid />
     {:else if draft.type === "aggregate"}
       <AggregateEditor bind:groupBy={draft.group_by} bind:measures={draft.measures} columns={inputColumns} />
-    {:else if draft.type === "sql"}
-      <CodeEditor bind:code={draft.sql} language="sql" {inputName} />
-    {:else if draft.type === "python"}
-      <CodeEditor bind:code={draft.code} language="python" {inputName} />
-      <label class="mt-3 flex items-center gap-2 text-sm text-ink-soft">
-        Stop after
-        <input
-          class="field w-20"
-          type="number"
-          min="1"
-          value={Math.round(draft.timeout_ms / 1000)}
-          oninput={(e) => {
-            if (draft.type === "python") draft.timeout_ms = Math.max(1, Number(e.currentTarget.value) || 60) * 1000;
-          }}
-        />
-        seconds
-      </label>
+    {:else if draft.type === "join"}
+      <JoinEditor
+        bind:how={draft.how}
+        bind:on={draft.on}
+        bind:right={inputs[1]!}
+        leftName={inputName}
+        leftColumns={inputColumns}
+        rightOptions={readable.filter((o) => o.id !== inputs[0])}
+        rightColumns={ws.columnsOf(inputs[1]!)}
+        rightId={inputs[1]!}
+      />
+    {:else if draft.type === "sql" || draft.type === "python"}
+      {#if draft.type === "sql"}
+        <CodeEditor bind:code={draft.sql} language="sql" inputs={inputs.map((id) => ({ id, name: ws.nameOf(id) }))} />
+      {:else}
+        <CodeEditor bind:code={draft.code} language="python" inputs={inputs.map((id) => ({ id, name: ws.nameOf(id) }))} />
+      {/if}
+      <div class="mt-3 flex flex-wrap items-center gap-2 text-sm" aria-label="More inputs">
+        <span class="text-ink-soft">Also reads</span>
+        {#each inputs.slice(1) as id (id)}
+          <span class="inline-flex items-center gap-1 rounded border border-rule-strong py-0.5 pr-0.5 pl-2">
+            <code class="code">{id}</code>
+            <button class="btn btn-quiet !min-h-5 !px-0.5" aria-label="Stop reading {ws.nameOf(id)}" onclick={() => (inputs = inputs.filter((x) => x !== id))}>
+              <X size={12} />
+            </button>
+          </span>
+        {:else}
+          <span class="text-ink-faint">nothing else</span>
+        {/each}
+        {#if extraChoices.length}
+          <select
+            class="field"
+            aria-label="Add an input"
+            value=""
+            onchange={(e) => {
+              const v = e.currentTarget.value;
+              if (v) inputs = [...inputs, v];
+              e.currentTarget.value = "";
+            }}
+          >
+            <option value="">Add an input…</option>
+            {#each extraChoices as o (o.id)}<option value={o.id}>{o.name}</option>{/each}
+          </select>
+        {/if}
+      </div>
+      {#if draft.type === "python"}
+        <label class="mt-3 flex items-center gap-2 text-sm text-ink-soft">
+          Stop after
+          <input
+            class="field w-20"
+            type="number"
+            min="1"
+            value={Math.round(draft.timeout_ms / 1000)}
+            oninput={(e) => {
+              if (draft.type === "python") draft.timeout_ms = Math.max(1, Number(e.currentTarget.value) || 60) * 1000;
+            }}
+          />
+          seconds
+        </label>
+      {/if}
     {:else if draft.type === "chart"}
       <ChartEditor bind:mark={draft.mark} bind:x={draft.x} bind:y={draft.y} bind:title={draft.title} columns={inputColumns} />
     {/if}

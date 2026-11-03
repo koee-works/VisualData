@@ -29,8 +29,9 @@ pub trait Engine: Send {
     /// Convert a CSV source into a dataset written at `out`.
     fn import_csv(&mut self, src: &Path, out: &Path) -> Result<Dataset, Error>;
 
-    /// Execute a relational step (visual or custom SQL), writing its result at `out`.
-    fn run_step(&mut self, step: &Step, input: &Dataset, out: &Path) -> Result<Dataset, Error>;
+    /// Execute a relational step (visual or custom SQL) on its inputs, given
+    /// in the order of `step.inputs`, writing its result at `out`.
+    fn run_step(&mut self, step: &Step, inputs: &[Dataset], out: &Path) -> Result<Dataset, Error>;
 
     /// Turn a Parquet file produced elsewhere (a Python step) into a dataset
     /// with core types, written at `out`.
@@ -83,7 +84,7 @@ impl Engine for ReferenceEngine {
         self.write(&t, out)
     }
 
-    fn run_step(&mut self, step: &Step, input: &Dataset, out: &Path) -> Result<Dataset, Error> {
+    fn run_step(&mut self, step: &Step, inputs: &[Dataset], out: &Path) -> Result<Dataset, Error> {
         if let StepKind::Sql { .. } = step.kind {
             return Err(Error::Unsupported(format!(
                 "step `{}`: custom SQL needs the DuckDB engine. Its SQL is:\n{}",
@@ -91,8 +92,8 @@ impl Engine for ReferenceEngine {
                 compile::step_sql(&step.kind).unwrap_or_default()
             )));
         }
-        let t = duck::read_parquet(&input.path)?;
-        let result = reference::eval_step(step, &t)?;
+        let tables = inputs.iter().map(|d| duck::read_parquet(&d.path)).collect::<Result<Vec<_>, _>>()?;
+        let result = reference::eval_step(step, &tables)?;
         self.write(&result, out)
     }
 

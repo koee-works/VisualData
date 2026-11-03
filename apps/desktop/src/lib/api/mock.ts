@@ -28,7 +28,7 @@ interface Result {
 }
 interface MockStep {
   id: string;
-  input: string;
+  inputs: string[];
   label: string | null;
   op: StepOp;
 }
@@ -81,9 +81,35 @@ function compare(a: Cell, b: Cell): number | null {
   return s < t ? -1 : s > t ? 1 : 0;
 }
 
+function regionsTable(): { columns: Column[]; rows: Row[] } {
+  const people = ["Priya Raman", "Tom Okafor", "Lena Hart", "Diego Alvarez", "Mei Chen"];
+  return {
+    columns: [
+      { name: "region", type: "VARCHAR" },
+      { name: "manager", type: "VARCHAR" },
+      { name: "target", type: "BIGINT" },
+    ],
+    rows: [...REGIONS, "Central"].map((r, i) => [
+      { t: "text", v: r },
+      { t: "text", v: people[i]! },
+      { t: "int", v: String(1200 + i * 300) },
+    ]),
+  };
+}
+
+interface MockSource {
+  id: string;
+  path: string;
+  columns: Column[];
+  rows: Row[];
+}
+
 export class MockBackend implements Backend {
   name = "Regional revenue";
-  source = sourceTable(240);
+  sources: MockSource[] = [{ id: SOURCE_ID, path: "sales.csv", ...sourceTable(240) }];
+  get source(): MockSource {
+    return this.sources[0]!;
+  }
   steps: MockStep[] = [];
   cells: NotebookCell[] = [];
   results = new Map<string, Result>();
@@ -97,13 +123,19 @@ export class MockBackend implements Backend {
 
   private def(id: string): string {
     const s = this.steps.find((x) => x.id === id);
-    if (!s) return "source";
-    return JSON.stringify([s.op, this.def(s.input)]);
+    if (!s) return id;
+    return JSON.stringify([s.op, s.inputs.map((i) => this.def(i))]);
   }
 
   private inputOf(id: string): Result | { columns: Column[]; rows: Row[] } | undefined {
-    if (id === SOURCE_ID) return this.source;
-    return this.results.get(id);
+    return this.sources.find((s) => s.id === id) ?? this.results.get(id);
+  }
+
+  private upstreamNeedsReview(s: MockStep): boolean {
+    return s.inputs.some((i) => {
+      const up = this.steps.find((x) => x.id === i);
+      return !!up && (this.needsReview(up) || this.upstreamNeedsReview(up));
+    });
   }
 
   private needsReview(s: MockStep): boolean {
@@ -114,8 +146,7 @@ export class MockBackend implements Backend {
     const r = this.results.get(s.id);
     if (r && r.def === this.def(s.id)) return "fresh";
     if (this.needsReview(s)) return "needs review";
-    for (let up = this.steps.find((x) => x.id === s.input); up; up = this.steps.find((x) => x.id === up!.input))
-      if (this.needsReview(up)) return "waiting on review";
+    if (this.upstreamNeedsReview(s)) return "waiting on review";
     if (this.failed.has(s.id)) return "failed";
     if (!r) return "not run";
     return r.def === this.def(s.id) ? "fresh" : "stale";
@@ -126,29 +157,28 @@ export class MockBackend implements Backend {
       const r = this.results.get(s.id);
       return {
         id: s.id,
-        input: s.input,
+        inputs: s.inputs,
         label: s.label,
         op: s.op,
-        mode: s.op.type === "filter" || s.op.type === "aggregate" ? "visual" : s.op.type,
+        mode: s.op.type === "filter" || s.op.type === "aggregate" || s.op.type === "join" ? "visual" : s.op.type,
         state: this.state(s),
         detail: this.failed.get(s.id) ?? null,
         rows: r ? r.rows.length : null,
         columns: r ? r.columns : null,
         sql: s.op.type === "sql" ? s.op.sql : s.op.type === "chart" || s.op.type === "python" ? null : `SELECT … FROM input`,
-        dependents: this.steps.filter((o) => o.input === s.id).map((o) => o.id),
+        dependents: this.steps.filter((o) => o.inputs.includes(s.id)).map((o) => o.id),
       };
     });
     return {
       project_dir: "/projects/regional-revenue",
       name: this.name,
-      source: { path: "sales.csv", rows: this.source.rows.length, columns: this.source.columns },
+      sources: this.sources.map((x) => ({ id: x.id, path: x.path, rows: x.rows.length, columns: x.columns, external: false })),
       steps,
       cells: this.cells,
       python: "python 3.13 | pandas 3.0",
       review: this.steps
         .filter((s) => this.needsReview(s))
-        .map((s) => ({ step_id: s.id, label: s.label, input: s.input, code: s.op.type === "python" ? s.op.code : "" })),
-      external_source: null,
+        .map((s) => ({ step_id: s.id, label: s.label, inputs: s.inputs, code: s.op.type === "python" ? s.op.code : "" })),
       trust_all: this.trustAll,
     };
   }
@@ -160,15 +190,41 @@ export class MockBackend implements Backend {
     return this.view();
   }
 
-  async sourceProfile(): Promise<ProfileRow[]> {
-    return this.source.columns.map((c, i) => {
-      const vals = this.source.rows.map((r) => r[i]!).filter((v) => v.t !== "null");
+  private sourceById(id: string): MockSource {
+    const s = this.sources.find((x) => x.id === id);
+    if (!s) throw { message: `unknown source \`${id}\`` };
+    return s;
+  }
+
+  async addSource(csv: string): Promise<AnalysisView> {
+    const stem = csv.split(/[\\/]/).pop()!.replace(/\.[^.]*$/, "");
+    let id = stem.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "data";
+    if (!/^[a-z]/.test(id)) id = `data_${id}`;
+    const base = id;
+    for (let n = 2; this.sources.some((s) => s.id === id) || this.steps.some((s) => s.id === id); n++) id = `${base}_${n}`;
+    this.sources.push({ id, path: `${id === base ? stem : id}.csv`, ...regionsTable() });
+    return this.view();
+  }
+
+  async removeSource(id: string): Promise<AnalysisView> {
+    this.sourceById(id);
+    if (this.sources.length === 1) throw { message: "an analysis needs at least one source" };
+    const dep = this.steps.find((s) => s.inputs.includes(id));
+    if (dep) throw { message: `step \`${dep.id}\` reads \`${id}\`; remove or repoint it first` };
+    this.sources = this.sources.filter((s) => s.id !== id);
+    return this.view();
+  }
+
+  async sourceProfile(sourceId: string): Promise<ProfileRow[]> {
+    const source = this.sourceById(sourceId);
+    return source.columns.map((c, i) => {
+      const vals = source.rows.map((r) => r[i]!).filter((v) => v.t !== "null");
       const sorted = [...vals].sort((a, b) => compare(a, b) ?? 0);
       return {
         name: c.name,
         type: c.type,
-        rows: this.source.rows.length,
-        missing: this.source.rows.length - vals.length,
+        rows: source.rows.length,
+        missing: source.rows.length - vals.length,
         distinct: new Set(vals.map((v) => JSON.stringify(v))).size,
         min: sorted[0] ?? { t: "null" },
         max: sorted[sorted.length - 1] ?? { t: "null" },
@@ -176,8 +232,8 @@ export class MockBackend implements Backend {
     });
   }
 
-  async sourcePage(offset: number, limit: number): Promise<Page> {
-    const { columns, rows } = this.source;
+  async sourcePage(sourceId: string, offset: number, limit: number): Promise<Page> {
+    const { columns, rows } = this.sourceById(sourceId);
     return { offset, total_rows: rows.length, columns, rows: rows.slice(offset, offset + limit), stale: false };
   }
 
@@ -197,7 +253,7 @@ export class MockBackend implements Backend {
   async chart(stepId: string): Promise<unknown> {
     const s = this.steps.find((x) => x.id === stepId);
     if (!this.results.has(stepId) || !s || s.op.type !== "chart") throw { message: `step \`${stepId}\` has no chart yet` };
-    const input = this.inputOf(s.input);
+    const input = this.inputOf(s.inputs[0]!);
     const op = s.op;
     const xi = input?.columns.findIndex((c) => c.name === op.x) ?? -1;
     const yi = input?.columns.findIndex((c) => c.name === op.y) ?? -1;
@@ -218,18 +274,30 @@ export class MockBackend implements Backend {
     for (let n = 1; ; n++) if (!this.steps.some((s) => s.id === `${type}_${n}`)) return `${type}_${n}`;
   }
 
-  async addStep(input: string, label: string | null, op: StepOp): Promise<AnalysisView> {
-    if (input !== SOURCE_ID && !this.steps.some((s) => s.id === input)) throw { message: `unknown step \`${input}\`` };
+  private checkInputs(op: StepOp, inputs: string[]) {
+    for (const i of inputs)
+      if (!this.sources.some((s) => s.id === i) && !this.steps.some((s) => s.id === i)) throw { message: `unknown step \`${i}\`` };
+    const want = op.type === "join" ? 2 : 1;
+    if (op.type === "join" ? inputs.length !== 2 : inputs.length < 1 || (op.type !== "sql" && op.type !== "python" && inputs.length > 1))
+      throw { message: `step reads ${want} input${want === 1 ? "" : "s"}, not ${inputs.length}` };
+  }
+
+  async addStep(inputs: string[], label: string | null, op: StepOp): Promise<AnalysisView> {
+    this.checkInputs(op, inputs);
     const id = this.nextId(op.type);
-    this.steps.push({ id, input, label, op });
+    this.steps.push({ id, inputs: [...inputs], label, op });
     if (op.type === "python") this.approved.add(op.code);
     this.cells.push({ type: "step", step: id });
     return this.view();
   }
 
-  async updateStep(id: string, label: string | null, op: StepOp): Promise<AnalysisView> {
+  async updateStep(id: string, label: string | null, op: StepOp, inputs?: string[]): Promise<AnalysisView> {
     const s = this.steps.find((x) => x.id === id);
     if (!s) throw { message: `unknown step \`${id}\`` };
+    if (inputs) {
+      this.checkInputs(op, inputs);
+      s.inputs = [...inputs];
+    }
     if (op.type === "python" && (s.op.type !== "python" || s.op.code !== op.code)) this.approved.add(op.code);
     s.op = op;
     s.label = label;
@@ -238,7 +306,7 @@ export class MockBackend implements Backend {
   }
 
   async removeStep(id: string): Promise<AnalysisView> {
-    const dep = this.steps.find((s) => s.input === id);
+    const dep = this.steps.find((s) => s.inputs.includes(id));
     if (dep) throw { message: `step \`${dep.id}\` reads \`${id}\`; remove or repoint it first` };
     this.steps = this.steps.filter((s) => s.id !== id);
     this.cells = this.cells.filter((c) => !(c.type === "step" && c.step === id));
@@ -270,9 +338,48 @@ export class MockBackend implements Backend {
   }
 
   private evaluate(s: MockStep): Result {
-    const input = this.inputOf(s.input);
-    if (!input) throw new Error(`upstream step \`${s.input}\` did not succeed`);
+    const input = this.inputOf(s.inputs[0]!);
+    if (!input) throw new Error(`upstream step \`${s.inputs[0]}\` did not succeed`);
     const op = s.op;
+    if (op.type === "join") {
+      const right = this.inputOf(s.inputs[1]!);
+      if (!right) throw new Error(`upstream step \`${s.inputs[1]}\` did not succeed`);
+      const li = op.on.map((k) => input.columns.findIndex((c) => c.name === k.left));
+      const ri = op.on.map((k) => right.columns.findIndex((c) => c.name === k.right));
+      if (!op.on.length || li.some((i) => i < 0) || ri.some((i) => i < 0)) throw new Error("choose columns to join on");
+      const keep = right.columns.map((_, i) => i).filter((i) => !ri.includes(i));
+      const names = new Set(input.columns.map((c) => c.name));
+      const columns = [
+        ...input.columns,
+        ...keep.map((i) => {
+          const c = right.columns[i]!;
+          return names.has(c.name) ? { ...c, name: `${c.name}_${s.inputs[1]}` } : c;
+        }),
+      ];
+      const nulls = (n: number): Cell[] => Array.from({ length: n }, () => ({ t: "null" }));
+      const eq = (a: Row, b: Row) => li.every((x, k) => compare(a[x]!, b[ri[k]!]!) === 0);
+      const rows: Row[] = [];
+      const used = new Set<number>();
+      for (const l of input.rows) {
+        let any = false;
+        right.rows.forEach((r, j) => {
+          if (eq(l, r)) {
+            any = true;
+            used.add(j);
+            rows.push([...l, ...keep.map((i) => r[i]!)]);
+          }
+        });
+        if (!any && op.how !== "inner") rows.push([...l, ...nulls(keep.length)]);
+      }
+      if (op.how === "full")
+        right.rows.forEach((r, j) => {
+          if (used.has(j)) return;
+          const left = nulls(input.columns.length);
+          op.on.forEach((k, n) => (left[li[n]!] = r[ri[n]!]!));
+          rows.push([...left, ...keep.map((i) => r[i]!)]);
+        });
+      return { def: this.def(s.id), columns, rows };
+    }
     if (op.type === "filter") {
       const idx = op.predicates.map((p) => input.columns.findIndex((c) => c.name === p.column));
       if (idx.some((i) => i < 0)) throw new Error("column not found");
@@ -322,7 +429,7 @@ export class MockBackend implements Backend {
   async run({ onStep }: RunHandlers): Promise<RunSummary> {
     this.cancelled = false;
     const events: StepEvent[] = [];
-    const ok = new Set<string>([SOURCE_ID]);
+    const ok = new Set<string>(this.sources.map((x) => x.id));
     const review = new Set<string>();
     let halted = false;
     for (const s of this.steps) {
@@ -331,10 +438,11 @@ export class MockBackend implements Backend {
       if (halted || this.cancelled) {
         halted = true;
         e = { step_id: s.id, status: "skipped", cached: false, detail: "run was cancelled", rows: null, duration_ms: 0 };
-      } else if (!ok.has(s.input)) {
-        const waiting = review.has(s.input);
+      } else if (s.inputs.some((i) => !ok.has(i))) {
+        const bad = s.inputs.find((i) => !ok.has(i))!;
+        const waiting = review.has(bad);
         if (waiting) review.add(s.id);
-        const detail = waiting ? `step \`${s.input}\` is waiting for your review` : `upstream step \`${s.input}\` did not succeed`;
+        const detail = waiting ? `step \`${bad}\` is waiting for your review` : `upstream step \`${bad}\` did not succeed`;
         e = { step_id: s.id, status: "skipped", cached: false, detail, rows: null, duration_ms: 0 };
       } else if (this.state(s) === "fresh") {
         ok.add(s.id);
@@ -365,15 +473,15 @@ export class MockBackend implements Backend {
   }
 
   /** A small worked analysis for previews: filter → aggregate → Python → chart. */
-  async seedDemo(opts: { run: boolean; editAfterRun: boolean; received?: boolean }) {
-    await this.addStep(SOURCE_ID, "Orders with a region", {
+  async seedDemo(opts: { run: boolean; editAfterRun: boolean; received?: boolean; join?: boolean }) {
+    await this.addStep([SOURCE_ID], "Orders with a region", {
       type: "filter",
       predicates: [
         { column: "region", op: "IS NOT NULL", value: null },
         { column: "revenue", op: ">=", value: { int: "20" } },
       ],
     });
-    await this.addStep("filter_1", "Revenue by region", {
+    await this.addStep(["filter_1"], "Revenue by region", {
       type: "aggregate",
       group_by: ["region"],
       measures: [
@@ -381,13 +489,21 @@ export class MockBackend implements Backend {
         { func: "SUM", column: "revenue", alias: "revenue" },
       ],
     });
-    await this.addStep("aggregate_1", "Share of revenue", {
+    await this.addStep(["aggregate_1"], "Share of revenue", {
       type: "python",
       code: "result = df.assign(share=df['revenue'] / df['revenue'].sum())",
       timeout_ms: 60000,
     });
-    await this.addStep("python_1", null, { type: "chart", mark: "bar", x: "region", y: "revenue", title: null });
+    await this.addStep(["python_1"], null, { type: "chart", mark: "bar", x: "region", y: "revenue", title: null });
     this.cells.unshift({ type: "markdown", text: "## Question\nWhich regions bring in most of the revenue?" });
+    if (opts.join) {
+      await this.addSource("/data/regions.csv");
+      await this.addStep(["aggregate_1", "regions"], "Revenue against target", {
+        type: "join",
+        how: "full",
+        on: [{ left: "region", right: "region" }],
+      });
+    }
     // A project received from someone else: their code is not approved here.
     if (opts.received) {
       this.approved.clear();
@@ -403,8 +519,10 @@ export class MockBackend implements Backend {
   async startupProject(): Promise<string | null> {
     return "/projects/regional-revenue";
   }
+  /** The file the next "choose a CSV" dialog returns. */
+  csvToPick = "/data/regions.csv";
   async pickCsv(): Promise<string | null> {
-    return "/data/sales.csv";
+    return this.csvToPick;
   }
   async pickFolder(): Promise<string | null> {
     return "/projects/new";

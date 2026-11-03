@@ -13,6 +13,7 @@ use crate::engine::Engine;
 use crate::hash::{sha256_file, sha256_hex, Sha256};
 use crate::json::Json;
 use crate::model::{Analysis, StepKind, SOURCE_ID};
+use crate::table::Schema;
 use crate::plan::{self, Fingerprints, Plan};
 use crate::python::PythonRunner;
 use crate::review::ReviewPolicy;
@@ -99,11 +100,18 @@ pub struct RunRecord {
     pub started_unix_ms: u128,
     pub engine: String,
     pub python: Option<String>,
-    pub source_path: String,
-    pub source_hash: String,
+    /// Every source as it was read: id, path and content hash.
+    pub sources: Vec<SourceRun>,
     pub steps: Vec<StepRun>,
     /// Problems that did not fail a step, e.g. a result that could not be saved.
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SourceRun {
+    pub id: String,
+    pub path: String,
+    pub sha256: String,
 }
 
 impl RunRecord {
@@ -122,11 +130,19 @@ impl RunRecord {
             ("started_unix_ms", Json::Num(self.started_unix_ms as f64)),
             ("environment", Json::obj(vec![("engine", Json::str(self.engine.clone())), ("python", opt(&self.python))])),
             (
-                "source",
-                Json::obj(vec![
-                    ("path", Json::str(self.source_path.clone())),
-                    ("sha256", Json::str(self.source_hash.clone())),
-                ]),
+                "sources",
+                Json::Arr(
+                    self.sources
+                        .iter()
+                        .map(|s| {
+                            Json::obj(vec![
+                                ("id", Json::str(s.id.clone())),
+                                ("path", Json::str(s.path.clone())),
+                                ("sha256", Json::str(s.sha256.clone())),
+                            ])
+                        })
+                        .collect(),
+                ),
             ),
             (
                 "steps",
@@ -160,15 +176,25 @@ impl RunRecord {
 
     pub fn from_json(j: &Json) -> Result<RunRecord, Error> {
         let env = j.get("environment").ok_or_else(|| Error::Format("missing environment".into()))?;
-        let src = j.get("source").ok_or_else(|| Error::Format("missing source".into()))?;
         let opt = |o: &Json, k: &str| o.get(k).and_then(Json::as_str).map(str::to_string);
+        let read_source = |o: &Json, id: String| -> Result<SourceRun, Error> {
+            Ok(SourceRun { id, path: o.req_str("path")?.to_string(), sha256: o.req_str("sha256")?.to_string() })
+        };
+        // Records from before multi-input analyses have one `source`.
+        let sources = match (j.get("sources").and_then(Json::as_arr), j.get("source")) {
+            (Some(list), _) => list
+                .iter()
+                .map(|o| read_source(o, o.req_str("id")?.to_string()))
+                .collect::<Result<Vec<_>, Error>>()?,
+            (None, Some(o)) => vec![read_source(o, SOURCE_ID.into())?],
+            (None, None) => return Err(Error::Format("missing sources".into())),
+        };
         Ok(RunRecord {
             run_id: j.req_str("run_id")?.to_string(),
             started_unix_ms: j.get("started_unix_ms").and_then(Json::as_f64).unwrap_or(0.0) as u128,
             engine: env.req_str("engine")?.to_string(),
             python: opt(env, "python"),
-            source_path: src.req_str("path")?.to_string(),
-            source_hash: src.req_str("sha256")?.to_string(),
+            sources,
             steps: j
                 .req_arr("steps")?
                 .iter()
@@ -241,11 +267,11 @@ pub struct Session {
     engine: Box<dyn Engine>,
     python: Option<PythonRunner>,
     python_fp: Option<String>,
-    /// (size, modified time, hash) of the source file, so the source is not
-    /// rehashed on every state query.
-    source_fp: RefCell<Option<(u64, SystemTime, String)>>,
-    /// The source converted to Parquet, keyed like a step result.
-    source_ds: Option<(String, Dataset)>,
+    /// (size, modified time, hash) of each source file by id, so sources are
+    /// not rehashed on every state query.
+    source_fp: RefCell<HashMap<String, (u64, SystemTime, String)>>,
+    /// Sources converted to Parquet (by id), keyed like step results.
+    source_ds: HashMap<String, (String, Dataset)>,
     results: HashMap<String, CachedResult>,
     pub last_run: Option<RunRecord>,
     cancel: Arc<AtomicBool>,
@@ -269,8 +295,8 @@ impl Session {
             engine,
             python,
             python_fp,
-            source_fp: RefCell::new(None),
-            source_ds: None,
+            source_fp: RefCell::new(HashMap::new()),
+            source_ds: HashMap::new(),
             results: HashMap::new(),
             last_run: None,
             cancel: Arc::new(AtomicBool::new(false)),
@@ -293,7 +319,7 @@ impl Session {
     pub fn without_saved_results(mut self) -> Result<Self, Error> {
         self.artifacts = ArtifactStore::ephemeral()?;
         self.results.clear();
-        self.source_ds = None;
+        self.source_ds.clear();
         Ok(self)
     }
 
@@ -319,7 +345,9 @@ impl Session {
     /// Delete saved results that the current definition does not use.
     pub fn prune_saved_results(&self) -> Result<usize, Error> {
         let mut keep: HashSet<String> = self.plan()?.keys.into_values().collect();
-        keep.insert(self.source_key()?);
+        for src in &self.analysis.sources {
+            keep.insert(self.source_key(&src.id)?);
+        }
         self.artifacts.prune(&keep)
     }
 
@@ -366,13 +394,11 @@ impl Session {
         &self.project_dir
     }
 
-    fn source_path(&self) -> PathBuf {
-        let p = Path::new(&self.analysis.source.path);
-        if p.is_absolute() {
-            p.to_path_buf()
-        } else {
-            self.project_dir.join(p)
-        }
+    /// Where a source's file is on disk.
+    pub fn source_path(&self, id: &str) -> Result<PathBuf, Error> {
+        let src = self.analysis.source(id).ok_or_else(|| Error::Validation(format!("unknown source `{id}`")))?;
+        let p = Path::new(&src.path);
+        Ok(if p.is_absolute() { p.to_path_buf() } else { self.project_dir.join(p) })
     }
 
     /// SHA-256 of the source file. Streamed, and recomputed only when the
@@ -380,17 +406,19 @@ impl Session {
     /// in the artifact store, so reopening a project does not rehash a large
     /// source. (A content change that keeps both size and modification time
     /// would go unnoticed; editors and copies update the modification time.)
-    pub fn source_hash(&self) -> Result<String, Error> {
-        let path = self.source_path();
+    pub fn source_hash(&self, id: &str) -> Result<String, Error> {
+        let path = self.source_path(id)?;
         let meta = fs::metadata(&path).map_err(|e| Error::Data(format!("cannot read source {}: {e}", path.display())))?;
         let stamp = (meta.len(), meta.modified()?);
-        if let Some((len, modified, hash)) = self.source_fp.borrow().as_ref() {
+        if let Some((len, modified, hash)) = self.source_fp.borrow().get(id) {
             if (*len, *modified) == stamp {
                 return Ok(hash.clone());
             }
         }
         let nanos = stamp.1.duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos().to_string();
-        let saved = self.artifacts.dir().join("source-fingerprint.json");
+        // The first source keeps the file name it had before multi-source analyses.
+        let name = if id == SOURCE_ID { "source-fingerprint.json".to_string() } else { format!("source-fingerprint-{id}.json") };
+        let saved = self.artifacts.dir().join(&name);
         let remembered = fs::read_to_string(&saved).ok().and_then(|t| Json::parse(&t).ok()).and_then(|j| {
             let matches = j.get("path").and_then(Json::as_str) == Some(&*path.to_string_lossy())
                 && j.get("bytes").and_then(Json::as_str) == Some(&*stamp.0.to_string())
@@ -409,29 +437,34 @@ impl Session {
                     ("sha256", Json::str(h.clone())),
                 ]);
                 // Best effort: losing it only costs a rehash next time.
-                let tmp = self.artifacts.dir().join(".source-fingerprint.json.tmp");
+                let tmp = self.artifacts.dir().join(format!(".{name}.tmp"));
                 if fs::write(&tmp, record.to_string_pretty()).is_ok() {
                     let _ = fs::rename(&tmp, &saved);
                 }
                 h
             }
         };
-        *self.source_fp.borrow_mut() = Some((stamp.0, stamp.1, hash.clone()));
+        self.source_fp.borrow_mut().insert(id.to_string(), (stamp.0, stamp.1, hash.clone()));
         Ok(hash)
     }
 
+    /// Content hash of every source, by id.
+    pub fn source_hashes(&self) -> Result<HashMap<String, String>, Error> {
+        self.analysis.sources.iter().map(|s| Ok((s.id.clone(), self.source_hash(&s.id)?))).collect()
+    }
+
     pub fn plan(&self) -> Result<Plan, Error> {
-        let source = self.source_hash()?;
+        let sources = self.source_hashes()?;
         let engine = self.engine.fingerprint();
         plan::plan(
             &self.analysis,
-            &Fingerprints { source: &source, engine: &engine, python: self.python_fp.as_deref() },
+            &Fingerprints { sources: &sources, engine: &engine, python: self.python_fp.as_deref() },
         )
     }
 
-    fn source_key(&self) -> Result<String, Error> {
+    fn source_key(&self, id: &str) -> Result<String, Error> {
         let mut h = Sha256::new();
-        for part in ["vda-source-v1", &self.source_hash()?, &self.engine.fingerprint(), CSV_OPTIONS] {
+        for part in ["vda-source-v1", &self.source_hash(id)?, &self.engine.fingerprint(), CSV_OPTIONS] {
             h.update(part.as_bytes());
             h.update(b"\n");
         }
@@ -440,9 +473,9 @@ impl Session {
 
     /// The source as a Parquet dataset: converted once per source content
     /// and engine version, then reused from the artifact store.
-    pub fn source_dataset(&mut self) -> Result<Dataset, Error> {
-        let key = self.source_key()?;
-        if let Some((k, ds)) = &self.source_ds {
+    pub fn source_dataset(&mut self, id: &str) -> Result<Dataset, Error> {
+        let key = self.source_key(id)?;
+        if let Some((k, ds)) = self.source_ds.get(id) {
             if *k == key {
                 return Ok(ds.clone());
             }
@@ -451,19 +484,19 @@ impl Session {
             Some(Output::Table(ds)) => ds,
             _ => {
                 let tmp = self.artifacts.temp_path(&key);
-                let ds = self.engine.import_csv(&self.source_path(), &tmp).inspect_err(|_| {
+                let ds = self.engine.import_csv(&self.source_path(id)?, &tmp).inspect_err(|_| {
                     let _ = fs::remove_file(&tmp);
                 })?;
                 self.artifacts.commit_table(&key, ds)?
             }
         };
-        self.source_ds = Some((key, ds.clone()));
+        self.source_ds.insert(id.to_string(), (key, ds.clone()));
         Ok(ds)
     }
 
-    /// Column types, missing values, distinct counts, min and max of the source.
-    pub fn source_profile(&mut self) -> Result<Vec<ColumnProfile>, Error> {
-        let ds = self.source_dataset()?;
+    /// Column types, missing values, distinct counts, min and max of a source.
+    pub fn source_profile(&mut self, id: &str) -> Result<Vec<ColumnProfile>, Error> {
+        let ds = self.source_dataset(id)?;
         self.engine.profile(&ds)
     }
 
@@ -471,9 +504,9 @@ impl Session {
         self.results.get(step_id).map(|r| &r.output)
     }
 
-    /// A page of the source, as converted to Parquet.
-    pub fn source_preview(&mut self, offset: u64, limit: u64) -> Result<Table, Error> {
-        let ds = self.source_dataset()?;
+    /// A page of a source, as converted to Parquet.
+    pub fn source_preview(&mut self, id: &str, offset: u64, limit: u64) -> Result<Table, Error> {
+        let ds = self.source_dataset(id)?;
         self.engine.preview(&ds, offset, limit)
     }
 
@@ -522,16 +555,38 @@ impl Session {
     }
 
     fn upstream_needs_review(&self, step_id: &str) -> bool {
-        let mut id = step_id;
-        while let Some(step) = self.analysis.step(id) {
-            id = &step.input;
-            match self.analysis.step(id) {
-                Some(up) if self.review.pending(&up.kind) => return true,
-                Some(_) => {}
-                None => return false,
+        let Some(step) = self.analysis.step(step_id) else { return false };
+        step.inputs.iter().any(|id| match self.analysis.step(id) {
+            Some(up) => self.review.pending(&up.kind) || self.upstream_needs_review(id),
+            None => false,
+        })
+    }
+
+    /// Schema of a source or of a step's held result, if known without
+    /// reading data (sources are converted on first use).
+    pub fn schema_of(&mut self, id: &str) -> Option<Schema> {
+        if self.analysis.is_source(id) {
+            return self.source_dataset(id).ok().map(|d| d.schema);
+        }
+        self.output(id).and_then(Output::as_dataset).map(|d| d.schema.clone())
+    }
+
+    /// Inspectable SQL for a step, including joins whose inputs have results.
+    pub fn pipeline_sql(&mut self, step_id: &str) -> Result<String, Error> {
+        let mut schemas = HashMap::new();
+        let ids: Vec<String> = self
+            .analysis
+            .sources
+            .iter()
+            .map(|s| s.id.clone())
+            .chain(self.analysis.steps.iter().map(|s| s.id.clone()))
+            .collect();
+        for id in ids {
+            if let Some(schema) = self.schema_of(&id) {
+                schemas.insert(id, schema);
             }
         }
-        false
+        compile::pipeline_sql_with(&self.analysis, step_id, &|id| schemas.get(id).cloned())
     }
 
     /// Run every step in dependency order, reusing results whose key is
@@ -544,15 +599,20 @@ impl Session {
     pub fn run_all_with(&mut self, on_step: &mut dyn FnMut(&StepRun)) -> Result<RunRecord, Error> {
         self.cancel.store(false, Ordering::SeqCst);
         let plan = self.plan()?;
-        let source_hash = self.source_hash()?;
+        let hashes = self.source_hashes()?;
+        let sources = self
+            .analysis
+            .sources
+            .iter()
+            .map(|s| SourceRun { id: s.id.clone(), path: s.path.clone(), sha256: hashes[&s.id].clone() })
+            .collect();
         let started = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis();
         let mut record = RunRecord {
             run_id: format!("run-{started}"),
             started_unix_ms: started,
             engine: self.engine.fingerprint(),
             python: self.python_fp.clone(),
-            source_path: self.analysis.source.path.clone(),
-            source_hash,
+            sources,
             steps: Vec::new(),
             warnings: Vec::new(),
         };
@@ -563,15 +623,20 @@ impl Session {
             let step = self.analysis.step(id).unwrap().clone();
             let t0 = Instant::now();
 
-            let upstream = record.step(&step.input).map(|r| r.status.clone());
-            let upstream_ok = step.input == SOURCE_ID || matches!(upstream, Some(RunStatus::Succeeded { .. }));
+            // The first input that did not succeed, if any.
+            let blocked = step.inputs.iter().filter(|i| !self.analysis.is_source(i)).find_map(|i| {
+                match record.step(i).map(|r| r.status.clone()) {
+                    Some(RunStatus::Succeeded { .. }) => None,
+                    other => Some((i.clone(), other)),
+                }
+            });
             let status: RunStatus = if let Some(reason) = &halted {
                 RunStatus::Skipped { reason: reason.clone() }
-            } else if !upstream_ok {
+            } else if let Some((input, upstream)) = blocked {
                 let reason = match upstream {
-                    Some(RunStatus::NeedsReview) => format!("step `{}` is waiting for your review", step.input),
+                    Some(RunStatus::NeedsReview) => format!("step `{input}` is waiting for your review"),
                     Some(RunStatus::Skipped { reason }) if reason.contains("waiting for your review") => reason,
-                    _ => format!("upstream step `{}` did not succeed", step.input),
+                    _ => format!("upstream step `{input}` did not succeed"),
                 };
                 RunStatus::Skipped { reason }
             } else if self.cancel.load(Ordering::SeqCst) {
@@ -616,8 +681,8 @@ impl Session {
     }
 
     fn input_dataset(&mut self, input: &str) -> Result<Dataset, Error> {
-        if input == SOURCE_ID {
-            return self.source_dataset();
+        if self.analysis.is_source(input) {
+            return self.source_dataset(input);
         }
         self.results
             .get(input)
@@ -628,12 +693,13 @@ impl Session {
     /// Execute one step and save its result under `key`.
     fn execute(&mut self, step_id: &str, key: &str) -> Result<Output, Error> {
         let step = self.analysis.step(step_id).unwrap().clone();
-        let input = self.input_dataset(&step.input)?;
+        let inputs = step.inputs.iter().map(|i| self.input_dataset(i)).collect::<Result<Vec<_>, _>>()?;
+        let input = inputs[0].clone();
         let tmp = self.artifacts.temp_path(key);
         let result = (|| -> Result<Output, Error> {
             match &step.kind {
-                StepKind::Filter { .. } | StepKind::Aggregate { .. } | StepKind::Sql { .. } => {
-                    let ds = self.engine.run_step(&step, &input, &tmp)?;
+                StepKind::Filter { .. } | StepKind::Aggregate { .. } | StepKind::Join { .. } | StepKind::Sql { .. } => {
+                    let ds = self.engine.run_step(&step, &inputs, &tmp)?;
                     Ok(Output::Table(self.artifacts.commit_table(key, ds)?))
                 }
                 StepKind::Python { code, timeout_ms } => {
@@ -647,13 +713,15 @@ impl Session {
                         )));
                     }
                     let raw = self.artifacts.temp_path(key);
-                    let ran = runner.run_files(code, &input.path, &raw, Duration::from_millis(*timeout_ms), &self.cancel);
+                    let named: Vec<(String, PathBuf)> =
+                        step.inputs.iter().cloned().zip(inputs.iter().map(|d| d.path.clone())).collect();
+                    let ran = runner.run_inputs(code, &named, &raw, Duration::from_millis(*timeout_ms), &self.cancel);
                     let adopted = ran.and_then(|_| self.engine.adopt_parquet(&raw, &tmp));
                     let _ = fs::remove_file(&raw);
                     Ok(Output::Table(self.artifacts.commit_table(key, adopted?)?))
                 }
                 StepKind::Chart { mark, x, y, title } => {
-                    compile::output_schema(&step, &input.schema)?;
+                    compile::output_schema(&step, std::slice::from_ref(&input.schema))?;
                     let data = self.engine.columns(&input, &[x, y], chart::MAX_CHART_ROWS as u64)?;
                     let spec = chart::vega_lite(&data, input.rows, *mark, x, y, title.as_deref())?;
                     self.artifacts.save_chart(key, &spec)?;
@@ -721,8 +789,12 @@ pub fn replay(
     if run.python != recorded.python {
         env.push(format!("python: {:?} -> {:?}", recorded.python, run.python));
     }
-    if run.source_hash != recorded.source_hash {
-        env.push("source file content changed".into());
+    for now in &run.sources {
+        match recorded.sources.iter().find(|s| s.id == now.id) {
+            Some(then) if then.sha256 != now.sha256 => env.push(format!("source `{}` content changed", now.id)),
+            None => env.push(format!("source `{}` was added", now.id)),
+            _ => {}
+        }
     }
 
     let mut steps = Vec::new();
@@ -748,7 +820,9 @@ pub fn definition_hash(a: &Analysis) -> String {
     let mut h = Sha256::new();
     for s in &a.steps {
         h.update(s.id.as_bytes());
-        h.update(s.input.as_bytes());
+        for input in &s.inputs {
+            h.update(input.as_bytes());
+        }
         h.update(crate::persist::step_kind_to_json(&s.kind).to_string_compact().as_bytes());
     }
     h.hex_digest()

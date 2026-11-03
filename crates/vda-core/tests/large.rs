@@ -29,11 +29,11 @@ fn project(name: &str, rows: usize) -> PathBuf {
 }
 
 fn analysis(steps: Vec<Step>) -> Analysis {
-    Analysis { name: "orders".into(), source: Source { path: "orders.csv".into() }, steps, cells: vec![] }
+    Analysis { name: "orders".into(), sources: vec![Source::primary("orders.csv")], steps, cells: vec![] }
 }
 
 fn step(id: &str, input: &str, kind: StepKind) -> Step {
-    Step { id: id.into(), input: input.into(), label: None, kind }
+    Step { id: id.into(), inputs: vec![input.into()], label: None, kind }
 }
 
 fn by_customer() -> Step {
@@ -84,7 +84,7 @@ fn source_is_converted_once() {
     let dir = project("source-once", 5_000);
     let mut s = session(&dir, vec![by_customer()], EngineOptions::default());
     s.run_all().unwrap();
-    let source = s.source_dataset().unwrap();
+    let source = s.source_dataset(SOURCE_ID).unwrap();
     let converted_at = std::fs::metadata(&source.path).unwrap().modified().unwrap();
     vda_core::persist::save_analysis(&s.analysis, &dir).unwrap();
 
@@ -94,11 +94,11 @@ fn source_is_converted_once() {
     }
     assert!(s.run_all().unwrap().succeeded());
     let mut reopened = Session::open(&dir, Box::new(DuckDbEngine::new().unwrap()), None).unwrap();
-    assert_eq!(reopened.source_dataset().unwrap(), source);
+    assert_eq!(reopened.source_dataset(SOURCE_ID).unwrap(), source);
     assert_eq!(std::fs::metadata(&source.path).unwrap().modified().unwrap(), converted_at);
 
     // Profile is computed in SQL over the file.
-    let profile = reopened.source_profile().unwrap();
+    let profile = reopened.source_profile(SOURCE_ID).unwrap();
     let amount = profile.iter().find(|p| p.name == "amount").unwrap();
     assert_eq!(amount.dtype, DataType::Float);
     assert_eq!(amount.nulls, 5_000usize.div_ceil(101));
@@ -171,7 +171,7 @@ fn python_reads_the_upstream_file_and_types_survive() {
 fn reopening_does_not_rehash_an_unchanged_source() {
     let dir = project("fingerprint", 2_000);
     let s = session(&dir, vec![by_customer()], EngineOptions::default());
-    let real = s.source_hash().unwrap();
+    let real = s.source_hash(SOURCE_ID).unwrap();
     let saved = dir.join("artifacts").join("source-fingerprint.json");
     assert!(saved.exists());
 
@@ -179,13 +179,13 @@ fn reopening_does_not_rehash_an_unchanged_source() {
     let text = std::fs::read_to_string(&saved).unwrap().replace(&real, "marker");
     std::fs::write(&saved, text).unwrap();
     let reopened = session(&dir, vec![by_customer()], EngineOptions::default());
-    assert_eq!(reopened.source_hash().unwrap(), "marker");
+    assert_eq!(reopened.source_hash(SOURCE_ID).unwrap(), "marker");
 
     // Any change to size or modification time makes it hash again.
     let mut csv = std::fs::read_to_string(dir.join("orders.csv")).unwrap();
     csv.push_str("99999,c1,r1,1.00\n");
     std::fs::write(dir.join("orders.csv"), csv).unwrap();
     let after_edit = session(&dir, vec![by_customer()], EngineOptions::default());
-    let new_hash = after_edit.source_hash().unwrap();
+    let new_hash = after_edit.source_hash(SOURCE_ID).unwrap();
     assert!(new_hash != "marker" && new_hash != real);
 }

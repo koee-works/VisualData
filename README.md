@@ -3,7 +3,7 @@
 An integrated workspace for exploring, transforming, analyzing and visualizing data through visual controls, SQL/Python code, and notebooks, without losing the thread of the analysis.
 
 - Product briefs (v0.2.0): [docs/briefs/](docs/briefs/)
-- Decisions: [ADR-0001 deployment model](docs/adr/0001-deployment-model.md), [ADR-0002 build cache](docs/adr/0002-build-cache.md), [ADR-0003 desktop frontend](docs/adr/0003-frontend.md), [ADR-0004 code review and SQL sandbox](docs/adr/0004-code-review-and-sandbox.md)
+- Decisions: [ADR-0001 deployment model](docs/adr/0001-deployment-model.md), [ADR-0002 build cache](docs/adr/0002-build-cache.md), [ADR-0003 desktop frontend](docs/adr/0003-frontend.md), [ADR-0004 code review and SQL sandbox](docs/adr/0004-code-review-and-sandbox.md), [ADR-0005 several sources and multi-input steps](docs/adr/0005-multi-input-steps.md)
 - Current state of the first engineering slice: [STATUS.md](STATUS.md)
 
 ## Layout
@@ -18,9 +18,11 @@ crates/vda-core/          Rust core: model, compiler, planner, sessions, DuckDB 
   tests/python_runner.rs  timeout, cancel, memory cap, env isolation, type preservation
   tests/large.rs          disk-backed results: paging, spilling, source converted once
   tests/sandbox.rs        custom SQL: project files only, one read-only query
+  tests/multi_input.rs    several sources, joins, SQL/Python reading several inputs, format 1 compatibility
   examples/slice.rs       runs the slice end to end and writes a project folder
   examples/bench.rs       large-data benchmark (see STATUS.md for results)
 examples/regional-revenue/sales.csv   sample dataset (60 orders, with missing values)
+examples/regional-revenue/regions.csv second sample: a manager and revenue target per region
 docs/adr/                 architecture decision records
 .github/workflows/ci.yml  CI with build caching (ADR-0002)
 ```
@@ -40,6 +42,12 @@ npm run tauri dev                  # the app, with hot reload
 npm run dev                        # the UI alone in a browser, against an in-memory mock (?demo=1 seeds an analysis)
 npm run check && npm test          # types and unit tests
 ```
+
+### Combining data
+
+**Add source** copies another CSV into the project; each source is a root of the pipeline. A **Join** step combines two tables on pairs of equal columns, keeping only matching rows, every row of the first table, or every row of both. SQL steps can read several inputs (the first as `input`, every one by its id), and Python steps get them all in `dfs`. See [ADR-0005](docs/adr/0005-multi-input-steps.md).
+
+![A full join of revenue by region with each region's target](docs/screenshots/8-join.png)
 
 ### Opening projects from other people
 
@@ -77,7 +85,7 @@ CI does the same automatically and also caches the compiled dependency tree. See
 
 ```
 regional-revenue-project/
-  analysis.json                     the analysis definition (format v1)
+  analysis.json                     the analysis definition (format 2; format 1 still opens)
   sales.csv                         source
   artifacts/<cache-key>.parquet     saved step results (tables), with .meta.json beside each
   artifacts/source-<key>.parquet    the source, converted once
@@ -100,7 +108,7 @@ cargo run --release -p vda-core --example bench -- 10000000 ./bench-project 1024
 ## Core ideas in the code
 
 - **One analysis identity.** Visual steps, code steps and notebook cells all refer to step ids in one `Analysis`.
-- **Cache keys chain.** A step's key hashes its definition, its upstream key (or the source file hash), the engine version, and for Python the interpreter, pandas and pyarrow versions. Any upstream change alters every downstream key, which is how stale results are detected.
+- **Cache keys chain.** A step's key hashes its definition, its inputs' keys (or the source file hashes), the engine version, and for Python the interpreter, pandas and pyarrow versions. Any upstream change alters every downstream key, which is how stale results are detected.
 - **Saved results are addressed by key.** A file named after the current key is by construction the current result, so reopening a project or undoing an edit reuses work without any bookkeeping.
 - **Honest boundaries.** Visual steps compile to SQL. Custom SQL and Python are never turned back into visual controls; they are labelled as custom steps with explicit input (`input` / `df`) and output (`result`).
 - **Replay is a separate check.** Replay runs the saved analysis in a clean session that ignores saved results, and compares each step's content hash with the recording, distinguishing *reproduced*, *diverged* (nondeterminism) and *inputs changed*.

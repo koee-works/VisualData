@@ -2,7 +2,6 @@
   import { Tabs } from "bits-ui";
   import { X } from "@lucide/svelte";
   import type { Workspace } from "../workspace.svelte";
-  import { SOURCE_ID } from "../api/types";
   import TopBar from "./TopBar.svelte";
   import Pipeline from "./Pipeline.svelte";
   import StepEditor from "./StepEditor.svelte";
@@ -38,7 +37,7 @@
 
     <Tabs.Root bind:value={ws.centerTab} class="flex min-h-0 min-w-0 flex-col">
       <Tabs.List class="flex border-b border-rule bg-panel px-3">
-        <Tabs.Trigger value="step" class="tab">{ws.selected === SOURCE_ID ? "Source" : "Step"}</Tabs.Trigger>
+        <Tabs.Trigger value="step" class="tab">{ws.selectedSource ? "Source" : "Step"}</Tabs.Trigger>
         <Tabs.Trigger value="notebook" class="tab">Notebook</Tabs.Trigger>
       </Tabs.List>
 
@@ -55,7 +54,7 @@
             {#if ws.selectedStep}
               <StepEditor {ws} step={ws.selectedStep} />
             {:else}
-              <SourceOverview {ws} />
+              {#if ws.selectedSource}<SourceOverview {ws} source={ws.selectedSource} />{/if}
             {/if}
           </div>
           <button

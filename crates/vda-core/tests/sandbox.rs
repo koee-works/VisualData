@@ -24,8 +24,8 @@ fn session(project: &Path, extra: Vec<PathBuf>, sql: &str) -> Session {
     let opts = EngineOptions { allowed_paths: Some(allowed), ..Default::default() };
     let analysis = Analysis {
         name: "sandbox".into(),
-        source: Source { path: "data.csv".into() },
-        steps: vec![Step { id: "q".into(), input: SOURCE_ID.into(), label: None, kind: StepKind::Sql { sql: sql.into() } }],
+        sources: vec![Source::primary("data.csv")],
+        steps: vec![Step { id: "q".into(), inputs: vec![SOURCE_ID.into()], label: None, kind: StepKind::Sql { sql: sql.into() } }],
         cells: vec![],
     };
     Session::new(analysis, project, Box::new(DuckDbEngine::with_options(opts).unwrap()), None).unwrap()
@@ -95,7 +95,7 @@ fn a_source_outside_the_project_can_be_allowed_explicitly() {
     let csv = outside.join("orders.csv");
     std::fs::write(&csv, "region,amount\nEast,1\n").unwrap();
     let mut s = session(&project, vec![csv.clone()], "SELECT * FROM input");
-    s.analysis.source.path = csv.to_string_lossy().into_owned();
+    s.analysis.sources[0].path = csv.to_string_lossy().into_owned();
     assert!(s.run_all().unwrap().succeeded());
     // Allowing one file does not open its folder.
     std::fs::write(outside.join("other.csv"), "x\n1\n").unwrap();

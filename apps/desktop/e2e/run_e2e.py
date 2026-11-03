@@ -7,7 +7,11 @@ open a project received from someone else and review its Python before it
 can run (ADR-0004), run, inspect results and SQL, edit a step and see downstream
 results go outdated, rerun, read the notebook, view the chart.
 
-Usage: run_e2e.py <app-binary> <project-dir> <screenshot-dir>
+Then, with a second project (two sources, a join, and SQL reading two
+inputs): run, inspect the join and its SQL, change the join kind and see the
+steps after it go outdated, rerun, and look at the second source.
+
+Usage: run_e2e.py <app-binary> <project-dir> <screenshot-dir> [<join-project-dir>]
 Needs a display (Xvfb in CI) and tauri-driver on PATH.
 """
 
@@ -109,19 +113,18 @@ class Session:
 
 def node(title):
     """A pipeline node by its visible title."""
-    return f"//nav[@aria-label='Pipeline']//button[.//span[contains(normalize-space(.), {json.dumps(title)})]]"
+    # Titles are the first truncated line of a node; "with …" lines are not titles.
+    return (
+        "//nav[@aria-label='Pipeline']//button[.//span[contains(@class,'truncate') and "
+        f"not(starts-with(normalize-space(.), 'with ')) and starts-with(normalize-space(.), {json.dumps(title)})]]"
+    )
 
 
 STATUS = "//header//p[@role='status']"
 
 
-def main():
-    app, project, shots = sys.argv[1:4]
-    os.makedirs(shots, exist_ok=True)
-    # A fresh approvals file: this "user" has approved nothing yet.
-    approvals = os.path.join(shots, "approvals.json")
-    if os.path.exists(approvals):
-        os.remove(approvals)
+def with_app(app, project, shots, approvals, scenario):
+    """Start the app on `project` through tauri-driver and run `scenario(s)`."""
     env = dict(os.environ, VDA_OPEN=project, VDA_APPROVALS=approvals)
     driver = subprocess.Popen(["tauri-driver", "--port", "4444"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
     s = None
@@ -133,7 +136,41 @@ def main():
             except Exception:
                 time.sleep(0.25)
         s = Session(app)
-        step = lambda n, msg: print(f"{n}. {msg}")
+        scenario(s)
+    except BaseException:
+        if s:
+            try:
+                s.screenshot(f"{shots}/failure.png")
+            except Exception:
+                pass
+        raise
+    finally:
+        if s:
+            s.close()
+        driver.terminate()
+        driver.wait(timeout=10)
+
+
+def step(n, msg):
+    print(f"{n}. {msg}")
+
+
+def main():
+    app, project, shots = sys.argv[1:4]
+    join_project = sys.argv[4] if len(sys.argv) > 4 else None
+    os.makedirs(shots, exist_ok=True)
+    # A fresh approvals file: this "user" has approved nothing yet.
+    approvals = os.path.join(shots, "approvals.json")
+    if os.path.exists(approvals):
+        os.remove(approvals)
+    with_app(app, project, shots, approvals, lambda s: received_project(s, shots))
+    if join_project:
+        with_app(app, join_project, shots, approvals, lambda s: joins(s, shots))
+    print("PASS: end-to-end scenario")
+
+
+def received_project(s, shots):
+    if True:  # (indented block kept from the single-scenario version)
 
         mark = lambda label: f"//nav[@aria-label='Pipeline']//span[@role='img' and @aria-label={json.dumps(label)}]"
         dialog = "//*[@role='dialog']"
@@ -203,19 +240,49 @@ def main():
         s.click(node("Revenue share"))
         s.find("//textarea[@aria-label='Python code']")
         s.screenshot(f"{shots}/7-python.png")
-        print("PASS: end-to-end scenario")
-    except BaseException:
-        if s:
-            try:
-                s.screenshot(f"{shots}/failure.png")
-            except Exception:
-                pass
-        raise
-    finally:
-        if s:
-            s.close()
-        driver.terminate()
-        driver.wait(timeout=10)
+
+
+def joins(s, shots):
+    mark = lambda label: f"//nav[@aria-label='Pipeline']//span[@role='img' and @aria-label={json.dumps(label)}]"
+    table = "//div[@role='table']"
+
+    step(10, "Open a project with two sources: each is a root, the join says what else it reads")
+    s.wait_text(STATUS, "need a run")
+    s.find(node("regions.csv"))
+    assert "with regions.csv" in s.text(node("Revenue against target"))
+
+    step(11, "Run: the full join keeps a region with no orders; its SQL is a full outer join")
+    s.click("//button[normalize-space()='Run analysis']")
+    s.wait_text(STATUS, "All results current")
+    assert s.count(mark("Current")) == 3
+    s.click(node("Revenue against target"))
+    s.wait_text(table, "Central")
+    assert "Mei Chen" in s.text(table)
+    s.screenshot(f"{shots}/8-join.png")
+    s.click("//button[@role='tab' and normalize-space()='SQL']")
+    s.wait_text("//pre", "FULL OUTER JOIN")
+
+    step(12, "Keep only matching rows: the join and the step after it become outdated, then rerun")
+    s.click("//button[@role='tab' and normalize-space()='Data']")
+    s.click("//label[.//span[normalize-space()='Only rows that match']]")
+    s.click("//button[normalize-space()='Save step']")
+    s.wait_text(STATUS, "2 of 3 results need a run")
+    s.click("//button[normalize-space()='Run analysis']")
+    s.wait_text(STATUS, "All results current")
+    s.wait_text(node("Revenue against target"), "4 rows")
+    s.wait_text(table, "East")
+    assert "Central" not in s.text(table)
+
+    step(13, "Custom SQL reads the second source by name")
+    s.click(node("Regions below target"))
+    s.find("//section[@aria-label='Step editor']//p//code[normalize-space()='regions']")
+    s.wait_text(table, "Tom Okafor")  # North, South and West are below target; East is not
+    assert "Priya Raman" not in s.text(table)
+    s.screenshot(f"{shots}/9-sql-two-inputs.png")
+
+    step(14, "The second source has its own profile")
+    s.click(node("regions.csv"))
+    s.find("//section[@aria-label='Source']//td[normalize-space()='manager']")
 
 
 if __name__ == "__main__":

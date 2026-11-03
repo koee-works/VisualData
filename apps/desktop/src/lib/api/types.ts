@@ -45,6 +45,13 @@ export type Literal =
   | { timestamp: string };
 
 export type CmpOp = "=" | "<>" | "<" | "<=" | ">" | ">=" | "IS NULL" | "IS NOT NULL";
+export type JoinHow = "inner" | "left" | "full";
+
+export interface JoinKey {
+  left: string;
+  right: string;
+}
+
 export type AggFunc = "COUNT" | "SUM" | "AVG" | "MIN" | "MAX";
 export type Mark = "bar" | "line" | "point";
 
@@ -63,6 +70,7 @@ export interface Measure {
 export type StepOp =
   | { type: "filter"; predicates: Predicate[] }
   | { type: "aggregate"; group_by: string[]; measures: Measure[] }
+  | { type: "join"; how: JoinHow; on: JoinKey[] }
   | { type: "sql"; sql: string }
   | { type: "python"; code: string; timeout_ms: number }
   | { type: "chart"; mark: Mark; x: string; y: string; title: string | null };
@@ -72,7 +80,8 @@ export type StepStateLabel = "fresh" | "stale" | "not run" | "failed" | "cancell
 
 export interface StepView {
   id: string;
-  input: string;
+  /** Steps or sources this step reads; the first is its main input. */
+  inputs: string[];
   label: string | null;
   op: StepOp;
   mode: StepMode;
@@ -89,7 +98,8 @@ export type NotebookCell = { type: "markdown"; text: string } | { type: "step"; 
 export interface AnalysisView {
   project_dir: string;
   name: string;
-  source: { path: string; rows: number; columns: Column[] };
+  /** Data files, in the order they were added. */
+  sources: SourceView[];
   steps: StepView[];
   cells: NotebookCell[];
   python: string | null;
@@ -97,15 +107,13 @@ export interface AnalysisView {
   review: ReviewItem[];
   /** Python runs without review until the app quits (never saved). */
   trust_all: boolean;
-  /** Absolute path of a source kept outside the project folder, if any. */
-  external_source: string | null;
 }
 
 /** Code the user is asked to read before it runs. */
 export interface ReviewItem {
   step_id: string;
   label: string | null;
-  input: string;
+  inputs: string[];
   code: string;
 }
 
@@ -124,4 +132,15 @@ export interface RunSummary {
   steps: StepEvent[];
 }
 
+export interface SourceView {
+  /** How steps and custom SQL refer to this source. */
+  id: string;
+  path: string;
+  rows: number;
+  columns: Column[];
+  /** Kept outside the project folder. */
+  external: boolean;
+}
+
+/** Id of an analysis's first source. */
 export const SOURCE_ID = "source";

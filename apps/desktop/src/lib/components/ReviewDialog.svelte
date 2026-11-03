@@ -3,7 +3,6 @@
   import { ShieldAlert } from "@lucide/svelte";
   import type { Workspace } from "../workspace.svelte";
   import type { ReviewItem } from "../api/types";
-  import { SOURCE_ID } from "../api/types";
   import { describe, stepTitle } from "../format";
 
   // Python steps run as the user, so code the user did not write in this
@@ -19,9 +18,7 @@
   }
 
   function inputName(item: ReviewItem): string {
-    if (item.input === SOURCE_ID) return ws.view?.source.path ?? "the source";
-    const step = ws.view?.steps.find((s) => s.id === item.input);
-    return step ? stepTitle(step) : item.input;
+    return item.inputs.map((i) => ws.nameOf(i)).join(" and ");
   }
 
   function lines(code: string): number {

@@ -19,7 +19,12 @@
       if (q.has("demo")) {
         const mock = backend as import("./lib/api/mock").MockBackend;
         const demo = q.get("demo");
-        await mock.seedDemo({ run: demo !== "fresh-start" && demo !== "review", editAfterRun: demo === "stale", received: demo === "review" });
+        await mock.seedDemo({
+          run: demo !== "fresh-start" && demo !== "review",
+          editAfterRun: demo === "stale",
+          received: demo === "review",
+          join: demo === "join",
+        });
       }
     }
     const w = new Workspace(backend);

@@ -39,9 +39,9 @@ fn received_project(name: &str) -> PathBuf {
     let dir = temp(name);
     let mut author = person(&temp(&format!("{name}-author.json")));
     author.create_project(&dir, &sample(), "Shared with me").unwrap();
-    author.add_step("source", None, &python_op(CODE)).unwrap();
+    author.add_step(&["source".to_string()], None, &python_op(CODE)).unwrap();
     author
-        .add_step("python_1", None, &json!({"type": "sql", "sql": "SELECT * FROM input ORDER BY revenue DESC"}))
+        .add_step(&["python_1".to_string()], None, &json!({"type": "sql", "sql": "SELECT * FROM input ORDER BY revenue DESC"}))
         .unwrap();
     let view = author.view().unwrap();
     assert!(view.review.is_empty(), "code the author wrote in the app is approved for the author");
@@ -111,11 +111,11 @@ fn editing_only_the_label_does_not_approve_code() {
     let dir = received_project("label");
     let mut me = person(&temp("label-me.json"));
     me.open_project(&dir).unwrap();
-    me.update_step("python_1", Some("Revenue by region".into()), &python_op(CODE)).unwrap();
+    me.update_step("python_1", Some("Revenue by region".into()), &python_op(CODE), None).unwrap();
     assert_eq!(state(&mut me, "python_1"), "needs review");
 
     // Rewriting the code is writing it.
-    me.update_step("python_1", None, &python_op("result = df")).unwrap();
+    me.update_step("python_1", None, &python_op("result = df"), None).unwrap();
     assert_eq!(state(&mut me, "python_1"), "not run");
 }
 
@@ -127,7 +127,7 @@ fn received_sql_runs_without_review_but_only_inside_the_project() {
     let mut author = person(&temp("sql-author.json"));
     author.create_project(&dir, &sample(), "SQL").unwrap();
     let sql = format!("SELECT * FROM read_csv('{}')", secret.display());
-    author.add_step("source", None, &json!({"type": "sql", "sql": sql})).unwrap();
+    author.add_step(&["source".to_string()], None, &json!({"type": "sql", "sql": sql})).unwrap();
     author.close_project();
 
     let mut me = person(&temp("sql-me.json"));

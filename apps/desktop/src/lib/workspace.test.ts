@@ -27,7 +27,7 @@ describe("Workspace", () => {
     expect(f?.id).toBe("filter_1");
     expect(ws.selected).toBe("filter_1");
     const a = await ws.addStep(aggregate);
-    expect(a?.input).toBe("filter_1");
+    expect(a?.inputs).toEqual(["filter_1"]);
     flushSync();
     expect(ws.ordered.map((s) => s.id)).toEqual(["filter_1", "aggregate_1"]);
     expect(ws.depth["aggregate_1"]).toBe(2);
@@ -169,5 +169,70 @@ describe("Code review (ADR-0004)", () => {
     const ws = new Workspace(mock);
     await ws.open("/projects/mine");
     expect(ws.reviewOpen).toBe(false);
+  });
+});
+
+describe("Several sources and joins", () => {
+  async function joined() {
+    const mock = new MockBackend();
+    await mock.seedDemo({ run: false, editAfterRun: false, join: true });
+    const ws = new Workspace(mock);
+    await ws.open("/projects/x");
+    return { ws, mock };
+  }
+
+  it("shows one tree per source, with the join under its main input", async () => {
+    const { ws } = await joined();
+    flushSync();
+    expect(ws.tree.map((t) => t.source.id)).toEqual(["source", "regions"]);
+    expect(ws.tree[0]!.steps.map((r) => r.step.id)).toEqual(["filter_1", "aggregate_1", "python_1", "chart_1", "join_1"]);
+    expect(ws.tree[1]!.steps).toEqual([]);
+    expect(ws.nameOf("regions")).toBe("regions.csv");
+    expect(ws.view!.steps.find((s) => s.id === "join_1")!.inputs).toEqual(["aggregate_1", "regions"]);
+  });
+
+  it("runs a full join: every region, including one without orders", async () => {
+    const { ws } = await joined();
+    await ws.run();
+    expect(ws.progress["join_1"]!.status).toBe("succeeded");
+    const page = await ws.backend.page("join_1", 0, 50);
+    expect(page.columns.map((c) => c.name)).toEqual(["region", "orders", "revenue", "manager", "target"]);
+    const regions = page.rows.map((r) => (r[0]!.t === "text" ? r[0]!.v : null));
+    expect(regions).toContain("Central");
+  });
+
+  it("adds a source from a file and selects it", async () => {
+    const ws = new Workspace(new MockBackend());
+    await ws.open("/projects/x");
+    await ws.addSource();
+    expect(ws.view!.sources.map((s) => s.id)).toEqual(["source", "regions"]);
+    expect(ws.selected).toBe("regions");
+    expect(ws.selectedSource?.columns.map((c) => c.name)).toEqual(["region", "manager", "target"]);
+  });
+
+  it("offers inputs that would not create a cycle", async () => {
+    const { ws } = await joined();
+    flushSync();
+    const forFilter = ws.readable("filter_1").map((o) => o.id);
+    expect(forFilter).toEqual(["source", "regions"]);
+    const forJoin = ws.readable("join_1").map((o) => o.id);
+    expect(forJoin).toContain("aggregate_1");
+    expect(forJoin).not.toContain("join_1");
+  });
+
+  it("changes a join's second input and keeps a source that is read", async () => {
+    const { ws } = await joined();
+    const j = ws.view!.steps.find((s) => s.id === "join_1")!;
+    expect(await ws.saveStep("join_1", null, j.op, ["aggregate_1", "filter_1"])).toBe(true);
+    expect(ws.view!.steps.find((s) => s.id === "join_1")!.inputs).toEqual(["aggregate_1", "filter_1"]);
+    await ws.removeSource("regions");
+    expect(ws.view!.sources.map((s) => s.id)).toEqual(["source"]);
+  });
+
+  it("explains why a source cannot be removed", async () => {
+    const { ws } = await joined();
+    await ws.removeSource("regions");
+    expect(ws.error?.message).toContain("join_1");
+    expect(ws.view!.sources).toHaveLength(2);
   });
 });

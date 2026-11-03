@@ -111,9 +111,9 @@ jobs:
           VDA_PYTHON: python
         run: |
           cargo install tauri-driver --locked
-          apps/desktop/e2e/prepare.sh "$RUNNER_TEMP/e2e-project"
+          apps/desktop/e2e/prepare.sh "$RUNNER_TEMP/e2e-project" "$RUNNER_TEMP/e2e-join"
           xvfb-run -a -s "-screen 0 1440x900x24" \
-            python apps/desktop/e2e/run_e2e.py "$PWD/target/debug/vda-desktop" "$RUNNER_TEMP/e2e-project" e2e-screenshots
+            python apps/desktop/e2e/run_e2e.py "$PWD/target/debug/vda-desktop" "$RUNNER_TEMP/e2e-project" e2e-screenshots "$RUNNER_TEMP/e2e-join"
 
       - uses: actions/upload-artifact@v4
         if: always()

@@ -58,10 +58,10 @@ fn generate(path: &PathBuf, rows: u64) -> std::io::Result<()> {
 }
 
 fn analysis() -> Analysis {
-    let st = |id: &str, input: &str, kind| Step { id: id.into(), input: input.into(), label: None, kind };
+    let st = |id: &str, input: &str, kind| Step { id: id.into(), inputs: vec![input.into()], label: None, kind };
     Analysis {
         name: "Orders benchmark".into(),
-        source: Source { path: "orders.csv".into() },
+        sources: vec![Source::primary("orders.csv")],
         steps: vec![
             st(
                 "valid",
@@ -137,7 +137,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut s = Session::new(analysis(), &dir, Box::new(engine()?), python())?;
     let t = Instant::now();
-    let src = s.source_dataset()?;
+    let src = s.source_dataset(SOURCE_ID)?;
     note("import CSV → Parquet (first time)", format!("{:.1} s", t.elapsed().as_secs_f64()));
     note("source rows", src.rows.to_string());
     note("source Parquet size", format!("{:.0} MB", src.bytes as f64 / 1e6));
@@ -162,7 +162,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(page.rows.len(), 50);
 
     let t = Instant::now();
-    let profile = s.source_profile()?;
+    let profile = s.source_profile(SOURCE_ID)?;
     note("profile source (all columns)", format!("{:.1} s", t.elapsed().as_secs_f64()));
     assert_eq!(profile.len(), 8);
 
