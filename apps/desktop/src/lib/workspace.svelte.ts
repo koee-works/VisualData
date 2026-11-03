@@ -55,6 +55,14 @@ export class Workspace {
     this.reviewOpen = this.pendingReview.length > 0;
   }
 
+  /** "Trust all in this session": run all Python without review until the app quits. */
+  async setTrustAll(on: boolean) {
+    const v = await this.act(on ? "Trust all Python" : "Ask before running Python", () => this.backend.setTrustAll(on));
+    if (v) this.apply(v);
+    if (on) this.reviewOpen = false;
+    else this.reviewOpen = this.pendingReview.length > 0;
+  }
+
   /** Approve the shown code of these steps; closes the dialog when none are left. */
   async approve(stepIds: string[]) {
     this.apply(await this.act("Approve code", () => this.backend.approve(stepIds)));

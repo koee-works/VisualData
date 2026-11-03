@@ -16,7 +16,7 @@ From the "Shared team acceptance" section of the v0.2.0 briefs. Tests: `crates/v
 | 6 | Change an upstream step; downstream stale until rerun | Done | `step6_…`, `undoing_an_edit_reuses_the_earlier_saved_results` |
 | 7 | Controlled failure: diagnose, cancel or correct, recover | Done | `step7_…` (2 tests), `unreadable_saved_result_is_recomputed` |
 
-All 74 Rust tests pass (`cargo test -p vda-core -p vda-app`), plus 16 frontend unit tests and the desktop end-to-end scenario (below). The demo writes a complete project folder: `cargo run -p vda-core --example slice -- <dir>`.
+All 76 Rust tests pass (`cargo test -p vda-core -p vda-app`), plus 17 frontend unit tests and the desktop end-to-end scenario (below). The demo writes a complete project folder: `cargo run -p vda-core --example slice -- <dir>`.
 
 ## What exists
 
@@ -109,6 +109,7 @@ Before this change, results were in-memory tables. The regional-revenue sample w
 | Part | Behaviour | Tests |
 |---|---|---|
 | Python review | Python code runs only once its exact text (SHA-256) is approved. Approvals live per user outside every project; code written or edited in the app is approved as it is saved; a label-only save keeps unreviewed code unreviewed. Unapproved steps report *needs review*, steps after them *waiting on review*; everything else runs. | `review.rs` (unit), `crates/vda-app/tests/review.rs` (received project, approval remembered across restarts, edited file asks again, label-only save), `workspace.test.ts` |
+| Trust all in this session | *Trust all until I quit* runs every Python step in every project until the app closes. Memory only, records no approvals, shown in the top bar with *Ask again*. | `trusting_all_is_never_saved`, `trusting_all_lasts_for_this_app_only`, `workspace.test.ts` |
 | Review UI | Opening a project with unapproved code shows a dialog with each step's full code, what it reads, and what Python can do; *Not now* keeps the project usable. A top-bar button reopens it; the step editor has an inline *Approve*. | e2e steps 1–3, `docs/screenshots/0-review.png` |
 | SQL sandbox | DuckDB may touch only the project folder, its spill directory and an external source file, then its configuration is locked. Custom SQL must be one read-only query, checked with DuckDB's parser before it runs. | `crates/vda-core/tests/sandbox.rs` (reads outside the project, `../`, globs, `COPY`, `ATTACH`, `INSTALL`, `SET`, `PRAGMA`, injected second statements), `review.rs` (received SQL cannot read a secret file) |
 

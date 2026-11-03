@@ -140,3 +140,31 @@ fn received_sql_runs_without_review_but_only_inside_the_project() {
     assert!(!detail.contains("hunter2"));
     assert!(detail.to_lowercase().contains("permission") || detail.contains("not allowed"), "{detail}");
 }
+
+#[test]
+fn trusting_all_lasts_for_this_app_only() {
+    let dir = received_project("trust-all");
+    let approvals = temp("trust-all-me.json");
+    let mut me = person(&approvals);
+    me.open_project(&dir).unwrap();
+
+    let view = me.set_trust_all(true).unwrap().unwrap();
+    assert!(view.trust_all && view.review.is_empty());
+    assert!(me.run(&mut |_| {}).unwrap().succeeded, "everything runs without asking");
+
+    // It also covers projects opened later in the same app.
+    me.close_project();
+    let other = received_project("trust-all-other");
+    let view = me.open_project(&other).unwrap();
+    assert!(view.trust_all && view.review.is_empty());
+
+    // Nothing was recorded as approved: a restarted app asks again.
+    let mut restarted = person(&approvals);
+    let view = restarted.open_project(&dir).unwrap();
+    assert!(!view.trust_all);
+    assert_eq!(view.review.len(), 1);
+
+    // Turning it off asks again at once.
+    let view = me.set_trust_all(false).unwrap().unwrap();
+    assert_eq!(view.review.len(), 1);
+}

@@ -149,6 +149,20 @@ describe("Code review (ADR-0004)", () => {
     expect(ws.pendingReview).toEqual([]);
   });
 
+  it("trusts all Python for the session, and asks again when switched off", async () => {
+    const { ws, mock } = await received();
+    await ws.setTrustAll(true);
+    expect(ws.reviewOpen).toBe(false);
+    expect(ws.view!.trust_all).toBe(true);
+    expect(ws.pendingReview).toEqual([]);
+    await ws.run();
+    expect(Object.values(ws.progress).every((e) => e.status === "succeeded")).toBe(true);
+    expect(mock.approved.size).toBe(0);
+    await ws.setTrustAll(false);
+    expect(ws.pendingReview.map((r) => r.step_id)).toEqual(["python_1"]);
+    expect(ws.reviewOpen).toBe(true);
+  });
+
   it("does not open the dialog for the user's own project", async () => {
     const mock = new MockBackend();
     await mock.seedDemo({ run: false, editAfterRun: false });

@@ -19,6 +19,7 @@ export const tauriBackend: Backend = {
   setCells: (cells: NotebookCell[]) => invoke<AnalysisView>("set_cells", { cells }),
   rename: (name) => invoke<AnalysisView>("rename", { name }),
   approve: (stepIds: string[]) => invoke<AnalysisView>("approve", { stepIds }),
+  setTrustAll: (on: boolean) => invoke<AnalysisView | null>("set_trust_all", { on }),
 
   async run({ onStep }: RunHandlers) {
     // Listen before starting so no event is missed; the command itself

@@ -22,6 +22,8 @@ export interface Backend {
   rename(name: string): Promise<AnalysisView>;
   /** Approve the current code of these steps so they can run. */
   approve(stepIds: string[]): Promise<AnalysisView>;
+  /** Run all Python without review until the app quits, or stop. */
+  setTrustAll(on: boolean): Promise<AnalysisView | null>;
   /** Resolves when the run ends; progress arrives through `onStep`. */
   run(handlers: RunHandlers): Promise<RunSummary>;
   cancel(): Promise<void>;

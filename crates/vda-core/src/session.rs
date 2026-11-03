@@ -332,6 +332,10 @@ impl Session {
         &self.review
     }
 
+    pub fn review_policy_mut(&mut self) -> &mut ReviewPolicy {
+        &mut self.review
+    }
+
     /// Steps whose code is waiting for review, in execution order.
     pub fn pending_review(&self) -> Vec<String> {
         let order = plan::validate(&self.analysis).unwrap_or_default();

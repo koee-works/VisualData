@@ -90,6 +90,7 @@ export class MockBackend implements Backend {
   failed = new Map<string, string>();
   /** Python code (exact text) the user has approved. */
   approved = new Set<string>();
+  trustAll = false;
   /** Milliseconds each step takes in `run` (tests use 0). */
   stepDelay = 0;
   private cancelled = false;
@@ -106,7 +107,7 @@ export class MockBackend implements Backend {
   }
 
   private needsReview(s: MockStep): boolean {
-    return s.op.type === "python" && !this.approved.has(s.op.code);
+    return s.op.type === "python" && !this.trustAll && !this.approved.has(s.op.code);
   }
 
   private state(s: MockStep): StepStateLabel {
@@ -148,6 +149,7 @@ export class MockBackend implements Backend {
         .filter((s) => this.needsReview(s))
         .map((s) => ({ step_id: s.id, label: s.label, input: s.input, code: s.op.type === "python" ? s.op.code : "" })),
       external_source: null,
+      trust_all: this.trustAll,
     };
   }
 
@@ -254,6 +256,11 @@ export class MockBackend implements Backend {
       const s = this.steps.find((x) => x.id === id);
       if (s?.op.type === "python") this.approved.add(s.op.code);
     }
+    return this.view();
+  }
+
+  async setTrustAll(on: boolean): Promise<AnalysisView | null> {
+    this.trustAll = on;
     return this.view();
   }
 

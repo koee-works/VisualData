@@ -94,6 +94,13 @@ async fn approve(s: State<'_, Shared>, step_ids: Vec<String>) -> Res<AnalysisVie
     with(&s, |a| a.approve(&step_ids))
 }
 
+/// "Trust all in this session": Python runs without review until the app
+/// quits. Kept in memory only.
+#[tauri::command]
+async fn set_trust_all(s: State<'_, Shared>, on: bool) -> Res<Option<AnalysisView>> {
+    with(&s, |a| a.set_trust_all(on))
+}
+
 #[tauri::command]
 async fn rename(s: State<'_, Shared>, name: String) -> Res<AnalysisView> {
     with(&s, |a| a.rename(&name))
@@ -147,6 +154,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             startup_project,
             approve,
+            set_trust_all,
             create_project,
             open_project,
             view,

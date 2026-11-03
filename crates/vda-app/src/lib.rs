@@ -142,6 +142,8 @@ pub struct AnalysisView {
     pub python: Option<String>,
     /// Python steps waiting for the user's approval, in run order.
     pub review: Vec<ReviewItem>,
+    /// Python runs without review until the app quits (never saved).
+    pub trust_all: bool,
     /// Set when the source file lives outside the project folder (custom
     /// SQL may read it; nothing else outside the folder).
     pub external_source: Option<String>,
@@ -235,6 +237,9 @@ pub struct App {
     /// Where approvals are kept; `None` keeps them in memory for this App.
     approvals_path: Option<PathBuf>,
     memory_approvals: Approvals,
+    /// "Trust all in this session": lasts as long as this App, for every
+    /// project opened in it, and is never written anywhere.
+    trust_all: bool,
 }
 
 impl Default for App {
@@ -246,7 +251,7 @@ impl Default for App {
 impl App {
     /// Approvals are kept in memory until `with_approvals_file` is used.
     pub fn new(engine_options: EngineOptions, interpreter: PathBuf) -> Self {
-        App { session: None, engine_options, interpreter, approvals_path: None, memory_approvals: Approvals::in_memory() }
+        App { session: None, engine_options, interpreter, approvals_path: None, memory_approvals: Approvals::in_memory(), trust_all: false }
     }
 
     /// Keep approvals in this file (outside any project, so a project can
@@ -273,10 +278,11 @@ impl App {
             Some(a) => Session::new(a, dir, engine, python)?,
             None => Session::open(dir, engine, python)?,
         };
-        let approvals = match &self.approvals_path {
+        let mut approvals = match &self.approvals_path {
             Some(p) => Approvals::load(p.clone())?,
             None => self.memory_approvals.clone(),
         };
+        approvals.set_trust_all(self.trust_all);
         session.set_review_policy(ReviewPolicy::RequireApproval(approvals));
         self.session = Some(session);
         Ok(())
@@ -290,6 +296,21 @@ impl App {
         }
         self.remember_approvals();
         self.view()
+    }
+
+    /// Run all Python without review until the app quits, or stop doing so.
+    /// Works with or without an open project.
+    pub fn set_trust_all(&mut self, on: bool) -> Result<Option<AnalysisView>> {
+        self.trust_all = on;
+        match self.session.as_mut() {
+            Some(s) => {
+                if let ReviewPolicy::RequireApproval(a) = s.review_policy_mut() {
+                    a.set_trust_all(on);
+                }
+                self.view().map(Some)
+            }
+            None => Ok(None),
+        }
     }
 
     /// In-memory approvals outlive the session (close and reopen keeps them).
@@ -338,6 +359,7 @@ impl App {
     }
 
     pub fn view(&mut self) -> Result<AnalysisView> {
+        let trust_all = self.trust_all;
         let s = self.session()?;
         let source = s.source_dataset()?;
         let a = s.analysis.clone();
@@ -389,6 +411,7 @@ impl App {
                 })
                 .collect(),
             external_source: Path::new(&a.source.path).is_absolute().then(|| a.source.path.clone()),
+            trust_all,
         })
     }
 

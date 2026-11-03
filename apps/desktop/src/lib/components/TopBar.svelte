@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Play, ShieldAlert, Square } from "@lucide/svelte";
+  import { Play, ShieldAlert, ShieldOff, Square } from "@lucide/svelte";
   import type { Workspace } from "../workspace.svelte";
   import { formatCount } from "../format";
 
@@ -46,6 +46,12 @@
   >
     {summary}
   </p>
+  {#if ws.view?.trust_all}
+    <p class="flex items-center gap-2 rounded-md border border-review/50 bg-review-wash py-0.5 pr-0.5 pl-2.5 text-sm text-review">
+      <ShieldOff size={14} aria-hidden="true" /> Python runs without review until you quit
+      <button class="btn !min-h-6 !py-0 text-sm" onclick={() => ws.setTrustAll(false)}>Ask again</button>
+    </p>
+  {/if}
   {#if review && !ws.running}
     <button class="btn border-review/50 text-review" onclick={() => (ws.reviewOpen = true)}>
       <ShieldAlert size={14} /> Review {review} Python step{review === 1 ? "" : "s"}

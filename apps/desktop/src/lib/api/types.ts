@@ -95,6 +95,8 @@ export interface AnalysisView {
   python: string | null;
   /** Python steps waiting for the user's approval, in run order (ADR-0004). */
   review: ReviewItem[];
+  /** Python runs without review until the app quits (never saved). */
+  trust_all: boolean;
   /** Absolute path of a source kept outside the project folder, if any. */
   external_source: string | null;
 }

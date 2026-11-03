@@ -52,7 +52,8 @@
           <Dialog.Description class="mt-1 max-w-[62ch] text-sm text-ink-soft">
             This project contains Python code you haven't approved on this computer. Python steps run as you: they can
             read and change your files and use the network. Approve only code you understand or trust. Until then, these
-            steps and the steps after them won't run.
+            steps and the steps after them won't run. <em>Trust all until I quit</em> skips this check in every project
+            you open until you close the app; nothing is saved.
           </Dialog.Description>
         </div>
       </header>
@@ -81,6 +82,14 @@
           SQL and visual steps don't need approval. They can only read data inside the project folder.
         </p>
         <Dialog.Close class="btn btn-quiet">Not now</Dialog.Close>
+        <button
+          class="btn"
+          disabled={busy}
+          title="Runs Python in every project you open until you quit, without asking. Nothing is saved; you'll be asked again next time."
+          onclick={() => ws.setTrustAll(true)}
+        >
+          Trust all until I quit
+        </button>
         <button class="btn btn-primary" disabled={busy || !items.length} onclick={() => approve(items.map((i) => i.step_id))}>
           {items.length > 1 ? `Approve all ${items.length}` : "Approve"}
         </button>

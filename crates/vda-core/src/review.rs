@@ -40,6 +40,9 @@ pub struct Approvals {
     path: Option<PathBuf>,
     /// fingerprint → approval time (Unix ms)
     approved: BTreeMap<String, u128>,
+    /// Treat every piece of code as approved. Held in memory only and never
+    /// saved, so it ends with the app ("trust all in this session").
+    trust_all: bool,
 }
 
 impl Approvals {
@@ -68,7 +71,7 @@ impl Approvals {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(e.into()),
         }
-        Ok(Approvals { path: Some(path), approved })
+        Ok(Approvals { path: Some(path), approved, trust_all: false })
     }
 
     pub fn path(&self) -> Option<&Path> {
@@ -76,7 +79,17 @@ impl Approvals {
     }
 
     pub fn is_approved(&self, fingerprint: &str) -> bool {
-        self.approved.contains_key(fingerprint)
+        self.trust_all || self.approved.contains_key(fingerprint)
+    }
+
+    /// Run all code without asking until this is turned off or the app
+    /// quits. Nothing is recorded as approved, so asking resumes afterwards.
+    pub fn set_trust_all(&mut self, on: bool) {
+        self.trust_all = on;
+    }
+
+    pub fn trust_all(&self) -> bool {
+        self.trust_all
     }
 
     pub fn approve(&mut self, fingerprint: &str) -> Result<(), Error> {
@@ -196,6 +209,21 @@ mod tests {
         assert!(!policy.pending(&StepKind::Sql { sql: "SELECT 1".into() }));
         assert!(!policy.pending(&StepKind::Filter { predicates: vec![] }));
         assert!(!ReviewPolicy::RunEverything.pending(&py("import os")));
+    }
+
+    #[test]
+    fn trusting_all_is_never_saved() {
+        let path = std::env::temp_dir().join(format!("vda-approvals-all-{}.json", std::process::id()));
+        let _ = fs::remove_file(&path);
+        let mut a = Approvals::load(&path).unwrap();
+        a.set_trust_all(true);
+        assert!(!ReviewPolicy::RequireApproval(a.clone()).pending(&py("import os")));
+        a.approve("unrelated").unwrap();
+        let reloaded = Approvals::load(&path).unwrap();
+        assert!(!reloaded.trust_all());
+        assert!(ReviewPolicy::RequireApproval(reloaded).pending(&py("import os")));
+        a.set_trust_all(false);
+        assert!(ReviewPolicy::RequireApproval(a).pending(&py("import os")), "turning it off asks again");
     }
 
     #[test]
