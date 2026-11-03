@@ -35,11 +35,11 @@ crates/vda-core/      unchanged
 
 **Data crosses the IPC boundary in pages.** The UI asks for `preview(step, offset, limit)` and receives at most one page. Values are sent as JSON with their core type, so the grid can format dates, nulls and numbers consistently with the notebook.
 
-**Long work never blocks the UI thread.** `run` starts the analysis on a worker thread and returns at once. Per-step progress arrives as `run://step` events and completion as `run://done`. `cancel` sets the session's cancel flag.
+**Long work never blocks the UI thread.** Commands are async, and `run` executes the analysis on a worker thread. Per-step progress arrives as `run://step` events; the `run` call itself resolves with the summary when the run ends. `cancel` sets the session's cancel flag, which it takes before the run starts so cancelling never waits on the busy session.
 
 ## Testing
 
-- Rust: `cargo test -p vda-app` covers every command against real projects.
+- Rust: `cargo test -p vda-app` drives the commands against real projects.
 - UI: Vitest with the mock backend for component logic; `svelte-check` for types.
 - End to end: the real Tauri app is launched under Xvfb in CI-like conditions and screenshotted through the mixed workflow.
 
