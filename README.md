@@ -14,7 +14,9 @@ crates/vda-core/          Rust core: model, compiler, planner, sessions, DuckDB 
   tests/acceptance.rs     the 7-step shared acceptance scenario, saved results, reopen (DuckDB engine)
   tests/equivalence.rs    visual ops: reference engine vs DuckDB, and displayed SQL vs step results
   tests/python_runner.rs  timeout, cancel, memory cap, env isolation, type preservation
+  tests/large.rs          disk-backed results: paging, spilling, source converted once
   examples/slice.rs       runs the slice end to end and writes a project folder
+  examples/bench.rs       large-data benchmark (see STATUS.md for results)
 examples/regional-revenue/sales.csv   sample dataset (60 orders, with missing values)
 docs/adr/                 architecture decision records
 .github/workflows/ci.yml  CI with build caching (ADR-0002)
@@ -50,7 +52,8 @@ CI does the same automatically and also caches the compiled dependency tree. See
 regional-revenue-project/
   analysis.json                     the analysis definition (format v1)
   sales.csv                         source
-  artifacts/<cache-key>.parquet     saved step results (tables)
+  artifacts/<cache-key>.parquet     saved step results (tables), with .meta.json beside each
+  artifacts/source-<key>.parquet    the source, converted once
   artifacts/<cache-key>.vl.json     saved step results (charts)
   runs/run-<ms>.json                run record: environment, source hash, per-step keys, status, content hashes
   notebook.md                       notebook render with SQL, code, state and previews
@@ -58,6 +61,14 @@ regional-revenue-project/
 ```
 
 Reopening the folder with `Session::open` shows every current result without rerunning anything.
+
+### Large data
+
+Results stay on disk as Parquet; a session holds only handles and reads previews a page at a time. At 50 million rows (2.3 GB CSV) a full run took 19 s and the whole process peaked at 490 MB. To reproduce:
+
+```sh
+cargo run --release -p vda-core --example bench -- 10000000 ./bench-project 1024
+```
 
 ## Core ideas in the code
 

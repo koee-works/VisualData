@@ -43,8 +43,8 @@ fn generate(path: &PathBuf, rows: u64) -> std::io::Result<()> {
         x ^= x << 17;
         let units = x % 9 + 1;
         let price = [12.0, 24.5, 49.0, 99.0][(x >> 8) as usize % 4];
-        let region = if x % 997 == 0 { String::new() } else { format!("r{}", (x >> 12) % 7) };
-        let revenue = if x % 1009 == 0 { String::new() } else { format!("{:.2}", units as f64 * price) };
+        let region = if x.is_multiple_of(997) { String::new() } else { format!("r{}", (x >> 12) % 7) };
+        let revenue = if x.is_multiple_of(1009) { String::new() } else { format!("{:.2}", units as f64 * price) };
         let day = 1 + (x >> 20) % 28;
         let month = 1 + (x >> 28) % 12;
         writeln!(
