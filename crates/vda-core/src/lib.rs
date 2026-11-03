@@ -18,6 +18,7 @@ pub mod persist;
 pub mod plan;
 pub mod python;
 pub mod reference;
+pub mod review;
 pub mod session;
 pub mod table;
 

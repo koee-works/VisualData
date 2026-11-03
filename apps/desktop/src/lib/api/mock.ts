@@ -88,6 +88,8 @@ export class MockBackend implements Backend {
   cells: NotebookCell[] = [];
   results = new Map<string, Result>();
   failed = new Map<string, string>();
+  /** Python code (exact text) the user has approved. */
+  approved = new Set<string>();
   /** Milliseconds each step takes in `run` (tests use 0). */
   stepDelay = 0;
   private cancelled = false;
@@ -103,8 +105,16 @@ export class MockBackend implements Backend {
     return this.results.get(id);
   }
 
+  private needsReview(s: MockStep): boolean {
+    return s.op.type === "python" && !this.approved.has(s.op.code);
+  }
+
   private state(s: MockStep): StepStateLabel {
     const r = this.results.get(s.id);
+    if (r && r.def === this.def(s.id)) return "fresh";
+    if (this.needsReview(s)) return "needs review";
+    for (let up = this.steps.find((x) => x.id === s.input); up; up = this.steps.find((x) => x.id === up!.input))
+      if (this.needsReview(up)) return "waiting on review";
     if (this.failed.has(s.id)) return "failed";
     if (!r) return "not run";
     return r.def === this.def(s.id) ? "fresh" : "stale";
@@ -134,6 +144,10 @@ export class MockBackend implements Backend {
       steps,
       cells: this.cells,
       python: "python 3.13 | pandas 3.0",
+      review: this.steps
+        .filter((s) => this.needsReview(s))
+        .map((s) => ({ step_id: s.id, label: s.label, input: s.input, code: s.op.type === "python" ? s.op.code : "" })),
+      external_source: null,
     };
   }
 
@@ -206,6 +220,7 @@ export class MockBackend implements Backend {
     if (input !== SOURCE_ID && !this.steps.some((s) => s.id === input)) throw { message: `unknown step \`${input}\`` };
     const id = this.nextId(op.type);
     this.steps.push({ id, input, label, op });
+    if (op.type === "python") this.approved.add(op.code);
     this.cells.push({ type: "step", step: id });
     return this.view();
   }
@@ -213,6 +228,7 @@ export class MockBackend implements Backend {
   async updateStep(id: string, label: string | null, op: StepOp): Promise<AnalysisView> {
     const s = this.steps.find((x) => x.id === id);
     if (!s) throw { message: `unknown step \`${id}\`` };
+    if (op.type === "python" && (s.op.type !== "python" || s.op.code !== op.code)) this.approved.add(op.code);
     s.op = op;
     s.label = label;
     this.failed.delete(id);
@@ -230,6 +246,14 @@ export class MockBackend implements Backend {
 
   async setCells(cells: NotebookCell[]): Promise<AnalysisView> {
     this.cells = cells;
+    return this.view();
+  }
+
+  async approve(stepIds: string[]): Promise<AnalysisView> {
+    for (const id of stepIds) {
+      const s = this.steps.find((x) => x.id === id);
+      if (s?.op.type === "python") this.approved.add(s.op.code);
+    }
     return this.view();
   }
 
@@ -292,6 +316,7 @@ export class MockBackend implements Backend {
     this.cancelled = false;
     const events: StepEvent[] = [];
     const ok = new Set<string>([SOURCE_ID]);
+    const review = new Set<string>();
     let halted = false;
     for (const s of this.steps) {
       if (this.stepDelay) await new Promise((r) => setTimeout(r, this.stepDelay));
@@ -300,10 +325,16 @@ export class MockBackend implements Backend {
         halted = true;
         e = { step_id: s.id, status: "skipped", cached: false, detail: "run was cancelled", rows: null, duration_ms: 0 };
       } else if (!ok.has(s.input)) {
-        e = { step_id: s.id, status: "skipped", cached: false, detail: `upstream step \`${s.input}\` did not succeed`, rows: null, duration_ms: 0 };
+        const waiting = review.has(s.input);
+        if (waiting) review.add(s.id);
+        const detail = waiting ? `step \`${s.input}\` is waiting for your review` : `upstream step \`${s.input}\` did not succeed`;
+        e = { step_id: s.id, status: "skipped", cached: false, detail, rows: null, duration_ms: 0 };
       } else if (this.state(s) === "fresh") {
         ok.add(s.id);
         e = { step_id: s.id, status: "succeeded", cached: true, detail: null, rows: this.results.get(s.id)!.rows.length, duration_ms: 0 };
+      } else if (this.needsReview(s)) {
+        review.add(s.id);
+        e = { step_id: s.id, status: "needs review", cached: false, detail: null, rows: null, duration_ms: 0 };
       } else {
         try {
           const r = this.evaluate(s);
@@ -327,7 +358,7 @@ export class MockBackend implements Backend {
   }
 
   /** A small worked analysis for previews: filter → aggregate → Python → chart. */
-  async seedDemo(opts: { run: boolean; editAfterRun: boolean }) {
+  async seedDemo(opts: { run: boolean; editAfterRun: boolean; received?: boolean }) {
     await this.addStep(SOURCE_ID, "Orders with a region", {
       type: "filter",
       predicates: [
@@ -350,6 +381,11 @@ export class MockBackend implements Backend {
     });
     await this.addStep("python_1", null, { type: "chart", mark: "bar", x: "region", y: "revenue", title: null });
     this.cells.unshift({ type: "markdown", text: "## Question\nWhich regions bring in most of the revenue?" });
+    // A project received from someone else: their code is not approved here.
+    if (opts.received) {
+      this.approved.clear();
+      this.name = "Regional revenue (from Dana)";
+    }
     if (opts.run) await this.run({ onStep: () => {} });
     if (opts.editAfterRun) {
       const f = this.steps[0]!;

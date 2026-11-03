@@ -15,6 +15,7 @@ use crate::json::Json;
 use crate::model::{Analysis, StepKind, SOURCE_ID};
 use crate::plan::{self, Fingerprints, Plan};
 use crate::python::PythonRunner;
+use crate::review::ReviewPolicy;
 use crate::table::{ColumnProfile, Table};
 use crate::Error;
 use std::cell::RefCell;
@@ -64,6 +65,8 @@ pub enum RunStatus {
     Succeeded { cached: bool },
     Failed { error: String },
     Cancelled,
+    /// Not run: the step's code is waiting for the user's review.
+    NeedsReview,
     /// Not attempted because an upstream step failed or the run was cancelled.
     Skipped { reason: String },
 }
@@ -74,6 +77,7 @@ impl RunStatus {
             RunStatus::Succeeded { .. } => "succeeded",
             RunStatus::Failed { .. } => "failed",
             RunStatus::Cancelled => "cancelled",
+            RunStatus::NeedsReview => "needs review",
             RunStatus::Skipped { .. } => "skipped",
         }
     }
@@ -134,7 +138,7 @@ impl RunRecord {
                                 RunStatus::Failed { error } => (Some(error.clone()), Json::Null),
                                 RunStatus::Skipped { reason } => (Some(reason.clone()), Json::Null),
                                 RunStatus::Succeeded { cached } => (None, Json::Bool(*cached)),
-                                RunStatus::Cancelled => (None, Json::Null),
+                                RunStatus::Cancelled | RunStatus::NeedsReview => (None, Json::Null),
                             };
                             Json::obj(vec![
                                 ("step", Json::str(s.step_id.clone())),
@@ -174,6 +178,7 @@ impl RunRecord {
                         "succeeded" => RunStatus::Succeeded { cached: s.get("cached") == Some(&Json::Bool(true)) },
                         "failed" => RunStatus::Failed { error: detail },
                         "cancelled" => RunStatus::Cancelled,
+                        "needs review" => RunStatus::NeedsReview,
                         "skipped" => RunStatus::Skipped { reason: detail },
                         other => return Err(Error::Format(format!("unknown status `{other}`"))),
                     };
@@ -207,6 +212,10 @@ pub enum StepState {
     Stale,
     Failed(String),
     Cancelled,
+    /// The step's code must be reviewed before it can run.
+    NeedsReview,
+    /// An earlier step's code must be reviewed before this one can run.
+    WaitingOnReview,
     /// Not attempted in the last run because something upstream failed.
     Blocked(String),
 }
@@ -219,6 +228,8 @@ impl StepState {
             StepState::Stale => "stale",
             StepState::Failed(_) => "failed",
             StepState::Cancelled => "cancelled",
+            StepState::NeedsReview => "needs review",
+            StepState::WaitingOnReview => "waiting on review",
             StepState::Blocked(_) => "blocked",
         }
     }
@@ -239,6 +250,7 @@ pub struct Session {
     pub last_run: Option<RunRecord>,
     cancel: Arc<AtomicBool>,
     artifacts: ArtifactStore,
+    review: ReviewPolicy,
 }
 
 impl Session {
@@ -262,6 +274,7 @@ impl Session {
             results: HashMap::new(),
             last_run: None,
             cancel: Arc::new(AtomicBool::new(false)),
+            review: ReviewPolicy::default(),
         })
     }
 
@@ -308,6 +321,32 @@ impl Session {
         let mut keep: HashSet<String> = self.plan()?.keys.into_values().collect();
         keep.insert(self.source_key()?);
         self.artifacts.prune(&keep)
+    }
+
+    /// Require approval before Python code runs (the desktop app always does).
+    pub fn set_review_policy(&mut self, policy: ReviewPolicy) {
+        self.review = policy;
+    }
+
+    pub fn review_policy(&self) -> &ReviewPolicy {
+        &self.review
+    }
+
+    /// Steps whose code is waiting for review, in execution order.
+    pub fn pending_review(&self) -> Vec<String> {
+        let order = plan::validate(&self.analysis).unwrap_or_default();
+        order.into_iter().filter(|id| self.review.pending(&self.analysis.step(id).unwrap().kind)).collect()
+    }
+
+    /// Approve the step's current code (it then runs on the next run).
+    pub fn approve_step(&mut self, step_id: &str) -> Result<(), Error> {
+        let kind = self
+            .analysis
+            .step(step_id)
+            .ok_or_else(|| Error::Validation(format!("unknown step `{step_id}`")))?
+            .kind
+            .clone();
+        self.review.approve(&kind)
     }
 
     /// Handle the UI can use to cancel a running analysis from another thread.
@@ -455,17 +494,40 @@ impl Session {
         if self.results.get(step_id).map(|r| &r.key) == Some(key) {
             return Ok(StepState::Fresh);
         }
+        // Review state is derived live, so approving takes effect at once.
+        if self.review.pending(&self.analysis.step(step_id).unwrap().kind) {
+            return Ok(StepState::NeedsReview);
+        }
+        if self.upstream_needs_review(step_id) {
+            return Ok(StepState::WaitingOnReview);
+        }
         if let Some(run) = self.last_run.as_ref().and_then(|r| r.step(step_id)) {
             if &run.cache_key == key {
                 match &run.status {
                     RunStatus::Failed { error } => return Ok(StepState::Failed(error.clone())),
                     RunStatus::Cancelled => return Ok(StepState::Cancelled),
+                    // Approved since; nothing to report until it runs.
+                    RunStatus::NeedsReview => {}
+                    RunStatus::Skipped { reason } if reason.contains("waiting for your review") => {}
                     RunStatus::Skipped { reason } => return Ok(StepState::Blocked(reason.clone())),
                     RunStatus::Succeeded { .. } => {}
                 }
             }
         }
         Ok(if self.results.contains_key(step_id) { StepState::Stale } else { StepState::NotRun })
+    }
+
+    fn upstream_needs_review(&self, step_id: &str) -> bool {
+        let mut id = step_id;
+        while let Some(step) = self.analysis.step(id) {
+            id = &step.input;
+            match self.analysis.step(id) {
+                Some(up) if self.review.pending(&up.kind) => return true,
+                Some(_) => {}
+                None => return false,
+            }
+        }
+        false
     }
 
     /// Run every step in dependency order, reusing results whose key is
@@ -497,20 +559,28 @@ impl Session {
             let step = self.analysis.step(id).unwrap().clone();
             let t0 = Instant::now();
 
-            let upstream_ok = step.input == SOURCE_ID
-                || record.step(&step.input).is_some_and(|r| matches!(r.status, RunStatus::Succeeded { .. }));
+            let upstream = record.step(&step.input).map(|r| r.status.clone());
+            let upstream_ok = step.input == SOURCE_ID || matches!(upstream, Some(RunStatus::Succeeded { .. }));
             let status: RunStatus = if let Some(reason) = &halted {
                 RunStatus::Skipped { reason: reason.clone() }
             } else if !upstream_ok {
-                RunStatus::Skipped { reason: format!("upstream step `{}` did not succeed", step.input) }
+                let reason = match upstream {
+                    Some(RunStatus::NeedsReview) => format!("step `{}` is waiting for your review", step.input),
+                    Some(RunStatus::Skipped { reason }) if reason.contains("waiting for your review") => reason,
+                    _ => format!("upstream step `{}` did not succeed", step.input),
+                };
+                RunStatus::Skipped { reason }
             } else if self.cancel.load(Ordering::SeqCst) {
                 halted = Some("run was cancelled".into());
                 RunStatus::Cancelled
             } else if self.results.get(id).map(|r| &r.key) == Some(&key) {
                 RunStatus::Succeeded { cached: true }
             } else if let Some(output) = self.artifacts.load(&key, !step.kind.produces_table()) {
+                // A saved result is data, not code: showing it runs nothing.
                 self.results.insert(id.clone(), CachedResult { key: key.clone(), output });
                 RunStatus::Succeeded { cached: true }
+            } else if self.review.pending(&step.kind) {
+                RunStatus::NeedsReview
             } else {
                 match self.execute(&step.id, &key) {
                     Ok(output) => {

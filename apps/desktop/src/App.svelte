@@ -18,7 +18,8 @@
       const q = new URLSearchParams(location.search);
       if (q.has("demo")) {
         const mock = backend as import("./lib/api/mock").MockBackend;
-        await mock.seedDemo({ run: q.get("demo") !== "fresh-start", editAfterRun: q.get("demo") === "stale" });
+        const demo = q.get("demo");
+        await mock.seedDemo({ run: demo !== "fresh-start" && demo !== "review", editAfterRun: demo === "stale", received: demo === "review" });
       }
     }
     const w = new Workspace(backend);

@@ -126,7 +126,7 @@ fn works_under_a_small_memory_limit() {
     // to spill to the temp directory instead of failing.
     let dir = project("spill", 400_000);
     let temp = dir.join("spill");
-    let opts = EngineOptions { memory_limit_mb: Some(64), temp_dir: Some(temp.clone()) };
+    let opts = EngineOptions { memory_limit_mb: Some(64), temp_dir: Some(temp.clone()), allowed_paths: None };
     let per_order = step(
         "per_order",
         SOURCE_ID,

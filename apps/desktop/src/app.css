@@ -8,7 +8,8 @@
 /*
   Cool drafting-paper surfaces in navy ink. Colour is reserved for result
   state, so it always means something: teal = current, ochre = outdated,
-  brick = failed, indigo = running. Outdated results are also hatched, so the
+  brick = failed, indigo = running, plum = waiting for the user's review of
+  code (drawn hollow, so it also reads without colour). Outdated results are also hatched, so the
   state reads without colour.
 */
 @theme {
@@ -32,6 +33,8 @@
   --color-failed-wash: #f9e5e3;
   --color-running: #4652c8;
   --color-running-wash: #e6e8fa;
+  --color-review: #7b3b8f;
+  --color-review-wash: #f5ebf8;
 
   --text-xs: 0.75rem;
   --text-sm: 0.8125rem;

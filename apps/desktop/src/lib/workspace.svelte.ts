@@ -19,8 +19,13 @@ export class Workspace {
   error = $state<{ action: string; message: string } | null>(null);
   /** Bumped after every change, so result views refetch. */
   revision = $state(0);
+  /** Whether the code review dialog is open. */
+  reviewOpen = $state(false);
 
   constructor(readonly backend: Backend) {}
+
+  /** Python steps waiting for approval. */
+  pendingReview = $derived(this.view?.review ?? []);
 
   selectedStep: StepView | null = $derived(this.view?.steps.find((s) => s.id === this.selected) ?? null);
 
@@ -46,6 +51,14 @@ export class Workspace {
     this.apply(await this.act("Open project", () => this.backend.openProject(dir)));
     this.selected = SOURCE_ID;
     this.progress = {};
+    // Code someone else wrote is shown before anything can run it.
+    this.reviewOpen = this.pendingReview.length > 0;
+  }
+
+  /** Approve the shown code of these steps; closes the dialog when none are left. */
+  async approve(stepIds: string[]) {
+    this.apply(await this.act("Approve code", () => this.backend.approve(stepIds)));
+    if (!this.pendingReview.length) this.reviewOpen = false;
   }
 
   async create(dir: string, csv: string, name: string) {

@@ -1,6 +1,6 @@
 # First engineering slice — status
 
-Updated: 2026-11-02. Decisions: [ADR-0001](docs/adr/0001-deployment-model.md) (local-first desktop; Tauri 2 + Rust core + embedded DuckDB + Python child process), [ADR-0002](docs/adr/0002-build-cache.md) (build cache).
+Updated: 2026-11-02. Decisions: [ADR-0001](docs/adr/0001-deployment-model.md) (local-first desktop; Tauri 2 + Rust core + embedded DuckDB + Python child process), [ADR-0002](docs/adr/0002-build-cache.md) (build cache), [ADR-0003](docs/adr/0003-frontend.md) (desktop frontend), [ADR-0004](docs/adr/0004-code-review-and-sandbox.md) (code review and SQL sandbox).
 
 ## Acceptance scenario coverage
 
@@ -16,7 +16,7 @@ From the "Shared team acceptance" section of the v0.2.0 briefs. Tests: `crates/v
 | 6 | Change an upstream step; downstream stale until rerun | Done | `step6_…`, `undoing_an_edit_reuses_the_earlier_saved_results` |
 | 7 | Controlled failure: diagnose, cancel or correct, recover | Done | `step7_…` (2 tests), `unreadable_saved_result_is_recomputed` |
 
-All 63 Rust tests pass (`cargo test --workspace`), plus 11 frontend unit tests and the desktop end-to-end scenario (below). The demo writes a complete project folder: `cargo run -p vda-core --example slice -- <dir>`.
+All 74 Rust tests pass (`cargo test -p vda-core -p vda-app`), plus 16 frontend unit tests and the desktop end-to-end scenario (below). The demo writes a complete project folder: `cargo run -p vda-core --example slice -- <dir>`.
 
 ## What exists
 
@@ -60,7 +60,7 @@ Svelte 5 in Tauri 2 ([ADR-0003](docs/adr/0003-frontend.md)), built and run on Li
 | Notebook | Markdown and step cells in document order, previews of each result, reordering; text is escaped before rendering |
 | Not yet | Creating projects from the welcome screen is wired but was not exercised end to end (file dialogs cannot be scripted under Xvfb); no undo; no column resizing; keyboard navigation inside the grid |
 
-**End to end** (`apps/desktop/e2e/run_e2e.py`, the real app under Xvfb through tauri-driver): open a project → all steps not run → run → all current → inspect an aggregate's rows and SQL → edit the upstream filter → all four steps outdated, banner shown → rerun from the banner → notebook with text, tables and chart → chart step → Python step. Passes; screenshots in `docs/screenshots/`.
+**End to end** (`apps/desktop/e2e/run_e2e.py`, the real app under Xvfb through tauri-driver, with a fresh approvals file): open a project received from someone else → its Python code is shown for review → *Not now* → run: visual steps run, the Python step needs review and the chart waits → approve from the top bar → run → all current → inspect an aggregate's rows and SQL → edit the upstream filter → all four steps outdated, banner shown → rerun from the banner → notebook with text, tables and chart → chart step → Python step. Passes; screenshots in `docs/screenshots/`.
 
 Found and fixed while building it: an effect loop in the grid (reading the page cache while clearing it), Vega cloning Svelte's reactive proxies, charts widening the window, and long decimals (now six places on screen, full value on hover).
 
@@ -104,6 +104,14 @@ Before this change, results were in-memory tables. The regional-revenue sample w
 - **Out-of-memory Python steps hung until their timeout.** After a `MemoryError`, Python's shutdown deadlocked in pyarrow's thread pool, so the step sat for the full timeout (30 s by default) instead of failing at once. Found through an intermittent test failure; reproduced by catching the hung process. The wrapper now flushes its error and exits immediately, and the memory test asserts the failure arrives within 10 s. Twenty consecutive stress runs had no hang.
 - **A test changed a process-wide environment variable** while other tests started child processes in parallel (a data race; `set_var` is `unsafe` in newer Rust editions for this reason). The test now inspects the child's whole environment instead.
 
+## Opening other people's projects (ADR-0004)
+
+| Part | Behaviour | Tests |
+|---|---|---|
+| Python review | Python code runs only once its exact text (SHA-256) is approved. Approvals live per user outside every project; code written or edited in the app is approved as it is saved; a label-only save keeps unreviewed code unreviewed. Unapproved steps report *needs review*, steps after them *waiting on review*; everything else runs. | `review.rs` (unit), `crates/vda-app/tests/review.rs` (received project, approval remembered across restarts, edited file asks again, label-only save), `workspace.test.ts` |
+| Review UI | Opening a project with unapproved code shows a dialog with each step's full code, what it reads, and what Python can do; *Not now* keeps the project usable. A top-bar button reopens it; the step editor has an inline *Approve*. | e2e steps 1–3, `docs/screenshots/0-review.png` |
+| SQL sandbox | DuckDB may touch only the project folder, its spill directory and an external source file, then its configuration is locked. Custom SQL must be one read-only query, checked with DuckDB's parser before it runs. | `crates/vda-core/tests/sandbox.rs` (reads outside the project, `../`, globs, `COPY`, `ATTACH`, `INSTALL`, `SET`, `PRAGMA`, injected second statements), `review.rs` (received SQL cannot read a secret file) |
+
 ## Explicit boundaries — not implemented
 
 | Boundary | Current behaviour | Next step |
@@ -116,8 +124,8 @@ Before this change, results were in-memory tables. The regional-revenue sample w
 | **Parallelism** | DuckDB runs with `threads = 1` so floating-point aggregation order, and therefore replay hashes, are deterministic. | Tolerance-aware replay comparison for floats, then raise the thread count. |
 | **Hashing / JSON** | **TEMPORARY** in-house SHA-256 (verified against NIST vectors) and JSON. | `sha2`, `serde_json`. The on-disk formats stay the same. |
 | **Notebook** | Markdown export only. `.ipynb` import/export not implemented. | Define the supported cell/output subset first (developer brief, rule 4). |
-| **Trust prompt** | Not implemented. Any analysis that is opened can run its Python and SQL. | "Trust this analysis" gate before running code from analyses not created locally (ADR-0001). |
-| **SQL file access** | Custom SQL can read any file the user can (`read_csv('/any/path')`). Acceptable for the user's own analyses under ADR-0001. | Restrict with DuckDB's `enable_external_access` / allowed paths for untrusted analyses, together with the trust prompt. |
+| **Python containment** | Approved Python runs with the user's full permissions; review is the only safeguard. | OS sandbox per platform (Landlock/seccomp, `sandbox-exec`, AppContainer): no network, read-only outside the project (ADR-0004). |
+| **Managing approvals** | Approvals cannot be listed or revoked in the UI (`Approvals::revoke` exists in the core); they do not move between computers. | An approvals page in settings; signed projects for teams. |
 | **Windows** | Not run. The memory cap is Unix only (`ulimit -v`); CI runs Windows as allowed-to-fail. | Job Object limits, then make the Windows job required. |
 | **Seeds / nondeterminism** | Not recorded. Replay detects divergence but cannot explain it. | Record seeds where users set them; flag known nondeterministic functions. |
 | **Desktop: macOS and Windows** | Built and tested on Linux only. | Add macOS and Windows to the desktop CI job; produce signed bundles. |

@@ -10,6 +10,8 @@
     failed: "Failed",
     cancelled: "Cancelled",
     blocked: "Waiting on a failed step",
+    "needs review": "Needs your review",
+    "waiting on review": "Waiting on a review",
   };
   let label = $derived(running ? "Running" : words[state]);
 </script>
@@ -48,6 +50,14 @@
   }
   .mark[data-state="blocked"] {
     opacity: 0.45;
+  }
+  .mark[data-state="needs review"] {
+    background-color: var(--color-review-wash);
+    box-shadow: inset 0 0 0 2px var(--color-review);
+  }
+  .mark[data-state="waiting on review"] {
+    box-shadow: inset 0 0 0 1px var(--color-review);
+    background-color: transparent;
   }
   .mark[data-state="running"] {
     background-color: var(--color-running);

@@ -3,7 +3,8 @@
 
 Drives the app through tauri-driver / WebKitWebDriver with the W3C WebDriver
 protocol (standard library only) and walks the shared acceptance scenario:
-open a project, run, inspect results and SQL, edit a step and see downstream
+open a project received from someone else and review its Python before it
+can run (ADR-0004), run, inspect results and SQL, edit a step and see downstream
 results go outdated, rerun, read the notebook, view the chart.
 
 Usage: run_e2e.py <app-binary> <project-dir> <screenshot-dir>
@@ -85,6 +86,13 @@ class Session:
     def count(self, xpath):
         return len(call("POST", f"/session/{self.id}/elements", {"using": "xpath", "value": xpath}))
 
+    def wait_gone(self, xpath, timeout=10):
+        end = time.time() + timeout
+        while self.count(xpath):
+            if time.time() > end:
+                raise AssertionError(f"still present after {timeout}s: {xpath}")
+            time.sleep(0.2)
+
     def screenshot(self, path):
         time.sleep(0.6)  # let transitions and charts settle
         png = call("GET", f"/session/{self.id}/screenshot")
@@ -110,7 +118,11 @@ STATUS = "//header//p[@role='status']"
 def main():
     app, project, shots = sys.argv[1:4]
     os.makedirs(shots, exist_ok=True)
-    env = dict(os.environ, VDA_OPEN=project)
+    # A fresh approvals file: this "user" has approved nothing yet.
+    approvals = os.path.join(shots, "approvals.json")
+    if os.path.exists(approvals):
+        os.remove(approvals)
+    env = dict(os.environ, VDA_OPEN=project, VDA_APPROVALS=approvals)
     driver = subprocess.Popen(["tauri-driver", "--port", "4444"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
     s = None
     try:
@@ -123,19 +135,35 @@ def main():
         s = Session(app)
         step = lambda n, msg: print(f"{n}. {msg}")
 
-        step(1, "Open project: steps exist but have not run")
-        s.wait_text(STATUS, "need a run")
-        n = s.count("//nav[@aria-label='Pipeline']//span[@role='img' and @aria-label='Not run']")
-        assert n == 4, f"four steps start not run (found {n})"
+        mark = lambda label: f"//nav[@aria-label='Pipeline']//span[@role='img' and @aria-label={json.dumps(label)}]"
+        dialog = "//*[@role='dialog']"
+
+        step(1, "Open a received project: its Python code is shown for review first")
+        s.wait_text(dialog, "before it runs")
+        assert "df.assign" in s.text(dialog + "//pre"), "the exact code is shown"
+        s.screenshot(f"{shots}/0-review.png")
+        s.click(dialog + "//button[normalize-space()='Not now']")
+        assert s.count(mark("Not run")) == 2 and s.count(mark("Needs your review")) == 1
+        assert s.count(mark("Waiting on a review")) == 1
         s.find("//section[@aria-label='Source']//td[normalize-space()='order_date']")
         s.screenshot(f"{shots}/1-opened.png")
 
-        step(2, "Run the analysis; every step becomes current")
+        step(2, "Run without approving: visual steps run, the Python step and the chart after it do not")
+        s.click("//button[normalize-space()='Run analysis']")
+        s.wait_text(STATUS, "2 of 4 results need a run")
+        assert s.count(mark("Current")) == 2
+        assert s.count(mark("Needs your review")) == 1 and s.count(mark("Waiting on a review")) == 1
+
+        step(3, "Approve from the top bar and run; every step becomes current")
+        s.click("//header//button[contains(normalize-space(), 'Review 1 Python step')]")
+        s.click(dialog + "//button[normalize-space()='Approve']")
+        s.wait_text(STATUS, "need a run")
+        s.wait_gone(dialog)  # the dialog closes when nothing is left to review
         s.click("//button[normalize-space()='Run analysis']")
         s.wait_text(STATUS, "All results current")
-        assert s.count("//nav[@aria-label='Pipeline']//span[@role='img' and @aria-label='Current']") == 4
+        assert s.count(mark("Current")) == 4
 
-        step(3, "Inspect a visual step: its result and the SQL it runs")
+        step(4, "Inspect a visual step: its result and the SQL it runs")
         s.click(node("Revenue by region"))
         s.wait_text("//div[@role='table']", "East")
         assert "19" in s.text("//div[@role='table']"), "East has 19 orders"
@@ -144,7 +172,7 @@ def main():
         s.wait_text("//pre", 'GROUP BY "region"')
         s.screenshot(f"{shots}/3-aggregate-sql.png")
 
-        step(4, "Edit the filter: it and everything after it become outdated")
+        step(5, "Edit the filter: it and everything after it become outdated")
         s.click(node("Orders with a region"))
         s.clear_and_type("//input[@aria-label='Value']", "100")
         s.click("//button[normalize-space()='Save step']")
@@ -154,24 +182,24 @@ def main():
         s.find("//*[@role='status' and contains(., 'Outdated result')]")
         s.screenshot(f"{shots}/4-outdated.png")
 
-        step(5, "Rerun from the outdated banner; results are current again")
+        step(6, "Rerun from the outdated banner; results are current again")
         s.click("//button[normalize-space()='Run now']")
         s.wait_text(STATUS, "All results current")
         assert s.count("//*[contains(., 'Outdated result')]") == 0
 
-        step(6, "Notebook: text and step results in document order")
+        step(7, "Notebook: text and step results in document order")
         s.click("//button[@role='tab' and normalize-space()='Notebook']")
         s.find("//article[@aria-label='Notebook']//h3[normalize-space()='Question']")
         s.find("//article[@aria-label='Notebook']//figure//*[contains(@class,'vega-embed')]//*[local-name()='svg']")
         s.screenshot(f"{shots}/5-notebook.png")
 
-        step(7, "Chart step")
+        step(8, "Chart step")
         s.click("//button[@role='tab' and normalize-space()='Step']")
         s.click(node("Revenue share by region"))
         s.find("//section[@aria-label='Result']//*[contains(@class,'vega-embed')]//*[local-name()='svg']")
         s.screenshot(f"{shots}/6-chart.png")
 
-        step(8, "Python step shows its code and contract")
+        step(9, "Python step shows its code and contract")
         s.click(node("Revenue share"))
         s.find("//textarea[@aria-label='Python code']")
         s.screenshot(f"{shots}/7-python.png")

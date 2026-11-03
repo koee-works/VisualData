@@ -102,3 +102,58 @@ describe("Workspace", () => {
     expect(ws.view!.steps.every((s) => s.state === "not run")).toBe(true);
   });
 });
+
+describe("Code review (ADR-0004)", () => {
+  async function received() {
+    const mock = new MockBackend();
+    await mock.seedDemo({ run: false, editAfterRun: false, received: true });
+    const ws = new Workspace(mock);
+    await ws.open("/projects/from-dana");
+    return { ws, mock };
+  }
+
+  it("opens the review dialog when a project has unapproved Python", async () => {
+    const { ws } = await received();
+    expect(ws.reviewOpen).toBe(true);
+    expect(ws.pendingReview.map((r) => r.step_id)).toEqual(["python_1"]);
+    expect(ws.pendingReview[0]!.code).toContain("share=");
+    expect(ws.view!.steps.find((s) => s.id === "python_1")!.state).toBe("needs review");
+    expect(ws.view!.steps.find((s) => s.id === "chart_1")!.state).toBe("waiting on review");
+  });
+
+  it("does not run unapproved code or anything after it", async () => {
+    const { ws } = await received();
+    ws.reviewOpen = false;
+    await ws.run();
+    expect(ws.progress["aggregate_1"]!.status).toBe("succeeded");
+    expect(ws.progress["python_1"]!.status).toBe("needs review");
+    expect(ws.progress["chart_1"]!.status).toBe("skipped");
+    expect(ws.progress["chart_1"]!.detail).toContain("waiting for your review");
+  });
+
+  it("runs once approved and closes the dialog", async () => {
+    const { ws } = await received();
+    await ws.approve(["python_1"]);
+    expect(ws.reviewOpen).toBe(false);
+    expect(ws.pendingReview).toEqual([]);
+    await ws.run();
+    expect(Object.values(ws.progress).every((e) => e.status === "succeeded")).toBe(true);
+  });
+
+  it("treats code written in the app as approved, but a label change as not", async () => {
+    const { ws } = await received();
+    const step = ws.view!.steps.find((s) => s.id === "python_1")!;
+    await ws.saveStep("python_1", "Renamed", step.op);
+    expect(ws.view!.steps.find((s) => s.id === "python_1")!.state).toBe("needs review");
+    await ws.saveStep("python_1", "Renamed", { type: "python", code: "result = df", timeout_ms: 60000 });
+    expect(ws.pendingReview).toEqual([]);
+  });
+
+  it("does not open the dialog for the user's own project", async () => {
+    const mock = new MockBackend();
+    await mock.seedDemo({ run: false, editAfterRun: false });
+    const ws = new Workspace(mock);
+    await ws.open("/projects/mine");
+    expect(ws.reviewOpen).toBe(false);
+  });
+});

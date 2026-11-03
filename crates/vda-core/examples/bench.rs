@@ -120,7 +120,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(&dir)?;
     let csv = dir.join("orders.csv");
     let engine = || {
-        DuckDbEngine::with_options(EngineOptions { memory_limit_mb: Some(mem), temp_dir: Some(dir.join("spill")) })
+        DuckDbEngine::with_options(EngineOptions { memory_limit_mb: Some(mem), temp_dir: Some(dir.join("spill")), allowed_paths: None })
     };
     let python = || Some(PythonRunner::new(default_interpreter(), dir.join(".work")));
     let note = |what: &str, value: String| {

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Play, Square } from "@lucide/svelte";
+  import { Play, ShieldAlert, Square } from "@lucide/svelte";
   import type { Workspace } from "../workspace.svelte";
   import { formatCount } from "../format";
 
@@ -14,6 +14,8 @@
   let outdated = $derived(steps.filter((s) => s.state !== "fresh").length);
   let done = $derived(Object.keys(ws.progress).length);
   let lastFailed = $derived(Object.values(ws.progress).filter((e) => e.status === "failed").length);
+
+  let review = $derived(ws.pendingReview.length);
 
   let summary = $derived.by(() => {
     if (ws.running) return `Running step ${Math.min(done + 1, steps.length)} of ${steps.length}`;
@@ -44,6 +46,11 @@
   >
     {summary}
   </p>
+  {#if review && !ws.running}
+    <button class="btn border-review/50 text-review" onclick={() => (ws.reviewOpen = true)}>
+      <ShieldAlert size={14} /> Review {review} Python step{review === 1 ? "" : "s"}
+    </button>
+  {/if}
   {#if ws.running}
     <button class="btn" onclick={() => ws.cancel()}><Square size={14} /> Cancel</button>
   {:else}

@@ -3,7 +3,7 @@
 An integrated workspace for exploring, transforming, analyzing and visualizing data through visual controls, SQL/Python code, and notebooks, without losing the thread of the analysis.
 
 - Product briefs (v0.2.0): [docs/briefs/](docs/briefs/)
-- Decisions: [ADR-0001 deployment model](docs/adr/0001-deployment-model.md), [ADR-0002 build cache](docs/adr/0002-build-cache.md), [ADR-0003 desktop frontend](docs/adr/0003-frontend.md)
+- Decisions: [ADR-0001 deployment model](docs/adr/0001-deployment-model.md), [ADR-0002 build cache](docs/adr/0002-build-cache.md), [ADR-0003 desktop frontend](docs/adr/0003-frontend.md), [ADR-0004 code review and SQL sandbox](docs/adr/0004-code-review-and-sandbox.md)
 - Current state of the first engineering slice: [STATUS.md](STATUS.md)
 
 ## Layout
@@ -17,6 +17,7 @@ crates/vda-core/          Rust core: model, compiler, planner, sessions, DuckDB 
   tests/equivalence.rs    visual ops: reference engine vs DuckDB, and displayed SQL vs step results
   tests/python_runner.rs  timeout, cancel, memory cap, env isolation, type preservation
   tests/large.rs          disk-backed results: paging, spilling, source converted once
+  tests/sandbox.rs        custom SQL: project files only, one read-only query
   examples/slice.rs       runs the slice end to end and writes a project folder
   examples/bench.rs       large-data benchmark (see STATUS.md for results)
 examples/regional-revenue/sales.csv   sample dataset (60 orders, with missing values)
@@ -39,6 +40,12 @@ npm run tauri dev                  # the app, with hot reload
 npm run dev                        # the UI alone in a browser, against an in-memory mock (?demo=1 seeds an analysis)
 npm run check && npm test          # types and unit tests
 ```
+
+### Opening projects from other people
+
+Python steps run as you, so Python code you didn't write in the app doesn't run until you've read and approved it. Opening such a project shows the code first; until it is approved, that step and the steps after it wait, and everything else works. Approvals are kept per user outside every project (`VDA_APPROVALS` overrides the location), so a project can't approve itself, and changing a single character of approved code asks again. SQL steps need no approval: they can only run one read-only query and only read files inside the project folder. See [ADR-0004](docs/adr/0004-code-review-and-sandbox.md).
+
+![Python code from a received project, shown for review before it can run](docs/screenshots/0-review.png)
 
 Open a project at startup with `vda-desktop --open <folder>`. The end-to-end test drives the real app through WebDriver: see `apps/desktop/e2e/` and the `desktop` CI job.
 

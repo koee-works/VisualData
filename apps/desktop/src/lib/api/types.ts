@@ -68,7 +68,7 @@ export type StepOp =
   | { type: "chart"; mark: Mark; x: string; y: string; title: string | null };
 
 export type StepMode = "visual" | "sql" | "python" | "chart";
-export type StepStateLabel = "fresh" | "stale" | "not run" | "failed" | "cancelled" | "blocked";
+export type StepStateLabel = "fresh" | "stale" | "not run" | "failed" | "cancelled" | "blocked" | "needs review" | "waiting on review";
 
 export interface StepView {
   id: string;
@@ -93,11 +93,23 @@ export interface AnalysisView {
   steps: StepView[];
   cells: NotebookCell[];
   python: string | null;
+  /** Python steps waiting for the user's approval, in run order (ADR-0004). */
+  review: ReviewItem[];
+  /** Absolute path of a source kept outside the project folder, if any. */
+  external_source: string | null;
+}
+
+/** Code the user is asked to read before it runs. */
+export interface ReviewItem {
+  step_id: string;
+  label: string | null;
+  input: string;
+  code: string;
 }
 
 export interface StepEvent {
   step_id: string;
-  status: "succeeded" | "failed" | "cancelled" | "skipped";
+  status: "succeeded" | "failed" | "cancelled" | "skipped" | "needs review";
   cached: boolean;
   detail: string | null;
   rows: number | null;

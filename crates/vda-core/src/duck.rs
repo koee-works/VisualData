@@ -38,6 +38,11 @@ pub struct EngineOptions {
     pub memory_limit_mb: Option<u64>,
     /// Where intermediate data spills. Defaults to `<system temp>/vda-duckdb`.
     pub temp_dir: Option<PathBuf>,
+    /// When set, DuckDB may only read and write files under these paths
+    /// (directories, or single files such as a source CSV kept elsewhere),
+    /// plus the spill directory. The configuration is then locked, so no
+    /// query can lift the restriction (ADR-0004).
+    pub allowed_paths: Option<Vec<PathBuf>>,
 }
 
 /// Open an in-memory database configured for the desktop app: Parquet is
@@ -56,6 +61,37 @@ fn open(opts: &EngineOptions) -> Result<Connection, Error> {
     );
     if let Some(mb) = opts.memory_limit_mb {
         sql.push_str(&format!(" SET memory_limit = '{mb}MB';"));
+    }
+    if let Some(paths) = &opts.allowed_paths {
+        let mut dirs = vec![temp.clone()];
+        let mut files = Vec::new();
+        for p in paths {
+            let p = fs::canonicalize(p).unwrap_or_else(|_| p.clone());
+            if p.is_dir() {
+                dirs.push(p);
+            } else {
+                files.push(p);
+            }
+        }
+        // A trailing separator matches the directory's contents, not
+        // siblings that merely share its name as a prefix.
+        let list = |ps: &[PathBuf], dir: bool| {
+            ps.iter()
+                .map(|p| {
+                    let mut s = fs::canonicalize(p).unwrap_or_else(|_| p.clone()).to_string_lossy().into_owned();
+                    if dir && !s.ends_with(std::path::MAIN_SEPARATOR) {
+                        s.push(std::path::MAIN_SEPARATOR);
+                    }
+                    quote_literal(&Value::Text(s))
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        sql.push_str(&format!(" SET allowed_directories = [{}];", list(&dirs, true)));
+        if !files.is_empty() {
+            sql.push_str(&format!(" SET allowed_paths = [{}];", list(&files, false)));
+        }
+        sql.push_str(" SET enable_external_access = false; SET lock_configuration = true;");
     }
     conn.execute_batch(&sql).map_err(db_err("cannot configure DuckDB"))?;
     Ok(conn)
@@ -190,6 +226,9 @@ impl Engine for DuckDbEngine {
         compile::output_schema(step, &input.schema)?;
         let sql = compile::step_sql(&step.kind)
             .ok_or_else(|| Error::Unsupported(format!("step `{}` does not execute as SQL", step.id)))?;
+        if let StepKind::Sql { .. } = step.kind {
+            check_single_select(&self.conn, &sql).map_err(|m| Error::Validation(format!("step `{}`: {m}", step.id)))?;
+        }
         self.conn
             .execute_batch(&format!(
                 "CREATE OR REPLACE TEMP VIEW input AS SELECT * FROM read_parquet({});",
@@ -257,6 +296,33 @@ impl Engine for DuckDbEngine {
                 }
             })
             .collect())
+    }
+}
+
+/// Custom SQL must be exactly one read-only query. DuckDB's own parser
+/// decides: `json_serialize_sql` accepts only SELECT statements (including
+/// WITH and FROM-first forms), so COPY, ATTACH, SET, INSTALL, PRAGMA and
+/// similar are refused before anything runs, and a second statement cannot
+/// be smuggled in after the first.
+pub fn check_single_select(conn: &Connection, sql: &str) -> Result<(), String> {
+    let sql = sql.trim().trim_end_matches(';');
+    let raw: String = conn
+        .query_row("SELECT json_serialize_sql(?)", [sql], |r| r.get(0))
+        .map_err(|e| format!("could not check the query: {e}"))?;
+    let parsed = crate::json::Json::parse(&raw).map_err(|e| e.to_string())?;
+    if parsed.get("error") == Some(&crate::json::Json::Bool(true)) {
+        let message = parsed.get("error_message").and_then(|m| m.as_str()).unwrap_or("");
+        return Err(if parsed.get("error_type").and_then(|t| t.as_str()) == Some("parser") {
+            format!("the query does not parse: {message}")
+        } else {
+            "custom SQL must be one query that reads data (SELECT, WITH or FROM). \
+             Writing files, changing settings and attaching databases are not allowed."
+                .into()
+        });
+    }
+    match parsed.get("statements").and_then(|s| s.as_arr()).map(Vec::len) {
+        Some(1) => Ok(()),
+        _ => Err("custom SQL must be a single query; remove the extra statements".into()),
     }
 }
 

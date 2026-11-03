@@ -18,6 +18,7 @@ export const tauriBackend: Backend = {
   removeStep: (id) => invoke<AnalysisView>("remove_step", { id }),
   setCells: (cells: NotebookCell[]) => invoke<AnalysisView>("set_cells", { cells }),
   rename: (name) => invoke<AnalysisView>("rename", { name }),
+  approve: (stepIds: string[]) => invoke<AnalysisView>("approve", { stepIds }),
 
   async run({ onStep }: RunHandlers) {
     // Listen before starting so no event is missed; the command itself

@@ -88,6 +88,12 @@ async fn set_cells(s: State<'_, Shared>, cells: Value) -> Res<AnalysisView> {
     with(&s, |a| a.set_cells(&cells))
 }
 
+/// Approve the shown code of these steps (ADR-0004).
+#[tauri::command]
+async fn approve(s: State<'_, Shared>, step_ids: Vec<String>) -> Res<AnalysisView> {
+    with(&s, |a| a.approve(&step_ids))
+}
+
 #[tauri::command]
 async fn rename(s: State<'_, Shared>, name: String) -> Res<AnalysisView> {
     with(&s, |a| a.rename(&name))
@@ -140,6 +146,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             startup_project,
+            approve,
             create_project,
             open_project,
             view,

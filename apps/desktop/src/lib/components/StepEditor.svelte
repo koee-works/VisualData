@@ -95,6 +95,15 @@
         <p class="font-semibold text-failed">This step failed on the last run</p>
         <p class="code mt-1 whitespace-pre-wrap">{step.detail}</p>
       </div>
+    {:else if step.state === "needs review"}
+      <div class="mb-4 flex flex-wrap items-center gap-3 rounded-md border border-review/40 bg-review-wash px-3 py-2 text-sm">
+        <p class="max-w-[64ch] flex-1">
+          <span class="font-semibold text-review">You haven't approved this code.</span> It came with the project and
+          will run as you, with access to your files and the network. Read it below; it won't run until you approve it.
+          Editing the code counts as writing it yourself.
+        </p>
+        <button class="btn" disabled={dirty} onclick={() => ws.approve([step.id])}>Approve</button>
+      </div>
     {:else if step.state === "blocked" && step.detail}
       <div class="mb-4 rounded-md border border-rule-strong bg-paper px-3 py-2 text-sm">
         Not run: {step.detail}. Fix that step and run again.

@@ -18,6 +18,7 @@ use vda_core::json::Json;
 use vda_core::model::{Analysis, Cell as NoteCell, Source, Step, StepKind, SOURCE_ID};
 use vda_core::persist;
 use vda_core::python::{default_interpreter, PythonRunner};
+use vda_core::review::{self, Approvals, ReviewPolicy};
 use vda_core::session::{Output, RunStatus, Session, StepRun, StepState};
 use vda_core::table::{Table, Value};
 
@@ -110,7 +111,9 @@ pub struct StepView {
     /// `visual`, `sql`, `python` or `chart`. Custom SQL and Python are never
     /// edited through visual controls.
     pub mode: String,
-    /// `fresh`, `stale`, `not run`, `failed`, `cancelled` or `blocked`.
+    /// `fresh`, `stale`, `not run`, `failed`, `cancelled`, `blocked` or
+    /// `needs review` (Python code that has not been approved to run) or
+    /// `waiting on review` (an earlier step needs review).
     pub state: String,
     pub detail: Option<String>,
     pub rows: Option<u64>,
@@ -137,6 +140,20 @@ pub struct AnalysisView {
     /// Notebook cells in document order (`analysis.json` format).
     pub cells: J,
     pub python: Option<String>,
+    /// Python steps waiting for the user's approval, in run order.
+    pub review: Vec<ReviewItem>,
+    /// Set when the source file lives outside the project folder (custom
+    /// SQL may read it; nothing else outside the folder).
+    pub external_source: Option<String>,
+}
+
+/// Code the user is asked to read before it runs.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ReviewItem {
+    pub step_id: String,
+    pub label: Option<String>,
+    pub input: String,
+    pub code: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -155,7 +172,7 @@ impl From<&StepRun> for StepEvent {
             RunStatus::Succeeded { cached } => (*cached, None),
             RunStatus::Failed { error } => (false, Some(error.clone())),
             RunStatus::Skipped { reason } => (false, Some(reason.clone())),
-            RunStatus::Cancelled => (false, None),
+            RunStatus::Cancelled | RunStatus::NeedsReview => (false, None),
         };
         StepEvent {
             step_id: r.step_id.clone(),
@@ -207,32 +224,81 @@ fn mode(kind: &StepKind) -> &'static str {
 }
 
 /// Application state: at most one open project.
+///
+/// Every project is opened with the safeguards of ADR-0004: Python code runs
+/// only after the user has approved it, and SQL can read only the project
+/// folder (and the source file, if it is kept elsewhere).
 pub struct App {
     session: Option<Session>,
     engine_options: EngineOptions,
     interpreter: PathBuf,
+    /// Where approvals are kept; `None` keeps them in memory for this App.
+    approvals_path: Option<PathBuf>,
+    memory_approvals: Approvals,
 }
 
 impl Default for App {
     fn default() -> Self {
-        Self::new(EngineOptions::default(), default_interpreter())
+        Self::new(EngineOptions::default(), default_interpreter()).with_approvals_file(review::default_approvals_path())
     }
 }
 
 impl App {
+    /// Approvals are kept in memory until `with_approvals_file` is used.
     pub fn new(engine_options: EngineOptions, interpreter: PathBuf) -> Self {
-        App { session: None, engine_options, interpreter }
+        App { session: None, engine_options, interpreter, approvals_path: None, memory_approvals: Approvals::in_memory() }
+    }
+
+    /// Keep approvals in this file (outside any project, so a project can
+    /// never approve its own code).
+    pub fn with_approvals_file(mut self, path: PathBuf) -> Self {
+        self.approvals_path = Some(path);
+        self
     }
 
     fn start(&mut self, analysis: Option<Analysis>, dir: &Path) -> Result<()> {
-        let engine = Box::new(DuckDbEngine::with_options(self.engine_options.clone())?);
+        let source = match &analysis {
+            Some(a) => a.source.path.clone(),
+            None => persist::load_analysis(dir)?.source.path,
+        };
+        let mut allowed = vec![dir.to_path_buf()];
+        let source = Path::new(&source);
+        if source.is_absolute() {
+            allowed.push(source.to_path_buf());
+        }
+        let options = EngineOptions { allowed_paths: Some(allowed), ..self.engine_options.clone() };
+        let engine = Box::new(DuckDbEngine::with_options(options)?);
         let python = Some(PythonRunner::new(self.interpreter.clone(), dir.join(".work")));
-        let session = match analysis {
+        let mut session = match analysis {
             Some(a) => Session::new(a, dir, engine, python)?,
             None => Session::open(dir, engine, python)?,
         };
+        let approvals = match &self.approvals_path {
+            Some(p) => Approvals::load(p.clone())?,
+            None => self.memory_approvals.clone(),
+        };
+        session.set_review_policy(ReviewPolicy::RequireApproval(approvals));
         self.session = Some(session);
         Ok(())
+    }
+
+    /// Approve the current code of these steps so they can run.
+    pub fn approve(&mut self, step_ids: &[String]) -> Result<AnalysisView> {
+        let s = self.session()?;
+        for id in step_ids {
+            s.approve_step(id)?;
+        }
+        self.remember_approvals();
+        self.view()
+    }
+
+    /// In-memory approvals outlive the session (close and reopen keeps them).
+    fn remember_approvals(&mut self) {
+        if self.approvals_path.is_none() {
+            if let Some(ReviewPolicy::RequireApproval(a)) = self.session.as_ref().map(Session::review_policy) {
+                self.memory_approvals = a.clone();
+            }
+        }
     }
 
     fn session(&mut self) -> Result<&mut Session> {
@@ -308,6 +374,21 @@ impl App {
             steps,
             cells,
             python: s.python_fingerprint().map(str::to_string),
+            review: s
+                .pending_review()
+                .iter()
+                .filter_map(|id| a.step(id))
+                .filter_map(|st| match &st.kind {
+                    StepKind::Python { code, .. } => Some(ReviewItem {
+                        step_id: st.id.clone(),
+                        label: st.label.clone(),
+                        input: st.input.clone(),
+                        code: code.clone(),
+                    }),
+                    _ => None,
+                })
+                .collect(),
+            external_source: Path::new(&a.source.path).is_absolute().then(|| a.source.path.clone()),
         })
     }
 
@@ -389,8 +470,20 @@ impl App {
         let step = Step { id: id.clone(), input: input.into(), label, kind };
         Self::check_against_input(s, &step)?;
         a.steps.push(step);
-        a.cells.push(NoteCell::Step { step_id: id });
-        self.commit(a)
+        a.cells.push(NoteCell::Step { step_id: id.clone() });
+        self.commit_with_approval(a, &id, true)
+    }
+
+    /// Save, and approve the step's code when the user has just written it
+    /// in the app. Saving a label or other setting of code the user has not
+    /// reviewed leaves it waiting for review.
+    fn commit_with_approval(&mut self, analysis: Analysis, id: &str, code_written: bool) -> Result<AnalysisView> {
+        self.commit(analysis)?;
+        if code_written {
+            self.session()?.approve_step(id)?;
+            self.remember_approvals();
+        }
+        self.view()
     }
 
     pub fn update_step(&mut self, id: &str, label: Option<String>, op: &J) -> Result<AnalysisView> {
@@ -401,11 +494,12 @@ impl App {
         if mode(&step.kind) != mode(&kind) {
             return fail("a step cannot change between visual, SQL, Python and chart; add a new step instead");
         }
+        let code_written = review::fingerprint(&step.kind) != review::fingerprint(&kind);
         step.kind = kind;
         step.label = label;
         let step = step.clone();
         Self::check_against_input(s, &step)?;
-        self.commit(a)
+        self.commit_with_approval(a, id, code_written)
     }
 
     pub fn remove_step(&mut self, id: &str) -> Result<AnalysisView> {

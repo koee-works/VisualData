@@ -63,9 +63,13 @@
       <div>
         <p class="text-lg font-semibold text-ink">No result yet</p>
         <p class="mt-1">
-          {step?.state === "failed" ? "The last run failed at this step." : step?.state === "blocked" ? "An earlier step failed." : "Run the analysis to see what this step produces."}
+          {step?.state === "failed" ? "The last run failed at this step." : step?.state === "blocked" ? "An earlier step failed." : step?.state === "needs review" ? "This step runs once you approve its code." : step?.state === "waiting on review" ? "An earlier Python step needs your review first." : "Run the analysis to see what this step produces."}
         </p>
-        <button class="btn btn-primary mt-4" onclick={() => ws.run()} disabled={ws.running}>Run analysis</button>
+        {#if step?.state === "needs review" || step?.state === "waiting on review"}
+          <button class="btn mt-4" onclick={() => (ws.reviewOpen = true)}>Review code</button>
+        {:else}
+          <button class="btn btn-primary mt-4" onclick={() => ws.run()} disabled={ws.running}>Run analysis</button>
+        {/if}
       </div>
     </div>
   {:else}

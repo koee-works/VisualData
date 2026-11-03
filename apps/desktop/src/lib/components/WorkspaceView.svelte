@@ -9,6 +9,7 @@
   import ResultPanel from "./ResultPanel.svelte";
   import Notebook from "./Notebook.svelte";
   import SourceOverview from "./SourceOverview.svelte";
+  import ReviewDialog from "./ReviewDialog.svelte";
 
   let { ws }: { ws: Workspace } = $props();
 
@@ -25,6 +26,8 @@
 </script>
 
 <svelte:window onpointermove={drag} onpointerup={() => (dragging = false)} />
+
+<ReviewDialog {ws} />
 
 <div class="grid h-full grid-rows-[auto_1fr]">
   <TopBar {ws} />

@@ -113,6 +113,10 @@
                 <span class="text-failed">Failed</span>
               {:else if s.state === "blocked"}
                 Waiting on a failed step
+              {:else if s.state === "needs review"}
+                <span class="text-review">Needs your review</span>
+              {:else if s.state === "waiting on review"}
+                Waiting on a review
               {:else if s.rows !== null && s.mode !== "chart"}
                 {formatCount(s.rows)} rows{s.state === "stale"
                   ? ", outdated"

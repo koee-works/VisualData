@@ -20,6 +20,8 @@ export interface Backend {
   removeStep(id: string): Promise<AnalysisView>;
   setCells(cells: NotebookCell[]): Promise<AnalysisView>;
   rename(name: string): Promise<AnalysisView>;
+  /** Approve the current code of these steps so they can run. */
+  approve(stepIds: string[]): Promise<AnalysisView>;
   /** Resolves when the run ends; progress arrives through `onStep`. */
   run(handlers: RunHandlers): Promise<RunSummary>;
   cancel(): Promise<void>;

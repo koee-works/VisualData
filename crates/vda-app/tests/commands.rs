@@ -10,6 +10,11 @@ fn sample() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/regional-revenue/sales.csv")
 }
 
+/// Approvals go to a temporary file, never the user's real one.
+fn test_app() -> App {
+    App::default().with_approvals_file(fresh_dir("approvals").with_extension("json"))
+}
+
 fn fresh_dir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("vda-app-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -33,7 +38,7 @@ fn aggregate_op() -> serde_json::Value {
 #[test]
 fn mixed_workflow_through_commands() {
     let dir = fresh_dir("workflow");
-    let mut app = App::default();
+    let mut app = test_app();
     let view = app.create_project(&dir, &sample(), "Regional revenue").unwrap();
     assert_eq!(view.source.rows, 60);
     assert!(dir.join("sales.csv").exists(), "the CSV is copied into the project");
@@ -104,7 +109,7 @@ fn mixed_workflow_through_commands() {
 #[test]
 fn invalid_edits_are_rejected_with_a_reason() {
     let dir = fresh_dir("invalid");
-    let mut app = App::default();
+    let mut app = test_app();
     app.create_project(&dir, &sample(), "x").unwrap();
 
     let bad_column = json!({"type": "filter", "predicates": [{"column": "regoin", "op": "=", "value": "East"}]});
@@ -135,7 +140,7 @@ fn invalid_edits_are_rejected_with_a_reason() {
 #[test]
 fn notebook_cells_can_be_edited() {
     let dir = fresh_dir("cells");
-    let mut app = App::default();
+    let mut app = test_app();
     app.create_project(&dir, &sample(), "x").unwrap();
     app.add_step("source", None, &filter_op(20)).unwrap();
     let view = app
@@ -152,7 +157,7 @@ fn notebook_cells_can_be_edited() {
 #[test]
 fn creating_over_an_existing_project_is_refused() {
     let dir = fresh_dir("exists");
-    let mut app = App::default();
+    let mut app = test_app();
     app.create_project(&dir, &sample(), "x").unwrap();
     assert!(app.create_project(&dir, &sample(), "y").unwrap_err().message.contains("already contains"));
 }
