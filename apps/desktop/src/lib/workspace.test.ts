@@ -329,3 +329,60 @@ describe("Core transforms and export", () => {
     expect(ws.error?.message).toContain("outdated");
   });
 });
+
+describe("Console", () => {
+  async function seeded() {
+    const mock = new MockBackend();
+    await mock.seedDemo({ run: true, editAfterRun: false });
+    const ws = new Workspace(mock);
+    await ws.open("/projects/x");
+    await ws.refreshProblems();
+    return { ws, mock };
+  }
+
+  it("lists problems after edits, errors first, and finds them per step", async () => {
+    const { ws } = await seeded();
+    expect(ws.problems.items).toEqual([]);
+    ws.selected = "aggregate_1";
+    await ws.addStep({ type: "python", code: "for _, r in df.iterrows():\n    pass", timeout_ms: 60000 });
+    await ws.refreshProblems();
+    expect(ws.problems.items.map((p) => [p.severity, p.code])).toEqual([
+      ["error", "python-result"],
+      ["warning", "row-loop"],
+    ]);
+    expect(ws.counts.error).toBe(1);
+    expect(ws.problemsFor("python_2").map((p) => p.code)).toContain("row-loop");
+  });
+
+  it("dismisses a warning and shows it again", async () => {
+    const { ws } = await seeded();
+    ws.selected = "aggregate_1";
+    await ws.addStep({ type: "python", code: "for _, r in df.iterrows():\n    pass\nresult = df", timeout_ms: 60000 });
+    await ws.refreshProblems();
+    const loop = ws.problems.items.find((p) => p.code === "row-loop")!;
+    await ws.dismiss(loop);
+    expect(ws.problems.items.some((p) => p.code === "row-loop")).toBe(false);
+    expect(ws.problems.dismissed).toBe(1);
+    await ws.restoreDismissed();
+    expect(ws.problems.items.some((p) => p.code === "row-loop")).toBe(true);
+  });
+
+  it("reveals the step a problem is about", async () => {
+    const { ws } = await seeded();
+    ws.selected = "source";
+    ws.centerTab = "notebook";
+    ws.reveal({ severity: "error", code: "formula", step: "filter_1", field: null, line: null, column: null, message: "", from_last_run: false, dismissable: false });
+    expect([ws.selected, ws.centerTab]).toEqual(["filter_1", "step"]);
+  });
+
+  it("keeps runs in the log, newest first, with what steps printed", async () => {
+    const { ws, mock } = await seeded();
+    const py = ws.view!.steps.find((s) => s.id === "python_1")!;
+    if (py.op.type === "python") await ws.saveStep("python_1", py.label, { ...py.op, code: `print("hi")\n${py.op.code}` });
+    await ws.run();
+    const log = await mock.runLog(5);
+    expect(log.length).toBe(2);
+    expect(log[0]!.steps.find((s) => s.step_id === "python_1")!.output).toContain("printed by python_1");
+    expect(ws.runs).toBe(1);
+  });
+});

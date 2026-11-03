@@ -92,6 +92,8 @@ pub struct StepRun {
     pub rows: Option<usize>,
     pub content_hash: Option<String>,
     pub duration_ms: u64,
+    /// What the step printed (Python stdout and stderr), if anything.
+    pub output: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -165,6 +167,7 @@ impl RunRecord {
                                 ("rows", s.rows.map(|r| Json::Num(r as f64)).unwrap_or(Json::Null)),
                                 ("content_sha256", opt(&s.content_hash)),
                                 ("duration_ms", Json::Num(s.duration_ms as f64)),
+                                ("output", opt(&s.output)),
                             ])
                         })
                         .collect(),
@@ -215,6 +218,7 @@ impl RunRecord {
                         rows: s.get("rows").and_then(Json::as_f64).map(|r| r as usize),
                         content_hash: opt(s, "content_sha256"),
                         duration_ms: s.get("duration_ms").and_then(Json::as_f64).unwrap_or(0.0) as u64,
+                        output: opt(s, "output"),
                     })
                 })
                 .collect::<Result<_, Error>>()?,
@@ -277,6 +281,8 @@ pub struct Session {
     cancel: Arc<AtomicBool>,
     artifacts: ArtifactStore,
     review: ReviewPolicy,
+    /// Output of the step being executed, picked up by the run record.
+    step_output: Option<String>,
 }
 
 impl Session {
@@ -301,6 +307,7 @@ impl Session {
             last_run: None,
             cancel: Arc::new(AtomicBool::new(false)),
             review: ReviewPolicy::default(),
+            step_output: None,
         })
     }
 
@@ -584,6 +591,23 @@ impl Session {
         })
     }
 
+    /// The dataset behind a source or a step's held table result.
+    pub fn dataset_of(&mut self, id: &str) -> Option<Dataset> {
+        if self.analysis.is_source(id) {
+            return self.source_dataset(id).ok();
+        }
+        self.output(id).and_then(Output::as_dataset).cloned()
+    }
+
+    /// Per-column profile of a dataset, from the engine.
+    pub fn profile_dataset(&mut self, ds: &Dataset) -> Result<Vec<ColumnProfile>, Error> {
+        self.engine.profile(ds)
+    }
+
+    pub fn python_runner(&self) -> Option<&PythonRunner> {
+        self.python.as_ref()
+    }
+
     /// Schema of a source or of a step's held result, if known without
     /// reading data (sources are converted on first use).
     pub fn schema_of(&mut self, id: &str) -> Option<Schema> {
@@ -695,6 +719,7 @@ impl Session {
                 content_hash: output.map(Output::content_hash),
                 status,
                 duration_ms: t0.elapsed().as_millis() as u64,
+                output: self.step_output.take().filter(|o| !o.trim().is_empty()),
             });
             on_step(record.steps.last().unwrap());
         }
@@ -744,7 +769,9 @@ impl Session {
                     let raw = self.artifacts.temp_path(key);
                     let named: Vec<(String, PathBuf)> =
                         step.inputs.iter().cloned().zip(inputs.iter().map(|d| d.path.clone())).collect();
-                    let ran = runner.run_inputs(code, &named, &raw, Duration::from_millis(*timeout_ms), &self.cancel);
+                    let run = runner.run_inputs(code, &named, &raw, Duration::from_millis(*timeout_ms), &self.cancel);
+                    self.step_output = Some(run.output);
+                    let ran = run.result;
                     let adopted = ran.and_then(|_| self.engine.adopt_parquet(&raw, &tmp));
                     let _ = fs::remove_file(&raw);
                     Ok(Output::Table(self.artifacts.commit_table(key, adopted?)?))

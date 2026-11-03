@@ -1,6 +1,6 @@
 # First engineering slice — status
 
-Updated: 2026-11-02. Decisions: [ADR-0001](docs/adr/0001-deployment-model.md) (local-first desktop; Tauri 2 + Rust core + embedded DuckDB + Python child process), [ADR-0002](docs/adr/0002-build-cache.md) (build cache), [ADR-0003](docs/adr/0003-frontend.md) (desktop frontend), [ADR-0004](docs/adr/0004-code-review-and-sandbox.md) (code review and SQL sandbox), [ADR-0005](docs/adr/0005-multi-input-steps.md) (several sources and multi-input steps), [ADR-0006](docs/adr/0006-formulas-and-core-transforms.md) (formulas and core transforms).
+Updated: 2026-11-02. Decisions: [ADR-0001](docs/adr/0001-deployment-model.md) (local-first desktop; Tauri 2 + Rust core + embedded DuckDB + Python child process), [ADR-0002](docs/adr/0002-build-cache.md) (build cache), [ADR-0003](docs/adr/0003-frontend.md) (desktop frontend), [ADR-0004](docs/adr/0004-code-review-and-sandbox.md) (code review and SQL sandbox), [ADR-0005](docs/adr/0005-multi-input-steps.md) (several sources and multi-input steps), [ADR-0006](docs/adr/0006-formulas-and-core-transforms.md) (formulas and core transforms), [ADR-0007](docs/adr/0007-linter-and-console.md) (linter and console).
 
 ## Acceptance scenario coverage
 
@@ -16,7 +16,7 @@ From the "Shared team acceptance" section of the v0.2.0 briefs. Tests: `crates/v
 | 6 | Change an upstream step; downstream stale until rerun | Done | `step6_…`, `undoing_an_edit_reuses_the_earlier_saved_results` |
 | 7 | Controlled failure: diagnose, cancel or correct, recover | Done | `step7_…` (2 tests), `unreadable_saved_result_is_recomputed` |
 
-All 115 Rust tests pass (`cargo test -p vda-core -p vda-app`), plus 30 frontend unit tests and the desktop end-to-end scenario (below). The demo writes a complete project folder: `cargo run -p vda-core --example slice -- <dir>`.
+All 120 Rust tests pass (`cargo test -p vda-core -p vda-app`), plus 34 frontend unit tests and the desktop end-to-end scenario (below). The demo writes a complete project folder: `cargo run -p vda-core --example slice -- <dir>`.
 
 ## What exists
 
@@ -60,7 +60,7 @@ Svelte 5 in Tauri 2 ([ADR-0003](docs/adr/0003-frontend.md)), built and run on Li
 | Notebook | Markdown and step cells in document order, previews of each result, reordering; text is escaped before rendering |
 | Not yet | Creating projects from the welcome screen is wired but was not exercised end to end (file dialogs cannot be scripted under Xvfb); no undo; no column resizing; keyboard navigation inside the grid |
 
-**End to end** (`apps/desktop/e2e/run_e2e.py`, the real app under Xvfb through tauri-driver, with a fresh approvals file), in two phases. First: open a project received from someone else → its Python code is shown for review → *Not now* → run: visual steps run, the Python step needs review and the chart waits → approve from the top bar → run → all current → inspect an aggregate's rows and SQL → edit the upstream filter → all four steps outdated, banner shown → rerun from the banner → notebook with text, tables and chart → chart step → Python step. Passes; screenshots in `docs/screenshots/`. Then a second project with two sources: run → the full join keeps a region with no orders, its SQL is a full outer join → switch to matching rows only → the join and the SQL after it go outdated → rerun → SQL that reads the second source by name → the second source's profile → a spreadsheet source with typed columns, stacked with a CSV by an append → rename a source in the app, rerun, and the SQL that names it follows → a formula error explained, fixed, run, and a top-2 sort after it.
+**End to end** (`apps/desktop/e2e/run_e2e.py`, the real app under Xvfb through tauri-driver, with a fresh approvals file), in two phases. First: open a project received from someone else → its Python code is shown for review → *Not now* → run: visual steps run, the Python step needs review and the chart waits → approve from the top bar → run → all current → inspect an aggregate's rows and SQL → edit the upstream filter → all four steps outdated, banner shown → rerun from the banner → notebook with text, tables and chart → chart step → Python step. Passes; screenshots in `docs/screenshots/`. Then a second project with two sources: run → the full join keeps a region with no orders, its SQL is a full outer join → switch to matching rows only → the join and the SQL after it go outdated → rerun → SQL that reads the second source by name → the second source's profile → a spreadsheet source with typed columns, stacked with a CSV by an append → rename a source in the app, rerun, and the SQL that names it follows → a formula error shown while typing and on save, fixed, run, and a top-2 sort after it → the console lists the linter's notes, one is dismissed, the run log shows the runs.
 
 Found and fixed while building it: an effect loop in the grid (reading the page cache while clearing it), Vega cloning Svelte's reactive proxies, charts widening the window, and long decimals (now six places on screen, full value on hover).
 
@@ -103,6 +103,16 @@ Before this change, results were in-memory tables. The regional-revenue sample w
 - **Reopening a large project rehashed the source** (1.9 s at 10M rows). The source fingerprint is now saved with the results (355 ms).
 - **Out-of-memory Python steps hung until their timeout.** After a `MemoryError`, Python's shutdown deadlocked in pyarrow's thread pool, so the step sat for the full timeout (30 s by default) instead of failing at once. Found through an intermittent test failure; reproduced by catching the hung process. The wrapper now flushes its error and exits immediately, and the memory test asserts the failure arrives within 10 s. Twenty consecutive stress runs had no hang.
 - **A test changed a process-wide environment variable** while other tests started child processes in parallel (a data race; `set_var` is `unsafe` in newer Rust editions for this reason). The test now inspects the child's whole environment instead.
+
+## Linter and console (ADR-0007)
+
+| Part | Behaviour | Tests |
+|---|---|---|
+| Static checks | Columns carried through the graph without running; invalid steps, formula errors with positions, SQL that does not parse or reads a table that is not an input, Python syntax errors (`ast`, no user code run) and missing `result`, row-by-row Python loops. | `tests/lint.rs` (`problems_are_found_before_anything_runs`) |
+| From the last run | Joins that multiplied rows or matched none, filters that kept nothing, columns missing in every row, bar charts with too many bars; notes for unused steps, outdated results, code waiting for review; failures. | `tests/lint.rs` (`the_last_run_explains_surprising_results`, `failures_unused_steps_and_drafts`) |
+| Drafts | A step being edited is checked unsaved; problems show at the formula, line or editor. | `tests/lint.rs`, `crates/vda-app/tests/console.rs`, e2e step 17 |
+| Python output | stdout and stderr kept (64 KB each), also on failure; in run records and progress events. | `tests/python_runner.rs` (`printed_output_and_warnings_are_kept_even_when_the_step_fails`), `console.rs` |
+| Console | Problems (links, counts, dismissals saved in `dismissed.json`), Output, Run log. | `workspace.test.ts`, `console.rs`, e2e step 18, `docs/screenshots/13-console.png` |
 
 ## Formulas and core transforms (ADR-0006)
 
@@ -150,7 +160,8 @@ Before this change, results were in-memory tables. The regional-revenue sample w
 | **Notebook** | Markdown export only. `.ipynb` import/export not implemented. | Define the supported cell/output subset first (developer brief, rule 4). |
 | **Python containment** | Approved Python runs with the user's full permissions; review is the only safeguard. | OS sandbox per platform (Landlock/seccomp, `sandbox-exec`, AppContainer): no network, read-only outside the project (ADR-0004). |
 | **Managing approvals** | Approvals cannot be listed or revoked in the UI (`Approvals::revoke` exists in the core); they do not move between computers. | An approvals page in settings; signed projects for teams. |
-| **Analysis functions, next** | Window calculations, duplicates by key, pivot/unpivot, binning; chart and notebook export; formulas checked while typing. | ADR-0006, "Not done yet". |
+| **Analysis functions, next** | Window calculations, duplicates by key, pivot/unpivot, binning; chart and notebook export. | ADR-0006, "Not done yet". |
+| **Linter, further** | Project-wide rule settings; checking the columns custom SQL reads. | ADR-0007, "Not done yet". |
 | **Combining data, further** | Join conditions on computed expressions need custom SQL; database and remote sources are not available (they need DuckDB extensions downloaded at run time). | ADR-0005, "Not done yet". |
 | **Windows** | Not run. The memory cap is Unix only (`ulimit -v`); CI runs Windows as allowed-to-fail. | Job Object limits, then make the Windows job required. |
 | **Seeds / nondeterminism** | Not recorded. Replay detects divergence but cannot explain it. | Record seeds where users set them; flag known nondeterministic functions. |

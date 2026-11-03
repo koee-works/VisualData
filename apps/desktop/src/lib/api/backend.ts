@@ -1,7 +1,18 @@
 // One interface for the UI; implemented by Tauri IPC in the app and by an
 // in-memory mock in tests and browser previews.
 
-import type { AnalysisView, NotebookCell, Page, ProfileRow, RunSummary, StepEvent, StepOp } from "./types";
+import type {
+  AnalysisView,
+  NotebookCell,
+  Page,
+  Problem,
+  Problems,
+  ProfileRow,
+  RunSummary,
+  RunView,
+  StepEvent,
+  StepOp,
+} from "./types";
 
 export interface RunHandlers {
   onStep: (e: StepEvent) => void;
@@ -42,6 +53,14 @@ export interface Backend {
   pickFolder(): Promise<string | null>;
   /** Ask where to save a file; `null` if cancelled. */
   pickSavePath(defaultName: string): Promise<string | null>;
+  /** Everything the linter finds, errors first. */
+  problems(): Promise<Problems>;
+  /** Check a step being edited without saving it (`id` null for a new step). */
+  checkDraft(id: string | null, inputs: string[], op: StepOp): Promise<Problem[]>;
+  dismiss(step: string | null, code: string, dismissed: boolean): Promise<Problems>;
+  restoreDismissed(): Promise<Problems>;
+  /** Latest runs first. */
+  runLog(limit: number): Promise<RunView[]>;
   /** Export a source or a current step result; the format follows the extension. */
   exportResult(id: string, path: string): Promise<number>;
 }

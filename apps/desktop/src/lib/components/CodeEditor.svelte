@@ -3,7 +3,13 @@
     code = $bindable(),
     language,
     inputs,
-  }: { code: string; language: "sql" | "python"; inputs: { id: string; name: string }[] } = $props();
+    problems = [],
+  }: {
+    code: string;
+    language: "sql" | "python";
+    inputs: { id: string; name: string }[];
+    problems?: import("../api/types").Problem[];
+  } = $props();
 
   let first = $derived(inputs[0]!);
   let more = $derived(inputs.slice(1));
@@ -39,5 +45,11 @@
     aria-label={language === "sql" ? "SQL query" : "Python code"}
     bind:value={code}
     {onkeydown}
+    aria-invalid={problems.some((p) => p.severity === "error")}
   ></textarea>
+  {#each problems as p, i (i)}
+    <p class="text-sm {p.severity === 'error' ? 'text-failed' : 'text-stale'}" role={p.severity === "error" ? "alert" : undefined}>
+      {#if p.line}Line {p.line}{#if p.column}, character {p.column}{/if}: {/if}{p.message}
+    </p>
+  {/each}
 </div>

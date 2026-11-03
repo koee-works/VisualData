@@ -9,6 +9,7 @@
   import Notebook from "./Notebook.svelte";
   import SourceOverview from "./SourceOverview.svelte";
   import ReviewDialog from "./ReviewDialog.svelte";
+  import Console from "./Console.svelte";
 
   let { ws }: { ws: Workspace } = $props();
 
@@ -83,6 +84,7 @@
       <Tabs.Content value="notebook" class="min-h-0 flex-1 overflow-y-auto">
         <Notebook {ws} />
       </Tabs.Content>
+      <Console {ws} />
     </Tabs.Root>
   </div>
 </div>

@@ -11,7 +11,10 @@ import type {
   Literal,
   NotebookCell,
   Page,
+  Problem,
+  Problems,
   ProfileRow,
+  RunView,
   RunSummary,
   StepEvent,
   StepOp,
@@ -552,6 +555,76 @@ export class MockBackend implements Backend {
     return { def: this.def(s.id), columns: input.columns, rows: input.rows.slice(0, 20) };
   }
 
+  // ---- console. The mock's checks are a small stand-in for the Rust linter.
+  dismissed = new Set<string>();
+  runs: RunView[] = [];
+
+  private lintStep(st: { id: string; op: StepOp }): Problem[] {
+    const out: Problem[] = [];
+    const base = { step: st.id, line: null, column: null, from_last_run: false, dismissable: false };
+    if (st.op.type === "derive")
+      st.op.columns.forEach((c, i) => {
+        if (!c.formula.trim() || /[+\-*/&,(]\s*$/.test(c.formula))
+          out.push({ ...base, severity: "error", code: "formula", field: `columns.${i}.formula`, message: "the formula ends too early" });
+      });
+    if (st.op.type === "python") {
+      if (!/\bresult\s*=/.test(st.op.code))
+        out.push({ ...base, severity: "error", code: "python-result", field: "code", message: "never assigns a DataFrame to `result`" });
+      st.op.code.split("\n").forEach((l, i) => {
+        if (l.includes(".iterrows("))
+          out.push({
+            ...base,
+            severity: "warning",
+            code: "row-loop",
+            field: "code",
+            line: i + 1,
+            dismissable: true,
+            message: "works through rows one at a time; operations on whole columns are usually far faster on large inputs",
+          });
+      });
+    }
+    return out;
+  }
+
+  async problems(): Promise<Problems> {
+    let items: Problem[] = [];
+    let stale = 0;
+    for (const st of this.steps) {
+      items.push(...this.lintStep(st));
+      const state = this.state(st);
+      if (state === "failed")
+        items.push({ severity: "error", code: "failed", step: st.id, field: null, line: null, column: null, message: `failed on the last run: ${this.failed.get(st.id)}`, from_last_run: true, dismissable: false });
+      if (state === "stale") stale++;
+    }
+    if (stale)
+      items.push({ severity: "info", code: "outdated", step: null, field: null, line: null, column: null, message: `${stale} result${stale === 1 ? " is" : "s are"} outdated; run the analysis to update`, from_last_run: false, dismissable: true });
+    const before = items.length;
+    items = items.filter((p) => !(p.dismissable && this.dismissed.has(`${p.step}|${p.code}`)));
+    const rank = { error: 0, warning: 1, info: 2 };
+    items.sort((a, b) => rank[a.severity] - rank[b.severity]);
+    return { items, dismissed: before - items.length };
+  }
+
+  async checkDraft(id: string | null, _inputs: string[], op: StepOp): Promise<Problem[]> {
+    return this.lintStep({ id: id ?? "new", op });
+  }
+
+  async dismiss(step: string | null, code: string, dismissed: boolean): Promise<Problems> {
+    const key = `${step}|${code}`;
+    if (dismissed) this.dismissed.add(key);
+    else this.dismissed.delete(key);
+    return this.problems();
+  }
+
+  async restoreDismissed(): Promise<Problems> {
+    this.dismissed.clear();
+    return this.problems();
+  }
+
+  async runLog(limit: number): Promise<RunView[]> {
+    return this.runs.slice(0, limit);
+  }
+
   async run({ onStep }: RunHandlers): Promise<RunSummary> {
     this.cancelled = false;
     const events: StepEvent[] = [];
@@ -582,7 +655,8 @@ export class MockBackend implements Backend {
           this.results.set(s.id, r);
           this.failed.delete(s.id);
           ok.add(s.id);
-          e = { step_id: s.id, status: "succeeded", cached: false, detail: null, rows: r.rows.length, duration_ms: 3 };
+          const printed = s.op.type === "python" && s.op.code.includes("print(") ? `(mock) printed by ${s.id}\n` : null;
+          e = { step_id: s.id, status: "succeeded", cached: false, detail: null, rows: r.rows.length, duration_ms: 3, output: printed };
         } catch (err) {
           this.failed.set(s.id, (err as Error).message);
           e = { step_id: s.id, status: "failed", cached: false, detail: (err as Error).message, rows: null, duration_ms: 1 };
@@ -591,7 +665,9 @@ export class MockBackend implements Backend {
       events.push(e);
       onStep(e);
     }
-    return { run_id: `run-${Date.now()}`, succeeded: events.every((e) => e.status === "succeeded"), steps: events };
+    const summary = { run_id: `run-${Date.now()}`, succeeded: events.every((e) => e.status === "succeeded"), steps: events };
+    this.runs.unshift({ ...summary, started_unix_ms: Date.now() });
+    return summary;
   }
 
   async cancel(): Promise<void> {

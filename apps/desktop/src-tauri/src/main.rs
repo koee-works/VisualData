@@ -74,6 +74,31 @@ async fn update_source(s: State<'_, Shared>, id: String, new_id: Option<String>,
 }
 
 #[tauri::command]
+async fn problems(s: State<'_, Shared>) -> Res<vda_app::Problems> {
+    with(&s, |a| a.problems())
+}
+
+#[tauri::command]
+async fn check_draft(s: State<'_, Shared>, id: Option<String>, inputs: Vec<String>, op: Value) -> Res<Vec<vda_app::Problem>> {
+    with(&s, |a| a.check_draft(id.as_deref(), &inputs, &op))
+}
+
+#[tauri::command]
+async fn dismiss(s: State<'_, Shared>, step: Option<String>, code: String, dismissed: bool) -> Res<vda_app::Problems> {
+    with(&s, |a| a.dismiss(step, &code, dismissed))
+}
+
+#[tauri::command]
+async fn restore_dismissed(s: State<'_, Shared>) -> Res<vda_app::Problems> {
+    with(&s, |a| a.restore_dismissed())
+}
+
+#[tauri::command]
+async fn run_log(s: State<'_, Shared>, limit: usize) -> Res<Vec<vda_app::RunView>> {
+    with(&s, |a| a.run_log(limit))
+}
+
+#[tauri::command]
 async fn export(s: State<'_, Shared>, id: String, path: String) -> Res<u64> {
     with(&s, |a| a.export(&id, std::path::Path::new(&path)))
 }
@@ -188,6 +213,11 @@ fn main() {
             add_source,
             remove_source,
             export,
+            problems,
+            check_draft,
+            dismiss,
+            restore_dismissed,
+            run_log,
             source_sheets,
             update_source,
             set_trust_all,

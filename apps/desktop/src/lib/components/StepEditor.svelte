@@ -2,7 +2,8 @@
   import { untrack } from "svelte";
   import { Trash2, X } from "@lucide/svelte";
   import type { Workspace } from "../workspace.svelte";
-  import type { Column, StepOp, StepView } from "../api/types";
+  import type { Column, Problem, StepOp, StepView } from "../api/types";
+  import { CircleX, TriangleAlert, Info } from "@lucide/svelte";
   import { describe, stepTitle } from "../format";
   import FilterEditor from "./FilterEditor.svelte";
   import AggregateEditor from "./AggregateEditor.svelte";
@@ -57,6 +58,39 @@
   let readable = $derived(ws.readable(step.id));
   let extraChoices = $derived(readable.filter((o) => !inputs.includes(o.id)));
 
+  // Checked as you type: a draft is sent to the linter (not saved) a moment
+  // after the last change; the saved step's problems show otherwise.
+  let draftProblems = $state<Problem[] | null>(null);
+  $effect(() => {
+    const op = JSON.stringify(draft);
+    const ins = JSON.stringify(inputs);
+    const id = step.id;
+    if (!dirty) {
+      draftProblems = null;
+      return;
+    }
+    const timer = setTimeout(() => {
+      ws.backend.checkDraft(id, JSON.parse(ins), JSON.parse(op)).then(
+        (p) => {
+          if (id === step.id && op === JSON.stringify(draft)) draftProblems = p;
+        },
+        () => {},
+      );
+    }, 300);
+    return () => clearTimeout(timer);
+  });
+  let shown = $derived(
+    // Notes (unused, outdated) belong in the console, not in the editor.
+    (draftProblems ?? ws.problemsFor(step.id)).filter((p) => p.severity !== "info" && p.code !== "failed"),
+  );
+  let general = $derived(shown.filter((p) => !p.field?.startsWith("columns.") && p.field !== "code" && p.field !== "sql"));
+  let byField = $derived.by(() => {
+    const m: Record<string, Problem[]> = {};
+    for (const p of shown) if (p.field) (m[p.field] ??= []).push(p);
+    return m;
+  });
+  const icons = { error: CircleX, warning: TriangleAlert, info: Info };
+
   async function save() {
     saving = true;
     await ws.saveStep(step.id, label.trim() || null, $state.snapshot(draft) as StepOp, inputsChanged ? [...inputs] : undefined);
@@ -105,6 +139,18 @@
         Its columns appear after it runs, so type column names for now{/if}.
     </p>
 
+    {#if general.length}
+      <ul class="mb-4 space-y-1 text-sm" aria-label="Problems in this step">
+        {#each general as p, i (i)}
+          {@const Icon = icons[p.severity]}
+          <li class="flex items-start gap-2">
+            <Icon size={15} class="mt-0.5 shrink-0 {p.severity === 'error' ? 'text-failed' : p.severity === 'warning' ? 'text-stale' : 'text-ink-faint'}" />
+            <span>{p.message}{#if p.from_last_run}<span class="text-ink-faint"> (last run)</span>{/if}</span>
+          </li>
+        {/each}
+      </ul>
+    {/if}
+
     {#if step.state === "failed" && step.detail}
       <div class="mb-4 rounded-md border border-failed/40 bg-failed-wash px-3 py-2 text-sm" role="alert">
         <p class="font-semibold text-failed">This step failed on the last run</p>
@@ -141,7 +187,7 @@
         rightId={inputs[1]!}
       />
     {:else if draft.type === "derive"}
-      <DeriveEditor bind:columns={draft.columns} {inputColumns} />
+      <DeriveEditor bind:columns={draft.columns} {inputColumns} problems={byField} />
     {:else if draft.type === "select"}
       <SelectEditor bind:columns={draft.columns} {inputColumns} />
     {:else if draft.type === "sort"}
@@ -150,9 +196,9 @@
       <AppendEditor {ws} bind:inputs bind:distinct={draft.distinct} bind:origin={draft.origin} choices={readable} />
     {:else if draft.type === "sql" || draft.type === "python"}
       {#if draft.type === "sql"}
-        <CodeEditor bind:code={draft.sql} language="sql" inputs={inputs.map((id) => ({ id, name: ws.nameOf(id) }))} />
+        <CodeEditor bind:code={draft.sql} language="sql" inputs={inputs.map((id) => ({ id, name: ws.nameOf(id) }))} problems={byField["sql"] ?? []} />
       {:else}
-        <CodeEditor bind:code={draft.code} language="python" inputs={inputs.map((id) => ({ id, name: ws.nameOf(id) }))} />
+        <CodeEditor bind:code={draft.code} language="python" inputs={inputs.map((id) => ({ id, name: ws.nameOf(id) }))} problems={byField["code"] ?? []} />
       {/if}
       <div class="mt-3 flex flex-wrap items-center gap-2 text-sm" aria-label="More inputs">
         <span class="text-ink-soft">Also reads</span>

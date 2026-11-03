@@ -140,6 +140,36 @@ export interface StepEvent {
   detail: string | null;
   rows: number | null;
   duration_ms: number;
+  /** What the step printed (Python), if anything. */
+  output?: string | null;
+}
+
+export type Severity = "error" | "warning" | "info";
+
+/** A linter finding. */
+export interface Problem {
+  severity: Severity;
+  code: string;
+  step: string | null;
+  /** Part of the step: `columns.1.formula`, `sql`, `code`, ... */
+  field: string | null;
+  line: number | null;
+  column: number | null;
+  message: string;
+  from_last_run: boolean;
+  dismissable: boolean;
+}
+
+export interface Problems {
+  items: Problem[];
+  dismissed: number;
+}
+
+export interface RunView {
+  run_id: string;
+  started_unix_ms: number;
+  succeeded: boolean;
+  steps: StepEvent[];
 }
 
 export interface RunSummary {

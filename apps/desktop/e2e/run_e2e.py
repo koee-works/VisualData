@@ -314,6 +314,8 @@ def joins(s, shots):
     s.wait_text(table, "share_of_target")
     formula = "(//textarea[@aria-label='Formula'])[2]"
     s.clear_and_type(formula, 'if(share_of_target >= 1, "met", 0)')
+    # Checked while typing, before anything is saved.
+    s.find("//section[@aria-label='Step editor']//p[@role='alert' and contains(., 'mixes text and a whole number')]")
     s.click("//button[normalize-space()='Save step']")
     s.wait_text("//*[@role='alert']", "mixes text and a whole number")
     s.screenshot(f"{shots}/11-formula-error.png")
@@ -326,6 +328,18 @@ def joins(s, shots):
     s.screenshot(f"{shots}/12-formula.png")
     s.click(node("Closest to target"))
     s.wait_text(node("Closest to target"), "2 rows")
+
+    step(18, "The console lists what the linter finds; a note can be dismissed, and the run log shows the runs")
+    s.click("//section[@aria-label='Console']//button[starts-with(normalize-space(), 'Problems')]")
+    problems = "//section[@aria-label='Console']//ul[@aria-label='Problems']"
+    s.wait_text(problems, "no step reads it and the notebook does not show it")
+    s.screenshot(f"{shots}/13-console.png")
+    before = s.count(problems + "/li")
+    s.click(f"({problems}/li[contains(., 'no step reads it')]//button[@aria-label='Dismiss'])[1]")
+    s.wait_text("//section[@aria-label='Console']", "dismissed")
+    assert s.count(problems + "/li") == before - 1
+    s.click("//section[@aria-label='Console']//button[normalize-space()='Run log']")
+    s.wait_text("//section[@aria-label='Console']//ul[@aria-label='Runs']", "Succeeded")
 
 
 if __name__ == "__main__":

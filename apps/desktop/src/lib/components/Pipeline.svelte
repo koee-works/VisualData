@@ -182,6 +182,8 @@
                     Running…
                   {:else if s.state === "failed"}
                     <span class="text-failed">Failed</span>
+                  {:else if ws.problemsFor(s.id).some((p) => p.severity === "error")}
+                    <span class="text-failed">Has a problem</span>
                   {:else if s.state === "blocked"}
                     Waiting on a failed step
                   {:else if s.state === "needs review"}

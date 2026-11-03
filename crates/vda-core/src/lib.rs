@@ -15,6 +15,7 @@ pub mod export;
 pub mod formula;
 pub mod hash;
 pub mod json;
+pub mod lint;
 pub mod model;
 pub mod notebook;
 pub mod persist;

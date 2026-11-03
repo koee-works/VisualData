@@ -134,3 +134,46 @@ fn dates_and_timestamps_survive_the_python_boundary() {
     assert_eq!(out.schema.fields[0].dtype, DataType::Timestamp);
     assert_eq!(out.rows[0][0].to_string(), "2026-01-02 03:04:05");
 }
+
+#[test]
+fn printed_output_and_warnings_are_kept_even_when_the_step_fails() {
+    use std::sync::atomic::AtomicBool;
+    let dir = std::env::temp_dir().join(format!("vda-py-output-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let r = vda_core::python::PythonRunner::new(vda_core::python::default_interpreter(), dir.join(".work"));
+    let input = dir.join("in.parquet");
+    vda_core::duck::write_parquet(&vda_core::csv::read_table("a\n1\n2\n").unwrap(), &input).unwrap();
+    let inputs = [("input".to_string(), input.clone())];
+    let never = AtomicBool::new(false);
+
+    let ok = r.run_inputs(
+        "import warnings\nprint('rows:', len(df))\nwarnings.warn('check this')\nresult = df",
+        &inputs,
+        &dir.join("out.parquet"),
+        std::time::Duration::from_secs(30),
+        &never,
+    );
+    assert!(ok.result.is_ok());
+    assert!(ok.output.starts_with("rows: 2"), "{}", ok.output);
+    assert!(ok.output.contains("UserWarning: check this"), "{}", ok.output);
+
+    let failed = r.run_inputs(
+        "print('before the error')\nraise ValueError('bad')",
+        &inputs,
+        &dir.join("out2.parquet"),
+        std::time::Duration::from_secs(30),
+        &never,
+    );
+    assert!(failed.result.unwrap_err().to_string().contains("ValueError: bad"));
+    assert!(failed.output.contains("before the error"), "{}", failed.output);
+
+    let loud = r.run_inputs(
+        "print('x' * 200000)\nresult = df",
+        &inputs,
+        &dir.join("out3.parquet"),
+        std::time::Duration::from_secs(30),
+        &never,
+    );
+    assert!(loud.output.len() < 70 * 1024 && loud.output.ends_with("output cut at 64 KB"), "{}", loud.output.len());
+}

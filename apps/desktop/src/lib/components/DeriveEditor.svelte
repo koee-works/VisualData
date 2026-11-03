@@ -5,7 +5,13 @@
   let {
     columns = $bindable(),
     inputColumns,
-  }: { columns: { name: string; formula: string }[]; inputColumns: Column[] | null } = $props();
+    problems = {},
+  }: {
+    columns: { name: string; formula: string }[];
+    inputColumns: Column[] | null;
+    /** Problems by field (`columns.0.formula`), from checking as you type. */
+    problems?: Record<string, import("../api/types").Problem[]>;
+  } = $props();
 
   // Grouped the way people look for them; mirrors crates/vda-core/src/formula.rs.
   const reference: { group: string; items: [string, string][] }[] = [
@@ -52,6 +58,13 @@
   ];
   let showHelp = $state(false);
 
+  /** The formula around a character position, with the position marked. */
+  function caret(f: string, at: number) {
+    const i = Math.max(0, Math.min(f.length, at - 1));
+    const from = Math.max(0, i - 24);
+    return `${from > 0 ? "…" : ""}${f.slice(from, i)}⟶${f.slice(i, i + 24)}${i + 24 < f.length ? "…" : ""}`;
+  }
+
   function names(i: number) {
     // Columns a formula can use: the input's, then earlier ones here.
     const seen = (inputColumns ?? []).map((c) => c.name);
@@ -88,8 +101,14 @@
             aria-label="Formula"
             placeholder="units * unit_price"
             bind:value={c.formula}
+            aria-invalid={(problems[`columns.${i}.formula`] ?? []).some((p) => p.severity === "error")}
           ></textarea>
         </label>
+        {#each [...(problems[`columns.${i}.name`] ?? []), ...(problems[`columns.${i}.formula`] ?? [])] as p, k (k)}
+          <p class="mt-1 text-sm {p.severity === 'error' ? 'text-failed' : 'text-stale'}" role={p.severity === "error" ? "alert" : undefined}>
+            {#if p.column}<span class="code">{caret(c.formula, p.column)}</span><br />{/if}{p.message}{#if p.from_last_run}<span class="text-ink-faint"> (last run)</span>{/if}
+          </p>
+        {/each}
         {#if names(i).length}
           <p class="mt-1 text-xs text-ink-faint">
             Can use: {names(i).map((n) => (/^[A-Za-z_][A-Za-z0-9_]*$/.test(n) ? n : `[${n}]`)).join(", ")}

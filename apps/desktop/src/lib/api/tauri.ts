@@ -2,7 +2,18 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import type { Backend, RunHandlers } from "./backend";
-import type { AnalysisView, NotebookCell, Page, ProfileRow, RunSummary, StepEvent, StepOp } from "./types";
+import type {
+  AnalysisView,
+  NotebookCell,
+  Page,
+  Problem,
+  Problems,
+  ProfileRow,
+  RunSummary,
+  RunView,
+  StepEvent,
+  StepOp,
+} from "./types";
 
 /** Commands registered in apps/desktop/src-tauri/src/main.rs. */
 export const tauriBackend: Backend = {
@@ -61,6 +72,11 @@ export const tauriBackend: Backend = {
     return typeof p === "string" ? p : null;
   },
   exportResult: (id, path) => invoke<number>("export", { id, path }),
+  problems: () => invoke<Problems>("problems"),
+  checkDraft: (id, inputs, op) => invoke<Problem[]>("check_draft", { id, inputs, op }),
+  dismiss: (step, code, dismissed) => invoke<Problems>("dismiss", { step, code, dismissed }),
+  restoreDismissed: () => invoke<Problems>("restore_dismissed"),
+  runLog: (limit) => invoke<RunView[]>("run_log", { limit }),
   async pickFolder() {
     const p = await open({ multiple: false, directory: true });
     return typeof p === "string" ? p : null;

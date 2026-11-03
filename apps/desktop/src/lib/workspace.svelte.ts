@@ -2,7 +2,7 @@
 // The backend is the source of truth; every edit returns a fresh view.
 
 import { errorMessage, type Backend } from "./api/backend";
-import type { AnalysisView, Column, NotebookCell, SourceView, StepEvent, StepOp, StepView } from "./api/types";
+import type { AnalysisView, Column, NotebookCell, Problem, Problems, SourceView, StepEvent, StepOp, StepView } from "./api/types";
 import { SOURCE_ID } from "./api/types";
 import { stepTitle } from "./format";
 
@@ -24,6 +24,13 @@ export class Workspace {
   reviewOpen = $state(false);
   /** A short confirmation to show (an export finished, say). */
   notice = $state<string | null>(null);
+  /** What the linter found, refreshed after every change and run. */
+  problems = $state<Problems>({ items: [], dismissed: 0 });
+  consoleOpen = $state(false);
+  consoleTab = $state<"problems" | "output" | "log">("problems");
+  /** Bumped when a run finishes, so the run log refetches. */
+  runs = $state(0);
+  private lintSeq = 0;
 
   constructor(readonly backend: Backend) {}
 
@@ -83,9 +90,48 @@ export class Workspace {
     }
   }
 
+  /** Re-run the linter; only the latest answer is kept. */
+  async refreshProblems() {
+    const seq = ++this.lintSeq;
+    try {
+      const p = await this.backend.problems();
+      if (seq === this.lintSeq) this.problems = p;
+    } catch {
+      // A failing check must not get in the way of editing.
+    }
+  }
+
+  problemsFor(id: string): Problem[] {
+    return this.problems.items.filter((p) => p.step === id);
+  }
+
+  counts = $derived.by(() => {
+    const c = { error: 0, warning: 0, info: 0 };
+    for (const p of this.problems.items) c[p.severity]++;
+    return c;
+  });
+
+  async dismiss(p: Problem, dismissed = true) {
+    const r = await this.act("Dismiss", () => this.backend.dismiss(p.step, p.code, dismissed));
+    if (r) this.problems = r;
+  }
+
+  async restoreDismissed() {
+    const r = await this.act("Show dismissed", () => this.backend.restoreDismissed());
+    if (r) this.problems = r;
+  }
+
+  /** Select the step a problem is about and show its editor. */
+  reveal(p: Problem) {
+    if (!p.step) return;
+    this.selected = p.step;
+    this.centerTab = "step";
+  }
+
   private apply(v: AnalysisView | undefined) {
     if (!v) return;
     this.view = v;
+    void this.refreshProblems();
     const known = v.sources.some((s) => s.id === this.selected) || v.steps.some((s) => s.id === this.selected);
     if (!known) this.selected = v.sources[0]?.id ?? SOURCE_ID;
     this.revision++;
@@ -204,6 +250,7 @@ export class Workspace {
       }),
     );
     this.running = false;
+    this.runs++;
     await this.refresh();
   }
 

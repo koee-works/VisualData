@@ -37,6 +37,9 @@ def finish(code, message=None, show_traceback=False):
             traceback.print_exc()
         if message:
             sys.stderr.write(message + "\n")
+        # os._exit skips the interpreter's own flushing, so printed output
+        # would be lost without this.
+        sys.stdout.flush()
         sys.stderr.flush()
     except BaseException:
         pass
@@ -115,7 +118,7 @@ impl PythonRunner {
     /// `output`. The input is read in place; nothing is copied. Paths must be
     /// absolute (the child runs in its own working directory).
     pub fn run_files(&self, code: &str, input: &Path, output: &Path, timeout: Duration, cancel: &AtomicBool) -> Result<(), Error> {
-        self.run_inputs(code, &[("input".to_string(), input.to_path_buf())], output, timeout, cancel)
+        self.run_inputs(code, &[("input".to_string(), input.to_path_buf())], output, timeout, cancel).result
     }
 
     /// Run `code` with several Parquet inputs: the first is `df`, and all are
@@ -127,14 +130,16 @@ impl PythonRunner {
         output: &Path,
         timeout: Duration,
         cancel: &AtomicBool,
-    ) -> Result<(), Error> {
+    ) -> PythonRun {
         if inputs.is_empty() {
-            return Err(Error::Python("a Python step needs at least one input".into()));
+            return PythonRun { result: Err(Error::Python("a Python step needs at least one input".into())), output: String::new() };
         }
         let seq = RUN_SEQ.fetch_add(1, Ordering::SeqCst);
         let dir = self.work_root.join(format!("py-{}-{seq}", std::process::id()));
-        fs::create_dir_all(&dir)?;
-        let dir = fs::canonicalize(&dir)?;
+        let dir = match fs::create_dir_all(&dir).and_then(|_| fs::canonicalize(&dir)) {
+            Ok(d) => d,
+            Err(e) => return PythonRun { result: Err(e.into()), output: String::new() },
+        };
         let result = self.run_in(&dir, code, inputs, output, timeout, cancel);
         let _ = fs::remove_dir_all(&dir);
         result
@@ -164,11 +169,29 @@ impl PythonRunner {
         out: &Path,
         timeout: Duration,
         cancel: &AtomicBool,
+    ) -> PythonRun {
+        let mut output = String::new();
+        let result = self.run_child(dir, code, inputs, out, timeout, cancel, &mut output);
+        PythonRun { result, output }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_child(
+        &self,
+        dir: &Path,
+        code: &str,
+        inputs: &[(String, PathBuf)],
+        out: &Path,
+        timeout: Duration,
+        cancel: &AtomicBool,
+        output: &mut String,
     ) -> Result<(), Error> {
         let (code_path, wrapper, err_path) = (dir.join("step.py"), dir.join("wrapper.py"), dir.join("stderr.txt"));
+        let out_path = dir.join("stdout.txt");
         fs::write(&code_path, code)?;
         fs::write(&wrapper, WRAPPER)?;
         let stderr_file = fs::File::create(&err_path)?;
+        let stdout_file = fs::File::create(&out_path)?;
 
         let mut cmd = if let (true, Some(mb)) = (cfg!(unix), self.memory_limit_mb) {
             let kb = mb * 1024;
@@ -192,7 +215,7 @@ impl PythonRunner {
             .env("PATH", "/usr/local/bin:/usr/bin:/bin")
             .env("HOME", dir)
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
+            .stdout(stdout_file)
             .stderr(stderr_file);
 
         let start = Instant::now();
@@ -220,10 +243,46 @@ impl PythonRunner {
         };
 
         let stderr = fs::read_to_string(&err_path).unwrap_or_default();
+        *output = step_output(&fs::read(&out_path).unwrap_or_default(), &stderr);
         if !status.success() {
             return Err(Error::Python(summarize_error(&stderr, status.code())));
         }
         Ok(())
+    }
+}
+
+/// Most of a step's printed output kept with a run, per stream.
+pub const MAX_OUTPUT_BYTES: usize = 64 * 1024;
+
+/// What a Python step ran to: its result and anything it printed.
+pub struct PythonRun {
+    pub result: Result<(), Error>,
+    /// stdout, then stderr (warnings, tracebacks), each capped; the
+    /// wrapper's own messages are left out.
+    pub output: String,
+}
+
+fn capped(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(&bytes[..bytes.len().min(MAX_OUTPUT_BYTES)]).into_owned();
+    if bytes.len() > MAX_OUTPUT_BYTES {
+        format!("{text}\n… output cut at {} KB", MAX_OUTPUT_BYTES / 1024)
+    } else {
+        text
+    }
+}
+
+fn step_output(stdout: &[u8], stderr: &str) -> String {
+    let err: String = stderr
+        .lines()
+        .filter(|l| !l.starts_with("VDA_CONTRACT: ") && !l.starts_with("VDA_SETUP: "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (out, err) = (capped(stdout), capped(err.as_bytes()));
+    match (out.trim().is_empty(), err.trim().is_empty()) {
+        (true, true) => String::new(),
+        (false, true) => out,
+        (true, false) => err,
+        (false, false) => format!("{}\n{err}", out.trim_end()),
     }
 }
 

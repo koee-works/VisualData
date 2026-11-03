@@ -3,7 +3,7 @@
 An integrated workspace for exploring, transforming, analyzing and visualizing data through visual controls, SQL/Python code, and notebooks, without losing the thread of the analysis.
 
 - Product briefs (v0.2.0): [docs/briefs/](docs/briefs/)
-- Decisions: [ADR-0001 deployment model](docs/adr/0001-deployment-model.md), [ADR-0002 build cache](docs/adr/0002-build-cache.md), [ADR-0003 desktop frontend](docs/adr/0003-frontend.md), [ADR-0004 code review and SQL sandbox](docs/adr/0004-code-review-and-sandbox.md), [ADR-0005 several sources and multi-input steps](docs/adr/0005-multi-input-steps.md), [ADR-0006 formulas and core transforms](docs/adr/0006-formulas-and-core-transforms.md)
+- Decisions: [ADR-0001 deployment model](docs/adr/0001-deployment-model.md), [ADR-0002 build cache](docs/adr/0002-build-cache.md), [ADR-0003 desktop frontend](docs/adr/0003-frontend.md), [ADR-0004 code review and SQL sandbox](docs/adr/0004-code-review-and-sandbox.md), [ADR-0005 several sources and multi-input steps](docs/adr/0005-multi-input-steps.md), [ADR-0006 formulas and core transforms](docs/adr/0006-formulas-and-core-transforms.md), [ADR-0007 linter and console](docs/adr/0007-linter-and-console.md)
 - Current state of the first engineering slice: [STATUS.md](STATUS.md)
 
 ## Layout
@@ -21,6 +21,7 @@ crates/vda-core/          Rust core: model, compiler, planner, sessions, DuckDB 
   tests/multi_input.rs    several sources, joins, SQL/Python reading several inputs, renaming, format 1 compatibility
   tests/source_formats.rs Excel, Parquet and JSON sources (fixtures in tests/fixtures/)
   tests/export.rs         export to CSV, Excel and Parquet reads back to the same table
+  tests/lint.rs           problems found without running, and warnings from the last run
   examples/slice.rs       runs the slice end to end and writes a project folder
   examples/bench.rs       large-data benchmark (see STATUS.md for results)
 examples/regional-revenue/sales.csv   sample dataset (60 orders, with missing values)
@@ -44,6 +45,12 @@ npm run tauri dev                  # the app, with hot reload
 npm run dev                        # the UI alone in a browser, against an in-memory mock (?demo=1 seeds an analysis)
 npm run check && npm test          # types and unit tests
 ```
+
+### Console and checks
+
+A console under the result has three tabs. **Problems** lists what the linter finds across the analysis: steps that will not work on the columns they will receive, formula, SQL and Python errors, SQL reading tables that are not its inputs, joins that multiplied rows or kept none, columns missing in every row, unreadable charts, unused steps. Each links to the step; warnings can be dismissed. **Output** shows what Python steps printed, and the **Run log** shows recent runs. The step you are editing is checked as you type. See [ADR-0007](docs/adr/0007-linter-and-console.md).
+
+![The console listing notes about unused steps](docs/screenshots/13-console.png)
 
 ### Shaping data
 

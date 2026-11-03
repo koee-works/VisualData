@@ -177,6 +177,56 @@ pub struct StepEvent {
     pub detail: Option<String>,
     pub rows: Option<u64>,
     pub duration_ms: u64,
+    /// What the step printed (Python), if anything.
+    pub output: Option<String>,
+}
+
+/// One finding of the linter, for the console.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Problem {
+    /// `error`, `warning` or `info`.
+    pub severity: String,
+    pub code: String,
+    pub step: Option<String>,
+    pub field: Option<String>,
+    pub line: Option<usize>,
+    pub column: Option<usize>,
+    pub message: String,
+    pub from_last_run: bool,
+    /// Warnings and notes can be dismissed; errors cannot.
+    pub dismissable: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Problems {
+    pub items: Vec<Problem>,
+    /// How many were dismissed and are not listed.
+    pub dismissed: usize,
+}
+
+/// A past run, for the console's run log.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RunView {
+    pub run_id: String,
+    pub started_unix_ms: u64,
+    pub succeeded: bool,
+    pub steps: Vec<StepEvent>,
+}
+
+impl From<vda_core::lint::Diagnostic> for Problem {
+    fn from(d: vda_core::lint::Diagnostic) -> Self {
+        Problem {
+            severity: d.severity.name().into(),
+            code: d.code.into(),
+            step: d.step,
+            field: d.field,
+            line: d.line,
+            column: d.column,
+            message: d.message,
+            from_last_run: d.from_last_run,
+            dismissable: d.severity != vda_core::lint::Severity::Error,
+        }
+    }
 }
 
 impl From<&StepRun> for StepEvent {
@@ -194,6 +244,7 @@ impl From<&StepRun> for StepEvent {
             detail,
             rows: r.rows.map(|n| n as u64),
             duration_ms: r.duration_ms,
+            output: r.output.clone(),
         }
     }
 }
@@ -251,6 +302,7 @@ pub struct App {
     /// "Trust all in this session": lasts as long as this App, for every
     /// project opened in it, and is never written anywhere.
     trust_all: bool,
+    linter: Option<vda_core::lint::Linter>,
 }
 
 impl Default for App {
@@ -262,7 +314,7 @@ impl Default for App {
 impl App {
     /// Approvals are kept in memory until `with_approvals_file` is used.
     pub fn new(engine_options: EngineOptions, interpreter: PathBuf) -> Self {
-        App { session: None, engine_options, interpreter, approvals_path: None, memory_approvals: Approvals::in_memory(), trust_all: false }
+        App { session: None, engine_options, interpreter, approvals_path: None, memory_approvals: Approvals::in_memory(), trust_all: false, linter: None }
     }
 
     /// Keep approvals in this file (outside any project, so a project can
@@ -634,6 +686,117 @@ impl App {
         }
         self.remember_approvals();
         self.view()
+    }
+
+    /// Dismissed warnings, kept in the project (`dismissed.json`) so a
+    /// known, accepted warning does not come back for anyone.
+    fn dismissed(&mut self) -> Result<Vec<(Option<String>, String)>> {
+        let path = self.session()?.project_dir().join("dismissed.json");
+        let Ok(text) = std::fs::read_to_string(path) else { return Ok(vec![]) };
+        let list: Vec<J> = serde_json::from_str(&text).unwrap_or_default();
+        Ok(list
+            .iter()
+            .filter_map(|e| Some((e["step"].as_str().map(str::to_string), e["code"].as_str()?.to_string())))
+            .collect())
+    }
+
+    fn save_dismissed(&mut self, list: &[(Option<String>, String)]) -> Result<()> {
+        let path = self.session()?.project_dir().join("dismissed.json");
+        let json: Vec<J> = list.iter().map(|(s, c)| serde_json::json!({"step": s, "code": c})).collect();
+        std::fs::write(path, serde_json::to_string_pretty(&json)?)?;
+        Ok(())
+    }
+
+    /// Everything the linter finds, errors first, without dismissed ones.
+    pub fn problems(&mut self) -> Result<Problems> {
+        let dismissed = self.dismissed()?;
+        let mut linter = match self.linter.take() {
+            Some(l) => l,
+            None => vda_core::lint::Linter::new()?,
+        };
+        let found = linter.lint(self.session()?);
+        self.linter = Some(linter);
+        let (mut items, mut hidden) = (Vec::new(), 0);
+        for d in found {
+            let p = Problem::from(d);
+            if p.dismissable && dismissed.iter().any(|(s, c)| *s == p.step && *c == p.code) {
+                hidden += 1;
+            } else {
+                items.push(p);
+            }
+        }
+        Ok(Problems { items, dismissed: hidden })
+    }
+
+    /// Check a step being edited, without saving it. `id` is the step's id,
+    /// or `None` for a step about to be added.
+    pub fn check_draft(&mut self, id: Option<&str>, inputs: &[String], op: &J) -> Result<Vec<Problem>> {
+        let kind = match persist::step_kind_from_json(&from_serde(op)?) {
+            Ok(k) => k,
+            Err(e) => return Ok(vec![Problem::from(vda_core::lint::Diagnostic {
+                severity: vda_core::lint::Severity::Error,
+                code: "invalid-step",
+                step: id.map(str::to_string),
+                field: None,
+                line: None,
+                column: None,
+                message: e.to_string(),
+                from_last_run: false,
+            })]),
+        };
+        let s = self.session()?;
+        let id = id.map(str::to_string).unwrap_or_else(|| Self::next_id(&s.analysis, kind.type_name()));
+        let label = s.analysis.step(&id).and_then(|x| x.label.clone());
+        let draft = Step { id, inputs: inputs.to_vec(), label, kind };
+        let mut linter = match self.linter.take() {
+            Some(l) => l,
+            None => vda_core::lint::Linter::new()?,
+        };
+        let found = linter.check_draft(self.session()?, &draft);
+        self.linter = Some(linter);
+        Ok(found.into_iter().map(Problem::from).collect())
+    }
+
+    /// Hide a warning or note for this step (or the analysis), or show it again.
+    pub fn dismiss(&mut self, step: Option<String>, code: &str, dismissed: bool) -> Result<Problems> {
+        let mut list = self.dismissed()?;
+        list.retain(|(s, c)| !(*s == step && c == code));
+        if dismissed {
+            list.push((step, code.to_string()));
+        }
+        self.save_dismissed(&list)?;
+        self.problems()
+    }
+
+    /// Show every dismissed warning again.
+    pub fn restore_dismissed(&mut self) -> Result<Problems> {
+        self.save_dismissed(&[])?;
+        self.problems()
+    }
+
+    /// The latest runs, newest first, with each step's status and output.
+    pub fn run_log(&mut self, limit: usize) -> Result<Vec<RunView>> {
+        let dir = self.session()?.project_dir().join("runs");
+        let mut files: Vec<PathBuf> = match std::fs::read_dir(&dir) {
+            Ok(rd) => rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().is_some_and(|x| x == "json")).collect(),
+            Err(_) => return Ok(vec![]),
+        };
+        files.sort();
+        files.reverse();
+        let mut out = Vec::new();
+        for f in files.into_iter().take(limit) {
+            let Ok(text) = std::fs::read_to_string(&f) else { continue };
+            let Ok(record) = Json::parse(&text).map_err(AppError::from).and_then(|j| Ok(vda_core::session::RunRecord::from_json(&j)?)) else {
+                continue;
+            };
+            out.push(RunView {
+                run_id: record.run_id.clone(),
+                started_unix_ms: record.started_unix_ms as u64,
+                succeeded: record.succeeded(),
+                steps: record.steps.iter().map(StepEvent::from).collect(),
+            });
+        }
+        Ok(out)
     }
 
     /// Export a source or a step's current result to `path`; the format
