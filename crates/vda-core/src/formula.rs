@@ -415,6 +415,7 @@ const FUNCTIONS: &[(&str, usize, usize)] = &[
     ("floor", 1, 1),
     ("ceil", 1, 1),
     ("abs", 1, 1),
+    ("bucket", 2, 2),
     ("sqrt", 1, 1),
     ("power", 2, 2),
     ("upper", 1, 1),
@@ -568,6 +569,14 @@ pub fn type_of(e: &Expr, schema: &Schema) -> Result<Ty, String> {
                 "floor" | "ceil" | "abs" => {
                     need(numeric(ts[0]), "a number")?;
                     ts[0]
+                }
+                "bucket" => {
+                    need(numeric(ts[0]) && numeric(ts[1]), "a number and a bucket width")?;
+                    if ts[0] == K(Float) || ts[1] == K(Float) {
+                        K(Float)
+                    } else {
+                        K(Int)
+                    }
                 }
                 "sqrt" => {
                     need(numeric(ts[0]), "a number")?;
@@ -762,6 +771,16 @@ fn sql(e: &Expr, schema: &Schema) -> Result<String, String> {
                 "floor" => format!("floor({})", dbl(&args[0])?),
                 "ceil" => format!("ceil({})", dbl(&args[0])?),
                 "abs" => format!("abs({})", as_ty(&args[0], out)?),
+                // The start of the width-wide bucket holding x; missing unless
+                // the width is positive.
+                "bucket" if out == K(Int) => {
+                    let (x, w) = (as_ty(&args[0], K(Int))?, as_ty(&args[1], K(Int))?);
+                    format!("(CASE WHEN {w} > 0 THEN {x} - ((({x} % {w}) + {w}) % {w}) END)")
+                }
+                "bucket" => {
+                    let (x, w) = (dbl(&args[0])?, dbl(&args[1])?);
+                    finite(&format!("(CASE WHEN {w} > 0 THEN floor({x} / {w}) * {w} END)"))
+                }
                 "sqrt" => finite(&format!("sqrt({})", dbl(&args[0])?)),
                 "power" => finite(&format!("power({}, {})", dbl(&args[0])?, dbl(&args[1])?)),
                 "upper" | "lower" | "length" => format!("{name}({})", as_ty(&args[0], K(Text))?),
@@ -1053,6 +1072,17 @@ fn call(name: &str, vals: &[Value], out: Ty, args: &[Expr]) -> Result<Value, Err
         "abs" => match vals[0] {
             Value::Int(i) => Value::Int(i.checked_abs().ok_or_else(|| overflow("abs"))?),
             _ => Value::Float(f(0).abs()),
+        },
+        "bucket" => match (&vals[0], &vals[1]) {
+            (Value::Int(x), Value::Int(w)) if out == K(Int) => {
+                if *w <= 0 {
+                    Value::Null
+                } else {
+                    Value::Int(x.checked_sub(x.rem_euclid(*w)).ok_or_else(|| overflow("bucket"))?)
+                }
+            }
+            _ if f(1) > 0.0 => fin((f(0) / f(1)).floor() * f(1)),
+            _ => Value::Null,
         },
         "sqrt" => fin(f(0).sqrt()),
         "power" => fin(f(0).powf(f(1))),

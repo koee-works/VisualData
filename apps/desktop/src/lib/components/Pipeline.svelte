@@ -15,6 +15,10 @@
     Calculator,
     Columns3,
     ArrowDownUp,
+    TrendingUp,
+    CopyMinus,
+    Table2,
+    ListTree,
   } from "@lucide/svelte";
   import type { Workspace } from "../workspace.svelte";
   import type { StepOp, StepView } from "../api/types";
@@ -31,6 +35,10 @@
     derive: Calculator,
     select: Columns3,
     sort: ArrowDownUp,
+    window: TrendingUp,
+    dedupe: CopyMinus,
+    pivot: Table2,
+    unpivot: ListTree,
     sql: Braces,
     python: Code,
     chart: ChartColumn,
@@ -66,6 +74,29 @@
         return { type, columns: cols.map((c) => ({ column: c.name, as: null })) };
       case "sort":
         return { type, by: [{ column: numeric, descending: true }], limit: null };
+      case "window": {
+        const date = cols.find((c) => c.type === "DATE" || c.type === "TIMESTAMP")?.name;
+        return {
+          type,
+          partition_by: [],
+          order_by: date ? [{ column: date, descending: false }] : [],
+          columns: [{ name: `running_${numeric}`, func: "running_sum", column: numeric, n: null }],
+        };
+      }
+      case "dedupe":
+        return { type, keys: text ? [text] : [], order_by: [] };
+      case "pivot": {
+        const pivotable = cols.filter((c) => c.type === "VARCHAR" || c.type === "DATE" || c.type === "BOOLEAN");
+        const on = pivotable[1]?.name ?? pivotable[0]?.name ?? first;
+        const rows = pivotable[0] && pivotable[0].name !== on ? [pivotable[0].name] : [];
+        return numeric && numeric !== on
+          ? { type, rows, column: on, value: numeric, func: "SUM" }
+          : { type, rows, column: on, value: null, func: "COUNT" };
+      }
+      case "unpivot": {
+        const nums = cols.filter((c) => c.type === "BIGINT" || c.type === "DOUBLE").map((c) => c.name);
+        return { type, columns: nums.slice(0, 2), name: "column", value: "value" };
+      }
       case "join": {
         // Prefer a column both sides share by name.
         const other = joinPartner ? (ws.columnsOf(joinPartner.id) ?? []) : [];
@@ -93,6 +124,10 @@
     { type: "select", name: "Choose and rename columns", hint: "Visual" },
     { type: "sort", name: "Sort rows, keep the top", hint: "Visual" },
     { type: "aggregate", name: "Group and summarize", hint: "Visual" },
+    { type: "window", name: "Running totals, ranks, previous values", hint: "Visual" },
+    { type: "dedupe", name: "Remove duplicates", hint: "Visual" },
+    { type: "pivot", name: "Pivot: values to columns", hint: "Visual" },
+    { type: "unpivot", name: "Unpivot: columns to rows", hint: "Visual" },
     { type: "join", name: "Join with another table", hint: "Visual" },
     { type: "append", name: "Append another table's rows", hint: "Visual" },
     { type: "chart", name: "Chart", hint: "Visual" },

@@ -108,17 +108,3 @@
   </fieldset>
 </div>
 
-<style>
-  .chip {
-    border: 1px solid var(--color-rule-strong);
-    border-radius: 999px;
-    padding: 0.15rem 0.65rem;
-    background: var(--color-panel);
-    cursor: pointer;
-  }
-  .chip[aria-pressed="true"] {
-    background: var(--color-ink);
-    border-color: var(--color-ink);
-    color: white;
-  }
-</style>

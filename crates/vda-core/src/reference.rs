@@ -24,6 +24,10 @@ use std::collections::HashMap;
 /// Evaluate a visual table step on its inputs (in input order).
 pub fn eval_step(step: &Step, inputs: &[Table]) -> Result<Table, Error> {
     let schemas: Vec<Schema> = inputs.iter().map(|t| t.schema.clone()).collect();
+    if let StepKind::Pivot { rows, column, value, func } = &step.kind {
+        output_schema(step, &schemas)?;
+        return pivot(&inputs[0], rows, column, value.as_deref(), *func);
+    }
     let schema = output_schema(step, &schemas)?
         .ok_or_else(|| Error::Unsupported(format!("step `{}` is not a visual table step", step.id)))?;
     let input = &inputs[0];
@@ -38,6 +42,9 @@ pub fn eval_step(step: &Step, inputs: &[Table]) -> Result<Table, Error> {
             input.rows.iter().map(|r| idx.iter().map(|&i| r[i].clone()).collect()).collect()
         }
         StepKind::Sort { by, limit } => sort(by, *limit, input),
+        StepKind::Window { partition_by, order_by, columns } => window(input, partition_by, order_by, columns, &schema)?,
+        StepKind::Dedupe { keys, order_by } => dedupe(input, keys, order_by),
+        StepKind::Unpivot { columns, .. } => unpivot(input, columns, &schema),
         _ => unreachable!("output_schema returned Some for a non-table step"),
     };
     Ok(Table { schema, rows })
@@ -141,6 +148,218 @@ fn sort(by: &[crate::model::SortKey], limit: Option<u64>, input: &Table) -> Vec<
         rows.truncate(n as usize);
     }
     rows
+}
+
+/// Row indexes grouped by the values of `cols` (missing values are equal),
+/// groups in order of first appearance.
+fn partitions(input: &Table, cols: &[usize]) -> Vec<Vec<usize>> {
+    let mut order: Vec<Vec<usize>> = Vec::new();
+    let mut at: HashMap<String, usize> = HashMap::new();
+    for (i, r) in input.rows.iter().enumerate() {
+        let key = cols.iter().map(|&c| r[c].key()).collect::<Vec<_>>().join("\u{1f}");
+        let g = *at.entry(key).or_insert_with(|| {
+            order.push(Vec::new());
+            order.len() - 1
+        });
+        order[g].push(i);
+    }
+    order
+}
+
+/// Compare rows by sort keys, missing values last; `Equal` for ties.
+fn by_keys(keys: &[(usize, bool)], a: &[Value], b: &[Value]) -> Ordering {
+    for &(i, desc) in keys {
+        let o = match (a[i].is_null(), b[i].is_null()) {
+            (true, true) => Ordering::Equal,
+            (true, false) => Ordering::Greater,
+            (false, true) => Ordering::Less,
+            _ => {
+                let o = a[i].sql_cmp(&b[i]).unwrap_or(Ordering::Equal);
+                if desc { o.reverse() } else { o }
+            }
+        };
+        if o != Ordering::Equal {
+            return o;
+        }
+    }
+    Ordering::Equal
+}
+
+fn key_index(input: &Table, by: &[crate::model::SortKey]) -> Vec<(usize, bool)> {
+    by.iter().map(|k| (input.schema.index_of(&k.column).unwrap(), k.descending)).collect()
+}
+
+fn window(
+    input: &Table,
+    partition_by: &[String],
+    order_by: &[crate::model::SortKey],
+    columns: &[crate::model::WindowColumn],
+    out: &Schema,
+) -> Result<Vec<Vec<Value>>, Error> {
+    use crate::model::WindowFunc as W;
+    let pidx: Vec<usize> = partition_by.iter().map(|c| input.schema.index_of(c).unwrap()).collect();
+    let keys = key_index(input, order_by);
+    let mut rows: Vec<Vec<Value>> = input.rows.clone();
+    for mut part in partitions(input, &pidx) {
+        // A stable sort: ties stay in input order.
+        part.sort_by(|&a, &b| by_keys(&keys, &input.rows[a], &input.rows[b]));
+        for c in columns {
+            let col = c.column.as_ref().map(|n| input.schema.index_of(n).unwrap());
+            let val = |pos: usize| input.rows[part[pos]][col.unwrap()].clone();
+            let n = c.n.unwrap_or(1) as usize;
+            let total: Option<f64> = if c.func == W::ShareOfTotal {
+                let vals: Vec<Value> = (0..part.len()).map(val).filter(|v| !v.is_null()).collect();
+                if vals.is_empty() {
+                    None
+                } else if vals.iter().all(|v| matches!(v, Value::Int(_))) {
+                    Some(vals.iter().map(|v| if let Value::Int(i) = v { *i as i128 } else { 0 }).sum::<i128>() as f64)
+                } else {
+                    Some(vals.iter().filter_map(Value::as_f64).sum())
+                }
+            } else {
+                None
+            };
+            let is_int = col.is_some_and(|i| input.schema.fields[i].dtype == DataType::Int);
+            let mut running_i: Option<i64> = None;
+            let mut running_f: Option<f64> = None;
+            for pos in 0..part.len() {
+                let v = match c.func {
+                    W::RowNumber => Value::Int(pos as i64 + 1),
+                    W::Rank => {
+                        let mut first = pos;
+                        while first > 0 && by_keys(&keys, &input.rows[part[first - 1]], &input.rows[part[pos]]) == Ordering::Equal {
+                            first -= 1;
+                        }
+                        Value::Int(first as i64 + 1)
+                    }
+                    W::Previous => if pos >= n { val(pos - n) } else { Value::Null },
+                    W::Next => if pos + n < part.len() { val(pos + n) } else { Value::Null },
+                    W::RunningSum => {
+                        match val(pos) {
+                            Value::Int(i) if is_int => {
+                                running_i = Some(running_i.unwrap_or(0).checked_add(i).ok_or_else(|| {
+                                    Error::Data(format!("running sum overflow in `{}`", c.name))
+                                })?)
+                            }
+                            v => {
+                                if let Some(x) = v.as_f64() {
+                                    running_f = Some(running_f.unwrap_or(0.0) + x)
+                                }
+                            }
+                        }
+                        if is_int { running_i.map(Value::Int).unwrap_or(Value::Null) } else { running_f.map(Value::Float).unwrap_or(Value::Null) }
+                    }
+                    W::MovingAverage => {
+                        let from = (pos + 1).saturating_sub(n);
+                        let xs: Vec<f64> = (from..=pos).filter_map(|p| val(p).as_f64()).collect();
+                        if xs.is_empty() { Value::Null } else { Value::Float(xs.iter().sum::<f64>() / xs.len() as f64) }
+                    }
+                    W::Change => match (val(pos), if pos >= 1 { val(pos - 1) } else { Value::Null }) {
+                        (Value::Int(a), Value::Int(b)) => Value::Int(
+                            a.checked_sub(b).ok_or_else(|| Error::Data(format!("change overflow in `{}`", c.name)))?,
+                        ),
+                        (a, b) => match (a.as_f64(), b.as_f64()) {
+                            (Some(a), Some(b)) => Value::Float(a - b),
+                            _ => Value::Null,
+                        },
+                    },
+                    W::PercentChange => match (val(pos).as_f64(), if pos >= 1 { val(pos - 1).as_f64() } else { None }) {
+                        (Some(a), Some(b)) if b != 0.0 => Value::Float((a - b) / b),
+                        _ => Value::Null,
+                    },
+                    W::ShareOfTotal => match (val(pos).as_f64(), total) {
+                        (Some(x), Some(t)) if t != 0.0 => Value::Float(x / t),
+                        _ => Value::Null,
+                    },
+                };
+                rows[part[pos]].push(v);
+            }
+        }
+    }
+    debug_assert!(rows.iter().all(|r| r.len() == out.fields.len()));
+    Ok(rows)
+}
+
+fn dedupe(input: &Table, keys: &[String], order_by: &[crate::model::SortKey]) -> Vec<Vec<Value>> {
+    let kidx: Vec<usize> = if keys.is_empty() {
+        (0..input.schema.fields.len()).collect()
+    } else {
+        keys.iter().map(|k| input.schema.index_of(k).unwrap()).collect()
+    };
+    let order = key_index(input, order_by);
+    let mut keep: Vec<usize> = partitions(input, &kidx)
+        .into_iter()
+        .map(|g| *g.iter().min_by(|&&a, &&b| by_keys(&order, &input.rows[a], &input.rows[b]).then(a.cmp(&b))).unwrap())
+        .collect();
+    keep.sort_unstable();
+    keep.into_iter().map(|i| input.rows[i].clone()).collect()
+}
+
+fn unpivot(input: &Table, columns: &[String], out: &Schema) -> Vec<Vec<Value>> {
+    let idx: Vec<usize> = columns.iter().map(|c| input.schema.index_of(c).unwrap()).collect();
+    let kept: Vec<usize> = (0..input.schema.fields.len()).filter(|i| !idx.contains(i)).collect();
+    let float = out.fields.last().unwrap().dtype == DataType::Float;
+    let mut rows = Vec::new();
+    for r in &input.rows {
+        for (c, &i) in columns.iter().zip(&idx) {
+            let mut row: Vec<Value> = kept.iter().map(|&k| r[k].clone()).collect();
+            row.push(Value::Text(c.clone()));
+            row.push(match &r[i] {
+                Value::Int(n) if float => Value::Float(*n as f64),
+                v => v.clone(),
+            });
+            rows.push(row);
+        }
+    }
+    rows
+}
+
+/// One row per group of `rows` (sorted, missing last), one column per value
+/// of `column` (sorted; missing values are left out), named by the value.
+fn pivot(input: &Table, rows: &[String], column: &str, value: Option<&str>, func: AggFunc) -> Result<Table, Error> {
+    let cidx = input.schema.index_of(column).unwrap();
+    let mut values: Vec<Value> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for r in &input.rows {
+        if !r[cidx].is_null() && seen.insert(r[cidx].key()) {
+            values.push(r[cidx].clone());
+        }
+    }
+    values.sort_by(|a, b| a.sort_cmp(b));
+    let dtype = crate::compile::measure_type("pivot", func, value, &input.schema)?;
+    let mut fields: Vec<crate::table::Field> =
+        rows.iter().map(|r| input.schema.field(r).unwrap().clone()).collect();
+    for v in &values {
+        // A value named like an earlier column gets a suffix, as in DuckDB.
+        let mut name = v.to_string();
+        let mut k = 1;
+        while fields.iter().any(|f| f.name == name) {
+            name = format!("{v}_{k}");
+            k += 1;
+        }
+        fields.push(crate::table::Field { name, dtype });
+    }
+    let gidx: Vec<usize> = rows.iter().map(|r| input.schema.index_of(r).unwrap()).collect();
+    let mut groups = partitions(input, &gidx);
+    if rows.is_empty() && groups.is_empty() {
+        groups.push(Vec::new());
+    }
+    groups.sort_by(|a, b| {
+        let (ra, rb) = (&input.rows[a[0]], &input.rows[b[0]]);
+        gidx.iter().map(|&i| ra[i].sort_cmp(&rb[i])).find(|o| *o != Ordering::Equal).unwrap_or(Ordering::Equal)
+    });
+    let m = Measure { func, column: value.map(str::to_string), alias: "pivot".into() };
+    let mut out = Vec::new();
+    for g in groups {
+        let mut row: Vec<Value> = gidx.iter().map(|&i| input.rows[g[0]][i].clone()).collect();
+        for v in &values {
+            let cell: Vec<&Vec<Value>> =
+                g.iter().map(|&i| &input.rows[i]).filter(|r| r[cidx].key() == v.key()).collect();
+            row.push(measure(&m, &cell, input)?);
+        }
+        out.push(row);
+    }
+    Ok(Table { schema: Schema { fields }, rows: out })
 }
 
 fn append(ids: &[String], inputs: &[Table], out: &Schema, distinct: bool, origin: Option<&str>) -> Vec<Vec<Value>> {

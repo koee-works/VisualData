@@ -121,9 +121,24 @@ fn the_last_run_explains_surprising_results() {
             ),
             step("ratio", &["source"], derive("per_unit", "revenue / (units - units)")),
             step("bars", &["source"], StepKind::Chart { mark: Mark::Bar, x: "order_id".into(), y: "revenue".into(), title: None }),
+            step("withmissing", &["regions"], derive("product", "if(region = \"North\", format(1 / 0, 0), \"p\")")),
+            step("wide", &["withmissing"], StepKind::Pivot { rows: vec![], column: "product".into(), value: None, func: AggFunc::Count }),
+            step(
+                "running",
+                &["source"],
+                StepKind::Window {
+                    partition_by: vec![],
+                    order_by: vec![],
+                    columns: vec![
+                        WindowColumn { name: "total".into(), func: WindowFunc::RunningSum, column: Some("revenue".into()), n: None },
+                        WindowColumn { name: "share".into(), func: WindowFunc::ShareOfTotal, column: Some("revenue".into()), n: None },
+                    ],
+                },
+            ),
         ],
     );
-    assert!(s.run_all().unwrap().succeeded());
+    let run = s.run_all().unwrap();
+    assert!(run.succeeded(), "{:#?}", run);
     let ds = Linter::new().unwrap().lint(&mut s);
 
     let j = find(&ds, "join-multiplies", "joined");
@@ -133,6 +148,11 @@ fn the_last_run_explains_surprising_results() {
     assert_eq!(m.field.as_deref(), Some("columns.0.formula"));
     assert!(find(&ds, "chart-categories", "bars").message.contains("draws 60 bars"));
     assert!(ds.iter().all(|d| d.code != "unused"), "every step is in the notebook");
+    let p = find(&ds, "pivot-missing", "wide");
+    assert!(p.message.starts_with("1 of 5 rows have no `product`"), "{}", p.message);
+    let w = find(&ds, "window-order", "running");
+    assert_eq!(w.severity, Severity::Info);
+    assert!(w.message.starts_with("`total` follows the rows' current order"), "{}", w.message);
 
     // After an edit: the result is outdated, and data warnings wait for a new run.
     if let StepKind::Join { how, .. } = &mut s.analysis.step_mut("joined").unwrap().kind {

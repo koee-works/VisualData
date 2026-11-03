@@ -752,6 +752,10 @@ impl Session {
                 | StepKind::Derive { .. }
                 | StepKind::Select { .. }
                 | StepKind::Sort { .. }
+                | StepKind::Window { .. }
+                | StepKind::Dedupe { .. }
+                | StepKind::Pivot { .. }
+                | StepKind::Unpivot { .. }
                 | StepKind::Sql { .. } => {
                     let ds = self.engine.run_step(&step, &inputs, &tmp)?;
                     Ok(Output::Table(self.artifacts.commit_table(key, ds)?))

@@ -164,7 +164,7 @@ export class MockBackend implements Backend {
         inputs: s.inputs,
         label: s.label,
         op: s.op,
-        mode: ["filter", "aggregate", "join", "append", "derive", "select", "sort"].includes(s.op.type)
+        mode: ["filter", "aggregate", "join", "append", "derive", "select", "sort", "window", "dedupe", "pivot", "unpivot"].includes(s.op.type)
           ? "visual"
           : (s.op.type as "sql" | "python" | "chart"),
         state: this.state(s),
@@ -402,6 +402,106 @@ export class MockBackend implements Backend {
         return 0;
       });
       return { def: this.def(s.id), columns: input.columns, rows: op.limit === null ? rows : rows.slice(0, op.limit) };
+    }
+    const col = (name: string) => {
+      const i = input.columns.findIndex((c) => c.name === name);
+      if (i < 0) throw new Error(`column \`${name}\` not found`);
+      return i;
+    };
+    const ordered = (rows: number[], by: { column: string; descending: boolean }[]) => {
+      const keys = by.map((k) => ({ i: col(k.column), d: k.descending }));
+      return [...rows].sort((a, b) => {
+        for (const { i, d } of keys) {
+          const [x, y] = [input.rows[a]![i]!, input.rows[b]![i]!];
+          if (x.t === "null" || y.t === "null") {
+            if (x.t !== y.t) return x.t === "null" ? 1 : -1;
+            continue;
+          }
+          const c = compare(x, y) ?? 0;
+          if (c) return d ? -c : c;
+        }
+        return a - b;
+      });
+    };
+    const groupsOf = (cols: number[]) => {
+      const m = new Map<string, number[]>();
+      input.rows.forEach((r, i) => {
+        const k = JSON.stringify(cols.map((c) => r[c]));
+        m.set(k, [...(m.get(k) ?? []), i]);
+      });
+      return [...m.values()];
+    };
+    if (op.type === "window") {
+      // A stand-in: totals, numbering, previous and next values.
+      const out = input.rows.map((r) => [...r]);
+      const columns = [...input.columns];
+      for (const c of op.columns) {
+        if (columns.some((x) => x.name === c.name)) throw new Error(`there is already a column \`${c.name}\`; choose another name`);
+        const ci = c.column ? col(c.column) : -1;
+        const type: Column["type"] = ["row_number", "rank"].includes(c.func) ? "BIGINT" : ["previous", "next", "running_sum", "change"].includes(c.func) ? input.columns[ci]!.type : "DOUBLE";
+        columns.push({ name: c.name, type });
+        for (const g of groupsOf(op.partition_by.map(col))) {
+          const rows = ordered(g, op.order_by);
+          let run = 0;
+          rows.forEach((ri, pos) => {
+            const v = ci >= 0 ? input.rows[ri]![ci]! : ({ t: "null" } as Cell);
+            const n = c.n ?? 1;
+            const at = (p: number): Cell => (p >= 0 && p < rows.length ? input.rows[rows[p]!]![ci]! : { t: "null" });
+            const x = num(v);
+            if (x !== null) run += x;
+            const cell: Cell =
+              c.func === "row_number" || c.func === "rank"
+                ? { t: "int", v: String(pos + 1) }
+                : c.func === "previous"
+                  ? at(pos - n)
+                  : c.func === "next"
+                    ? at(pos + n)
+                    : c.func === "running_sum"
+                      ? type === "BIGINT" ? { t: "int", v: String(run) } : { t: "float", v: run }
+                      : { t: "null" };
+            out[ri]!.push(cell);
+          });
+        }
+      }
+      return { def: this.def(s.id), columns, rows: out };
+    }
+    if (op.type === "dedupe") {
+      const keys = op.keys.length ? op.keys.map(col) : input.columns.map((_, i) => i);
+      const keep = groupsOf(keys).map((g) => ordered(g, op.order_by)[0]!).sort((a, b) => a - b);
+      return { def: this.def(s.id), columns: input.columns, rows: keep.map((i) => input.rows[i]!) };
+    }
+    if (op.type === "unpivot") {
+      const idx = op.columns.map(col);
+      const kept = input.columns.map((_, i) => i).filter((i) => !idx.includes(i));
+      const type = input.columns[idx[0] ?? 0]?.type ?? "VARCHAR";
+      return {
+        def: this.def(s.id),
+        columns: [...kept.map((i) => input.columns[i]!), { name: op.name, type: "VARCHAR" }, { name: op.value, type }],
+        rows: input.rows.flatMap((r) => op.columns.map((c, k): Row => [...kept.map((i) => r[i]!), { t: "text", v: c }, r[idx[k]!]!])),
+      };
+    }
+    if (op.type === "pivot") {
+      // Counts, or sums of a column; values in text order.
+      const pi = col(op.column);
+      const vi = op.value ? col(op.value) : -1;
+      const values = [...new Set(input.rows.map((r) => r[pi]!).filter((c) => c.t !== "null").map((c) => String(c.v)))].sort();
+      const gs = groupsOf(op.rows.map(col));
+      return {
+        def: this.def(s.id),
+        columns: [
+          ...op.rows.map((r) => input.columns[col(r)]!),
+          ...values.map((v) => ({ name: v, type: (op.func === "COUNT" ? "BIGINT" : "DOUBLE") as Column["type"] })),
+        ],
+        rows: gs.map((g) => [
+          ...op.rows.map((r) => input.rows[g[0]!]![col(r)]!),
+          ...values.map((v): Cell => {
+            const hit = g.filter((i) => input.rows[i]![pi]!.t !== "null" && String(input.rows[i]![pi]!.v) === v);
+            if (op.func === "COUNT") return { t: "int", v: String(hit.length) };
+            const xs = hit.map((i) => num(input.rows[i]![vi]!)).filter((x): x is number => x !== null);
+            return xs.length ? { t: "float", v: xs.reduce((a, b) => a + b, 0) } : { t: "null" };
+          }),
+        ]),
+      };
     }
     if (op.type === "derive") {
       // The mock does not evaluate formulas: a bare column name is copied,

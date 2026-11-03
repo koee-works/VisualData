@@ -14,6 +14,10 @@
   import DeriveEditor from "./DeriveEditor.svelte";
   import SelectEditor from "./SelectEditor.svelte";
   import SortEditor from "./SortEditor.svelte";
+  import WindowEditor from "./WindowEditor.svelte";
+  import DedupeEditor from "./DedupeEditor.svelte";
+  import PivotEditor from "./PivotEditor.svelte";
+  import UnpivotEditor from "./UnpivotEditor.svelte";
 
   let { ws, step }: { ws: Workspace; step: StepView } = $props();
 
@@ -192,6 +196,14 @@
       <SelectEditor bind:columns={draft.columns} {inputColumns} />
     {:else if draft.type === "sort"}
       <SortEditor bind:by={draft.by} bind:limit={draft.limit} columns={inputColumns} />
+    {:else if draft.type === "window"}
+      <WindowEditor bind:partitionBy={draft.partition_by} bind:orderBy={draft.order_by} bind:calcs={draft.columns} columns={inputColumns} />
+    {:else if draft.type === "dedupe"}
+      <DedupeEditor bind:keys={draft.keys} bind:orderBy={draft.order_by} columns={inputColumns} />
+    {:else if draft.type === "pivot"}
+      <PivotEditor bind:rows={draft.rows} bind:column={draft.column} bind:value={draft.value} bind:func={draft.func} columns={inputColumns} />
+    {:else if draft.type === "unpivot"}
+      <UnpivotEditor bind:picked={draft.columns} bind:name={draft.name} bind:value={draft.value} columns={inputColumns} />
     {:else if draft.type === "append"}
       <AppendEditor {ws} bind:inputs bind:distinct={draft.distinct} bind:origin={draft.origin} choices={readable} />
     {:else if draft.type === "sql" || draft.type === "python"}

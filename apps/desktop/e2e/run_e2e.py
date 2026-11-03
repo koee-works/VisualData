@@ -90,6 +90,15 @@ class Session:
         call("POST", f"/session/{self.id}/element/{el}/clear", {})
         call("POST", f"/session/{self.id}/element/{el}/value", {"text": value})
 
+    def driver_select(self, xpath, value):
+        """Choose an option of a <select> the way a person would (the change event fires)."""
+        ref = {"element-6066-11e4-a52e-4f735466cecf": self.find(xpath)}
+        script = (
+            "arguments[0].scrollIntoView({block: 'center'}); arguments[0].value = arguments[1];"
+            "arguments[0].dispatchEvent(new Event('change', {bubbles: true}))"
+        )
+        call("POST", f"/session/{self.id}/execute/sync", {"script": script, "args": [ref, value]})
+
     def count(self, xpath):
         return len(call("POST", f"/session/{self.id}/elements", {"using": "xpath", "value": xpath}))
 
@@ -257,7 +266,7 @@ def joins(s, shots):
     step(11, "Run: the full join keeps a region with no orders; its SQL is a full outer join")
     s.click("//button[normalize-space()='Run analysis']")
     s.wait_text(STATUS, "All results current")
-    assert s.count(mark("Current")) == 6
+    assert s.count(mark("Current")) == 8
     s.click(node("Revenue against target"))
     s.wait_text(table, "Central")
     assert "Mei Chen" in s.text(table)
@@ -269,7 +278,7 @@ def joins(s, shots):
     s.click("//button[@role='tab' and normalize-space()='Data']")
     s.click("//label[.//span[normalize-space()='Only rows that match']]")
     s.click("//button[normalize-space()='Save step']")
-    s.wait_text(STATUS, "4 of 6 results need a run")
+    s.wait_text(STATUS, "4 of 8 results need a run")
     s.click("//button[normalize-space()='Run analysis']")
     s.wait_text(STATUS, "All results current")
     s.wait_text(node("Revenue against target"), "4 rows")
@@ -340,6 +349,32 @@ def joins(s, shots):
     assert s.count(problems + "/li") == before - 1
     s.click("//section[@aria-label='Console']//button[normalize-space()='Run log']")
     s.wait_text("//section[@aria-label='Console']//ul[@aria-label='Runs']", "Succeeded")
+
+    step(19, "Window and pivot steps: a running total per region, then a calculation added in the editor")
+    s.click(node("Running revenue by region"))
+    s.click("//button[@role='tab' and normalize-space()='Data']")
+    s.wait_text(table, "running_revenue")
+    s.click("//button[normalize-space()='Add a calculation']")
+    calc = "(//select[@aria-label='Calculation'])[2]"
+    s.find(calc)
+    s.driver_select(calc, "rank")
+    s.click("//button[normalize-space()='Save step']")
+    s.wait_text(STATUS, "need a run")
+    s.click("//button[normalize-space()='Run analysis']")
+    s.wait_text(STATUS, "All results current")
+    s.wait_text(table, "rank")
+    s.screenshot(f"{shots}/14-window.png")
+
+    step(20, "Pivot: one column per product; switched to counting rows")
+    s.click(node("Revenue by region and product"))
+    s.wait_text(table, "Basic")
+    assert "Plus" in s.text(table) and "Pro" in s.text(table)
+    s.driver_select("//section[@aria-label='Step editor']//select[@aria-label='Summary']", "COUNT")
+    s.click("//button[normalize-space()='Save step']")
+    s.click("//button[normalize-space()='Run analysis']")
+    s.wait_text(STATUS, "All results current")
+    s.wait_text(table, "Basic")
+    s.screenshot(f"{shots}/15-pivot.png")
 
 
 if __name__ == "__main__":

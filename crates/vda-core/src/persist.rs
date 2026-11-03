@@ -54,6 +54,40 @@ pub fn value_from_json(j: &Json) -> Result<Value, Error> {
 
 /// The executable meaning of a step, excluding display-only fields. Used for
 /// cache keys, so a rename never invalidates results.
+fn strs(v: &[String]) -> Json {
+    Json::Arr(v.iter().map(|s| Json::str(s.clone())).collect())
+}
+
+fn sort_keys(v: &[SortKey]) -> Json {
+    Json::Arr(
+        v.iter()
+            .map(|k| Json::obj(vec![("column", Json::str(k.column.clone())), ("descending", Json::Bool(k.descending))]))
+            .collect(),
+    )
+}
+
+fn read_strs(j: &Json, key: &str) -> Result<Vec<String>, Error> {
+    match j.get(key) {
+        None | Some(Json::Null) => Ok(vec![]),
+        Some(_) => j
+            .req_arr(key)?
+            .iter()
+            .map(|s| s.as_str().map(str::to_string).ok_or_else(|| Error::Format(format!("bad {key}"))))
+            .collect(),
+    }
+}
+
+fn read_sort_keys(j: &Json, key: &str) -> Result<Vec<SortKey>, Error> {
+    match j.get(key) {
+        None | Some(Json::Null) => Ok(vec![]),
+        Some(_) => j
+            .req_arr(key)?
+            .iter()
+            .map(|k| Ok(SortKey { column: k.req_str("column")?.to_string(), descending: k.get("descending") == Some(&Json::Bool(true)) }))
+            .collect(),
+    }
+}
+
 pub fn step_kind_to_json(kind: &StepKind) -> Json {
     match kind {
         StepKind::Filter { predicates } => Json::obj(vec![
@@ -159,6 +193,43 @@ pub fn step_kind_to_json(kind: &StepKind) -> Json {
             ),
             ("limit", limit.map(|n| Json::Num(n as f64)).unwrap_or(Json::Null)),
         ]),
+        StepKind::Window { partition_by, order_by, columns } => Json::obj(vec![
+            ("type", Json::str("window")),
+            ("partition_by", strs(partition_by)),
+            ("order_by", sort_keys(order_by)),
+            (
+                "columns",
+                Json::Arr(
+                    columns
+                        .iter()
+                        .map(|c| {
+                            Json::obj(vec![
+                                ("name", Json::str(c.name.clone())),
+                                ("func", Json::str(c.func.name())),
+                                ("column", c.column.clone().map(Json::Str).unwrap_or(Json::Null)),
+                                ("n", c.n.map(|n| Json::Num(n as f64)).unwrap_or(Json::Null)),
+                            ])
+                        })
+                        .collect(),
+                ),
+            ),
+        ]),
+        StepKind::Dedupe { keys, order_by } => {
+            Json::obj(vec![("type", Json::str("dedupe")), ("keys", strs(keys)), ("order_by", sort_keys(order_by))])
+        }
+        StepKind::Pivot { rows, column, value, func } => Json::obj(vec![
+            ("type", Json::str("pivot")),
+            ("rows", strs(rows)),
+            ("column", Json::str(column.clone())),
+            ("value", value.clone().map(Json::Str).unwrap_or(Json::Null)),
+            ("func", Json::str(func.token())),
+        ]),
+        StepKind::Unpivot { columns, name, value } => Json::obj(vec![
+            ("type", Json::str("unpivot")),
+            ("columns", strs(columns)),
+            ("name", Json::str(name.clone())),
+            ("value", Json::str(value.clone())),
+        ]),
         StepKind::Sql { sql } => Json::obj(vec![("type", Json::str("sql")), ("sql", Json::str(sql.clone()))]),
         StepKind::Python { code, timeout_ms } => Json::obj(vec![
             ("type", Json::str("python")),
@@ -262,6 +333,34 @@ pub fn step_kind_from_json(j: &Json) -> Result<StepKind, Error> {
                 Some(_) => return Err(Error::Format("limit must be a whole number".into())),
                 None => None,
             },
+        },
+        "window" => StepKind::Window {
+            partition_by: read_strs(j, "partition_by")?,
+            order_by: read_sort_keys(j, "order_by")?,
+            columns: j
+                .req_arr("columns")?
+                .iter()
+                .map(|c| {
+                    Ok(WindowColumn {
+                        name: c.req_str("name")?.to_string(),
+                        func: WindowFunc::parse(c.req_str("func")?).ok_or_else(|| Error::Format("unknown window function".into()))?,
+                        column: c.get("column").and_then(Json::as_str).map(str::to_string),
+                        n: c.get("n").and_then(Json::as_f64).map(|n| n as u32),
+                    })
+                })
+                .collect::<Result<_, Error>>()?,
+        },
+        "dedupe" => StepKind::Dedupe { keys: read_strs(j, "keys")?, order_by: read_sort_keys(j, "order_by")? },
+        "pivot" => StepKind::Pivot {
+            rows: read_strs(j, "rows")?,
+            column: j.req_str("column")?.to_string(),
+            value: opt_str("value"),
+            func: AggFunc::parse(j.req_str("func")?).ok_or_else(|| Error::Format("unknown aggregate".into()))?,
+        },
+        "unpivot" => StepKind::Unpivot {
+            columns: read_strs(j, "columns")?,
+            name: j.req_str("name")?.to_string(),
+            value: j.req_str("value")?.to_string(),
         },
         "sql" => StepKind::Sql { sql: j.req_str("sql")?.to_string() },
         "python" => StepKind::Python {

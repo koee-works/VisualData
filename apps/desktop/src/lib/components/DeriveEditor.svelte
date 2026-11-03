@@ -21,6 +21,7 @@
         ["+ - * / %", "arithmetic; dividing by zero gives a missing value"],
         ["round(x, 2)", "round half away from zero; floor(x), ceil(x), abs(x)"],
         ["sqrt(x), power(x, y)", "missing when there is no real answer"],
+        ["bucket(x, width)", "start of x's bucket: bucket(age, 10) gives 30 for 37"],
       ],
     },
     {

@@ -1,7 +1,7 @@
 //! Compile visual operations to DuckDB SQL, validate them against an input
 //! schema, and build the inspectable SQL for a chain of steps.
 
-use crate::model::{AggFunc, Analysis, CmpOp, JoinKind, SourceFormat, Step, StepKind};
+use crate::model::{AggFunc, Analysis, CmpOp, JoinKind, SortKey, SourceFormat, Step, StepKind, WindowFunc};
 use crate::table::{DataType, Field, Schema, Value};
 use crate::Error;
 
@@ -102,6 +102,10 @@ pub fn step_sql(kind: &StepKind) -> Option<String> {
         StepKind::Join { .. }
         | StepKind::Append { .. }
         | StepKind::Derive { .. }
+        | StepKind::Window { .. }
+        | StepKind::Dedupe { .. }
+        | StepKind::Pivot { .. }
+        | StepKind::Unpivot { .. }
         | StepKind::Python { .. }
         | StepKind::Chart { .. } => None,
     }
@@ -201,8 +205,292 @@ pub fn step_sql_for(step: &Step, inputs: &[Schema]) -> Result<Option<String>, Er
             }
             Ok(Some(sql))
         }
+        StepKind::Window { partition_by, order_by, columns } => {
+            let input = first(step, inputs)?;
+            window_schema(step, input)?;
+            let part = if partition_by.is_empty() {
+                String::new()
+            } else {
+                format!("PARTITION BY {} ", partition_by.iter().map(|c| quote_ident(c)).collect::<Vec<_>>().join(", "))
+            };
+            // Ties in the order keep input order, except for rank.
+            let keys = order_keys(order_by);
+            let ordered = format!("({part}ORDER BY {})", keys.iter().cloned().chain(["__vda_r".to_string()]).collect::<Vec<_>>().join(", "));
+            let ranked = if keys.is_empty() { format!("({part})") } else { format!("({part}ORDER BY {})", keys.join(", ")) };
+            let frame = |f: &str| format!("({part}ORDER BY {} {f})", keys.iter().cloned().chain(["__vda_r".to_string()]).collect::<Vec<_>>().join(", "));
+            let mut exprs = Vec::new();
+            for c in columns {
+                let col = c.column.as_deref().map(quote_ident).unwrap_or_default();
+                let is_int = c.column.as_deref().and_then(|n| input.field(n)).is_some_and(|f| f.dtype == DataType::Int);
+                let n = c.n.unwrap_or(1);
+                let prev_d = format!("CAST(lag({col}, 1) OVER {ordered} AS DOUBLE)");
+                let e = match c.func {
+                    WindowFunc::RunningSum => {
+                        let s = format!("sum({col}) OVER {}", frame("ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"));
+                        if is_int { format!("CAST({s} AS BIGINT)") } else { s }
+                    }
+                    WindowFunc::RowNumber => format!("row_number() OVER {ordered}"),
+                    WindowFunc::Rank => format!("rank() OVER {ranked}"),
+                    WindowFunc::Previous => format!("lag({col}, {n}) OVER {ordered}"),
+                    WindowFunc::Next => format!("lead({col}, {n}) OVER {ordered}"),
+                    WindowFunc::MovingAverage => format!(
+                        "CAST(avg({col}) OVER {} AS DOUBLE)",
+                        frame(&format!("ROWS BETWEEN {} PRECEDING AND CURRENT ROW", n - 1))
+                    ),
+                    WindowFunc::Change => format!("({col} - lag({col}, 1) OVER {ordered})"),
+                    WindowFunc::PercentChange => format!("((CAST({col} AS DOUBLE) - {prev_d}) / NULLIF({prev_d}, 0))"),
+                    WindowFunc::ShareOfTotal => format!(
+                        "(CAST({col} AS DOUBLE) / NULLIF(CAST(sum({col}) OVER ({part}) AS DOUBLE), 0))"
+                    ),
+                };
+                exprs.push(format!("{e} AS {}", quote_ident(&c.name)));
+            }
+            Ok(Some(format!(
+                "SELECT * EXCLUDE (__vda_r) FROM (SELECT *, {} FROM (SELECT *, row_number() OVER () AS __vda_r FROM input)) ORDER BY __vda_r",
+                exprs.join(", ")
+            )))
+        }
+        StepKind::Dedupe { keys, order_by } => {
+            let input = first(step, inputs)?;
+            dedupe_check(step, input)?;
+            let part: Vec<String> = if keys.is_empty() {
+                input.fields.iter().map(|f| quote_ident(&f.name)).collect()
+            } else {
+                keys.iter().map(|k| quote_ident(k)).collect()
+            };
+            let mut order = order_keys(order_by);
+            order.push("__vda_r".into());
+            // Missing values count as equal keys, as in SQL DISTINCT.
+            Ok(Some(format!(
+                "SELECT * EXCLUDE (__vda_r) FROM (SELECT *, row_number() OVER () AS __vda_r FROM input) \
+                 QUALIFY row_number() OVER (PARTITION BY {} ORDER BY {}) = 1 ORDER BY __vda_r",
+                part.join(", "),
+                order.join(", ")
+            )))
+        }
+        StepKind::Unpivot { columns, name, value } => {
+            let input = first(step, inputs)?;
+            let schema = unpivot_schema(step, input)?;
+            let vtype = schema.fields.last().unwrap().dtype;
+            let kept: Vec<String> =
+                input.fields.iter().filter(|f| !columns.contains(&f.name)).map(|f| format!("t.{}", quote_ident(&f.name))).collect();
+            let names: Vec<String> =
+                columns.iter().enumerate().map(|(i, c)| format!("({i}, {})", quote_literal(&Value::Text(c.clone())))).collect();
+            let cases: Vec<String> = columns
+                .iter()
+                .enumerate()
+                .map(|(i, c)| format!("WHEN {i} THEN CAST(t.{} AS {})", quote_ident(c), vtype.name()))
+                .collect();
+            let mut cols = kept;
+            cols.push(format!("v.__vda_name AS {}", quote_ident(name)));
+            cols.push(format!("CASE v.__vda_c {} END AS {}", cases.join(" "), quote_ident(value)));
+            // One row per input row and listed column, in that order.
+            Ok(Some(format!(
+                "SELECT {} FROM (SELECT *, row_number() OVER () AS __vda_r FROM input) AS t \
+                 CROSS JOIN (VALUES {}) AS v(__vda_c, __vda_name) ORDER BY t.__vda_r, v.__vda_c",
+                cols.join(", "),
+                names.join(", ")
+            )))
+        }
+        StepKind::Pivot { rows, column, value, func } => {
+            let input = first(step, inputs)?;
+            pivot_check(step, input)?;
+            let mut picked: Vec<String> = rows.iter().map(|r| quote_ident(r)).collect();
+            picked.push(quote_ident(column));
+            if let Some(v) = value {
+                picked.push(quote_ident(v));
+            }
+            let agg = match value {
+                Some(v) => func.sql_over(&quote_ident(v)),
+                None => "count(*)".into(),
+            };
+            let keys: Vec<String> = rows.iter().map(|r| quote_ident(r)).collect();
+            // DuckDB names the new columns by value, in value order, and
+            // leaves out rows whose pivot value is missing.
+            let mut sql = format!("PIVOT (SELECT {} FROM input) ON {} USING {agg}", picked.join(", "), quote_ident(column));
+            if !keys.is_empty() {
+                sql = format!(
+                    "SELECT * FROM ({sql} GROUP BY {}) ORDER BY {}",
+                    keys.join(", "),
+                    keys.iter().map(|k| format!("{k} ASC NULLS LAST")).collect::<Vec<_>>().join(", ")
+                );
+            }
+            Ok(Some(sql))
+        }
         kind => Ok(step_sql(kind)),
     }
+}
+
+fn first<'a>(step: &Step, inputs: &'a [Schema]) -> Result<&'a Schema, Error> {
+    inputs.first().ok_or_else(|| Error::Validation(format!("step `{}` has no input", step.id)))
+}
+
+fn order_keys(by: &[SortKey]) -> Vec<String> {
+    by.iter()
+        .map(|k| format!("{} {} NULLS LAST", quote_ident(&k.column), if k.descending { "DESC" } else { "ASC" }))
+        .collect()
+}
+
+/// The most rows back or ahead a window calculation can look.
+pub const MAX_WINDOW_OFFSET: u32 = 100_000;
+
+fn window_schema(step: &Step, input: &Schema) -> Result<Schema, Error> {
+    let StepKind::Window { partition_by, order_by, columns } = &step.kind else { unreachable!() };
+    let id = &step.id;
+    for c in partition_by {
+        require(input, c, id)?;
+    }
+    for k in order_by {
+        require(input, &k.column, id)?;
+    }
+    if columns.is_empty() {
+        return Err(Error::Validation(format!("step `{id}`: add a calculation")));
+    }
+    let mut schema = input.clone();
+    for c in columns {
+        let label = c.func.name().replace('_', " ");
+        if c.name.trim().is_empty() {
+            return Err(Error::Validation(format!("step `{id}`: name the {label} column")));
+        }
+        if schema.field(&c.name).is_some() {
+            return Err(Error::Validation(format!("step `{id}`: there is already a column `{}`; choose another name", c.name)));
+        }
+        let src = match (&c.column, c.func.needs_column()) {
+            (Some(col), true) => Some(require(input, col, id)?.dtype),
+            (None, true) => return Err(Error::Validation(format!("step `{id}`: choose the column for {label}"))),
+            (_, false) => None,
+        };
+        if let Some(t) = src {
+            if c.func.needs_number() && !t.is_numeric() {
+                return Err(Error::Validation(format!(
+                    "step `{id}`: {label} needs a numeric column, `{}` is {}",
+                    c.column.as_deref().unwrap_or(""),
+                    t.plain()
+                )));
+            }
+        }
+        if let Some(n) = c.n {
+            if !(1..=MAX_WINDOW_OFFSET).contains(&n) {
+                return Err(Error::Validation(format!("step `{id}`: the number of rows for `{}` must be from 1 to {MAX_WINDOW_OFFSET}", c.name)));
+            }
+        }
+        let dtype = match c.func {
+            WindowFunc::RowNumber | WindowFunc::Rank => DataType::Int,
+            WindowFunc::MovingAverage | WindowFunc::PercentChange | WindowFunc::ShareOfTotal => DataType::Float,
+            WindowFunc::RunningSum | WindowFunc::Previous | WindowFunc::Next | WindowFunc::Change => src.unwrap(),
+        };
+        if c.func == WindowFunc::MovingAverage && c.n.is_none() {
+            return Err(Error::Validation(format!("step `{id}`: choose how many rows the moving average of `{}` covers", c.name)));
+        }
+        schema.fields.push(Field { name: c.name.clone(), dtype });
+    }
+    Ok(schema)
+}
+
+fn dedupe_check(step: &Step, input: &Schema) -> Result<(), Error> {
+    let StepKind::Dedupe { keys, order_by } = &step.kind else { unreachable!() };
+    for k in keys {
+        require(input, k, &step.id)?;
+    }
+    for k in order_by {
+        require(input, &k.column, &step.id)?;
+    }
+    Ok(())
+}
+
+/// Pivot columns are named after their values, so only values with one
+/// exact written form can be pivoted.
+pub fn pivotable(t: DataType) -> bool {
+    matches!(t, DataType::Text | DataType::Int | DataType::Bool | DataType::Date)
+}
+
+fn pivot_check(step: &Step, input: &Schema) -> Result<(), Error> {
+    let StepKind::Pivot { rows, column, value, func } = &step.kind else { unreachable!() };
+    let id = &step.id;
+    if column.is_empty() {
+        return Err(Error::Validation(format!("step `{id}`: choose the column whose values become columns")));
+    }
+    let c = require(input, column, id)?;
+    if !pivotable(c.dtype) {
+        return Err(Error::Validation(format!(
+            "step `{id}`: cannot make columns from {} column `{column}`; pivot a text, whole-number, true/false or date column (use bucket() or date_trunc() first)",
+            c.dtype.plain()
+        )));
+    }
+    for (i, r) in rows.iter().enumerate() {
+        require(input, r, id)?;
+        if r == column || rows[..i].contains(r) || value.as_ref() == Some(r) {
+            return Err(Error::Validation(format!("step `{id}`: `{r}` is used twice; each column has one role")));
+        }
+    }
+    if value.as_ref() == Some(column) {
+        return Err(Error::Validation(format!("step `{id}`: summarize a different column than `{column}`")));
+    }
+    measure_type(id, *func, value.as_deref(), input)?;
+    Ok(())
+}
+
+/// The type an aggregate gives over a column (None: count rows).
+pub(crate) fn measure_type(id: &str, func: AggFunc, column: Option<&str>, input: &Schema) -> Result<DataType, Error> {
+    Ok(match (func, column) {
+        (AggFunc::Count, _) => DataType::Int,
+        (_, None) => return Err(Error::Validation(format!("step `{id}`: {} needs a column", func.token()))),
+        (func, Some(c)) => {
+            let f = require(input, c, id)?;
+            let numeric_only = matches!(func, AggFunc::Sum | AggFunc::Avg) || func.is_statistical();
+            if numeric_only && !f.dtype.is_numeric() {
+                return Err(Error::Validation(format!(
+                    "step `{id}`: {} needs a numeric column, `{c}` is {}",
+                    func.token(),
+                    f.dtype.plain()
+                )));
+            }
+            match func {
+                AggFunc::CountDistinct => DataType::Int,
+                f2 if f2.is_statistical() => DataType::Float,
+                AggFunc::Avg => DataType::Float,
+                _ => f.dtype,
+            }
+        }
+    })
+}
+
+fn unpivot_schema(step: &Step, input: &Schema) -> Result<Schema, Error> {
+    let StepKind::Unpivot { columns, name, value } = &step.kind else { unreachable!() };
+    let id = &step.id;
+    if columns.is_empty() {
+        return Err(Error::Validation(format!("step `{id}`: choose the columns to turn into rows")));
+    }
+    let mut dtype: Option<(DataType, &str)> = None;
+    for (i, c) in columns.iter().enumerate() {
+        if columns[..i].contains(c) {
+            return Err(Error::Validation(format!("step `{id}`: `{c}` is listed twice")));
+        }
+        let t = require(input, c, id)?.dtype;
+        dtype = Some(match dtype {
+            None => (t, c),
+            Some((a, first)) if a == t => (a, first),
+            Some((a, first)) if a.is_numeric() && t.is_numeric() => (DataType::Float, first),
+            Some((a, first)) => {
+                return Err(Error::Validation(format!(
+                    "step `{id}`: `{first}` is {} but `{c}` is {}; the values share one column, so unpivot columns of one type",
+                    a.plain(),
+                    t.plain()
+                )))
+            }
+        });
+    }
+    let mut fields: Vec<Field> = input.fields.iter().filter(|f| !columns.contains(&f.name)).cloned().collect();
+    for (what, n) in [("names", name), ("values", value)] {
+        if n.trim().is_empty() {
+            return Err(Error::Validation(format!("step `{id}`: name the column for the {what}")));
+        }
+        if fields.iter().any(|f| &f.name == n) {
+            return Err(Error::Validation(format!("step `{id}`: there is already a column `{n}`; choose another name")));
+        }
+        fields.push(Field { name: n.clone(), dtype: if what == "names" { DataType::Text } else { dtype.unwrap().0 } });
+    }
+    Ok(Schema { fields })
 }
 
 fn derive_error(step: &Step, c: &crate::model::Derived, m: String) -> Error {
@@ -465,44 +753,24 @@ pub fn output_schema(step: &Step, inputs: &[Schema]) -> Result<Option<Schema>, E
                 return Err(Error::Validation(format!("step `{id}`: aggregate needs a group or a measure")));
             }
             for m in measures {
-                let dtype = match (m.func, &m.column) {
-                    (AggFunc::Count, _) => DataType::Int,
-                    (_, None) => {
-                        return Err(Error::Validation(format!(
-                            "step `{id}`: {} needs a column",
-                            m.func.token()
-                        )))
-                    }
-                    (func, Some(c)) => {
-                        let f = require(input, c, id)?;
-                        match func {
-                            AggFunc::Sum | AggFunc::Avg if !f.dtype.is_numeric() => {
-                                return Err(Error::Validation(format!(
-                                    "step `{id}`: {} needs a numeric column, `{c}` is {}",
-                                    func.token(),
-                                    f.dtype.name()
-                                )))
-                            }
-                            f2 if f2.is_statistical() && !f.dtype.is_numeric() => {
-                                return Err(Error::Validation(format!(
-                                    "step `{id}`: {} needs a numeric column, `{c}` is {}",
-                                    func.token(),
-                                    f.dtype.name()
-                                )))
-                            }
-                            AggFunc::CountDistinct => DataType::Int,
-                            f2 if f2.is_statistical() => DataType::Float,
-                            AggFunc::Avg => DataType::Float,
-                            _ => f.dtype,
-                        }
-                    }
-                };
+                let dtype = measure_type(id, m.func, m.column.as_deref(), input)?;
                 if fields.iter().any(|f: &Field| f.name == m.alias) {
                     return Err(Error::Validation(format!("step `{id}`: duplicate output column `{}`", m.alias)));
                 }
                 fields.push(Field { name: m.alias.clone(), dtype });
             }
             Ok(Some(Schema { fields }))
+        }
+        StepKind::Window { .. } => Ok(Some(window_schema(step, input)?)),
+        StepKind::Dedupe { .. } => {
+            dedupe_check(step, input)?;
+            Ok(Some(input.clone()))
+        }
+        StepKind::Unpivot { .. } => Ok(Some(unpivot_schema(step, input)?)),
+        // The new columns are the values found when it runs.
+        StepKind::Pivot { .. } => {
+            pivot_check(step, input)?;
+            Ok(None)
         }
         StepKind::Chart { x, y, .. } => {
             require(input, x, id)?;
@@ -538,7 +806,16 @@ pub fn pipeline_sql_with(
     let body_of = |s: &Step| -> Result<String, Error> {
         let schemas: Option<Vec<Schema>> = s.inputs.iter().map(|i| schema_of(i)).collect();
         match (&s.kind, schemas) {
-            (StepKind::Join { .. } | StepKind::Append { .. } | StepKind::Derive { .. }, None) => Err(Error::Unsupported(format!(
+            (
+                StepKind::Join { .. }
+                | StepKind::Append { .. }
+                | StepKind::Derive { .. }
+                | StepKind::Window { .. }
+                | StepKind::Dedupe { .. }
+                | StepKind::Pivot { .. }
+                | StepKind::Unpivot { .. },
+                None,
+            ) => Err(Error::Unsupported(format!(
                 "step `{}`: its SQL is shown once its inputs have run",
                 s.id
             ))),

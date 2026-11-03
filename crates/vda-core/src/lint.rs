@@ -117,6 +117,8 @@ sys.stdout.write(json.dumps(out))
 
 /// Bar charts with more bars than this are hard to read.
 pub const MAX_BARS: usize = 50;
+/// More pivoted columns than this is rarely what was meant.
+const MAX_PIVOT_COLUMNS: usize = 100;
 /// Results larger than this are not profiled for warnings.
 pub const MAX_PROFILED_ROWS: u64 = 5_000_000;
 
@@ -236,6 +238,16 @@ impl Linter {
                         }
                     }
                 }
+                (StepKind::Pivot { .. }, inputs) => {
+                    if let Some(Err(e)) = inputs.map(|i| compile::output_schema(step, &i)) {
+                        out.push(Diagnostic::new(Severity::Error, "invalid-step", Some(&id), plain(&e)));
+                    } else if s.state(&id).ok() == Some(StepState::Fresh) {
+                        // Its columns are the values found when it ran.
+                        if let Some(Output::Table(ds)) = s.output(&id) {
+                            known.insert(id.clone(), ds.schema.clone());
+                        }
+                    }
+                }
                 (StepKind::Chart { .. }, Some(inputs)) => {
                     if let Err(e) = compile::output_schema(step, &inputs) {
                         out.push(Diagnostic::new(Severity::Error, "invalid-step", Some(&id), plain(&e)));
@@ -283,6 +295,26 @@ impl Linter {
 
     fn code_checks(&mut self, s: &Session, a: &Analysis, step: &Step, out: &mut Vec<Diagnostic>) {
         match &step.kind {
+            StepKind::Window { order_by, columns, .. } if order_by.is_empty() => {
+                use crate::model::WindowFunc as W;
+                let ordered: Vec<&str> = columns
+                    .iter()
+                    .filter(|c| !matches!(c.func, W::ShareOfTotal | W::Rank))
+                    .map(|c| c.name.as_str())
+                    .collect();
+                if !ordered.is_empty() {
+                    out.push(Diagnostic::new(
+                        Severity::Info,
+                        "window-order",
+                        Some(&step.id),
+                        format!(
+                            "{} follow{} the rows' current order; choose an order so the result does not depend on how earlier steps arranged the rows",
+                            ordered.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join(", "),
+                            if ordered.len() == 1 { "s" } else { "" }
+                        ),
+                    ));
+                }
+            }
             StepKind::Sql { sql } => {
                 let sql = sql.trim().trim_end_matches(';');
                 if let Err(m) = crate::duck::check_single_select(&self.conn, sql) {
@@ -439,6 +471,39 @@ impl Linter {
                                 .last_run(),
                             );
                         }
+                    }
+                }
+            }
+            (StepKind::Pivot { column, rows, .. }, r, Some(l)) => {
+                let (l, r) = (l.clone(), r.clone());
+                if let Some(p) = self.profile(s, &l).and_then(|p| p.into_iter().find(|p| &p.name == column)) {
+                    if p.nulls > 0 {
+                        out.push(
+                            Diagnostic::new(
+                                Severity::Warning,
+                                "pivot-missing",
+                                Some(id),
+                                format!(
+                                    "{} of {} rows have no `{column}` and are left out; fill them in first (a calculated column with coalesce) to keep them",
+                                    p.nulls, p.rows
+                                ),
+                            )
+                            .last_run(),
+                        );
+                    }
+                }
+                if let Some(r) = r {
+                    let made = r.schema.fields.len().saturating_sub(rows.len());
+                    if made > MAX_PIVOT_COLUMNS {
+                        out.push(
+                            Diagnostic::new(
+                                Severity::Warning,
+                                "pivot-wide",
+                                Some(id),
+                                format!("made {made} columns on the last run; `{column}` has many values, so group them first (bucket(), date_trunc()) or filter"),
+                            )
+                            .last_run(),
+                        );
                     }
                 }
             }

@@ -3,7 +3,7 @@
 An integrated workspace for exploring, transforming, analyzing and visualizing data through visual controls, SQL/Python code, and notebooks, without losing the thread of the analysis.
 
 - Product briefs (v0.2.0): [docs/briefs/](docs/briefs/)
-- Decisions: [ADR-0001 deployment model](docs/adr/0001-deployment-model.md), [ADR-0002 build cache](docs/adr/0002-build-cache.md), [ADR-0003 desktop frontend](docs/adr/0003-frontend.md), [ADR-0004 code review and SQL sandbox](docs/adr/0004-code-review-and-sandbox.md), [ADR-0005 several sources and multi-input steps](docs/adr/0005-multi-input-steps.md), [ADR-0006 formulas and core transforms](docs/adr/0006-formulas-and-core-transforms.md), [ADR-0007 linter and console](docs/adr/0007-linter-and-console.md)
+- Decisions: [ADR-0001 deployment model](docs/adr/0001-deployment-model.md), [ADR-0002 build cache](docs/adr/0002-build-cache.md), [ADR-0003 desktop frontend](docs/adr/0003-frontend.md), [ADR-0004 code review and SQL sandbox](docs/adr/0004-code-review-and-sandbox.md), [ADR-0005 several sources and multi-input steps](docs/adr/0005-multi-input-steps.md), [ADR-0006 formulas and core transforms](docs/adr/0006-formulas-and-core-transforms.md), [ADR-0007 linter and console](docs/adr/0007-linter-and-console.md), [ADR-0008 reshaping and window calculations](docs/adr/0008-reshaping-and-window-calculations.md)
 - Current state of the first engineering slice: [STATUS.md](STATUS.md)
 
 ## Layout
@@ -57,6 +57,10 @@ A console under the result has three tabs. **Problems** lists what the linter fi
 **Calculate columns** adds or replaces columns with formulas: `units * unit_price`, `coalesce(region, "Unknown")`, `date_trunc("month", order_date)`, `if(revenue >= target, "met", "below")`. The formula language is checked as you save and behaves the same in DuckDB and the reference engine (dividing by zero gives a missing value, not infinity). **Choose and rename columns**, **Sort rows, keep the top**, and summaries with median, percentiles, distinct counts and standard deviation are visual steps too. Any current result can be **exported** to CSV, Excel or Parquet. See [ADR-0006](docs/adr/0006-formulas-and-core-transforms.md).
 
 ![A calculated column, with the formulas that make it](docs/screenshots/12-formula.png)
+
+**Running totals, ranks, previous values** adds columns calculated across rows, separately for each group and in an order: running totals, row numbers, ranks, the previous or next value, moving averages, change and % change from the previous row, and share of the group's total. Rows stay where they are. **Remove duplicates** keeps one row per key, such as the latest order per customer. **Pivot** makes a column for each value (revenue by region, a column per product), and **Unpivot** turns columns back into rows. The formula function `bucket(x, width)` groups numbers into bands for histograms. See [ADR-0008](docs/adr/0008-reshaping-and-window-calculations.md).
+
+![A pivot with one column per product](docs/screenshots/15-pivot.png)
 
 ### Combining data
 

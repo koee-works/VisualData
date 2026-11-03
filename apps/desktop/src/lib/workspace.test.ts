@@ -330,6 +330,66 @@ describe("Core transforms and export", () => {
   });
 });
 
+describe("Reshaping and window calculations", () => {
+  async function fromSource() {
+    const mock = new MockBackend();
+    await mock.seedDemo({ run: false, editAfterRun: false });
+    const ws = new Workspace(mock);
+    await ws.open("/projects/x");
+    ws.selected = "source";
+    return ws;
+  }
+
+  it("adds a running total per region that keeps rows in place", async () => {
+    const ws = await fromSource();
+    await ws.addStep({
+      type: "window",
+      partition_by: ["region"],
+      order_by: [{ column: "order_date", descending: false }],
+      columns: [{ name: "running_revenue", func: "running_sum", column: "revenue", n: null }],
+    });
+    await ws.run();
+    const page = await ws.backend.page("window_1", 0, 3);
+    expect(page.columns.map((c) => c.name)).toEqual(["order_id", "order_date", "region", "revenue", "running_revenue"]);
+    expect(page.rows.map((r) => r[0]!.t === "int" && r[0]!.v)).toEqual(["1", "2", "3"]);
+  });
+
+  it("keeps one row per key, in input order", async () => {
+    const ws = await fromSource();
+    await ws.addStep({ type: "dedupe", keys: ["region"], order_by: [{ column: "revenue", descending: true }] });
+    await ws.run();
+    const page = await ws.backend.page("dedupe_1", 0, 10);
+    expect(page.total_rows).toBe(5); // four regions and the missing one
+  });
+
+  it("pivots values into columns and back into rows", async () => {
+    const ws = await fromSource();
+    const p = await ws.addStep({ type: "pivot", rows: [], column: "region", value: null, func: "COUNT" });
+    await ws.run();
+    const wide = await ws.backend.page(p!.id, 0, 5);
+    expect(wide.total_rows).toBe(1);
+    expect(wide.columns.map((c) => c.name)).toEqual(["East", "North", "South", "West"]);
+    ws.selected = p!.id;
+    await ws.addStep({ type: "unpivot", columns: ["East", "West"], name: "region", value: "orders" });
+    await ws.run();
+    const long = await ws.backend.page("unpivot_1", 0, 5);
+    expect(long.columns.map((c) => c.name)).toEqual(["North", "South", "region", "orders"]);
+    expect(long.total_rows).toBe(2);
+  });
+
+  it("describes the steps in words", async () => {
+    const { describe: d } = await import("./format");
+    expect(
+      d({ type: "window", partition_by: ["region"], order_by: [], columns: [{ name: "r", func: "running_sum", column: "revenue", n: null }] }),
+    ).toBe("Running total of revenue per region");
+    expect(d({ type: "window", partition_by: [], order_by: [], columns: [{ name: "r", func: "rank", column: null, n: null }] })).toBe("Rank");
+    expect(d({ type: "dedupe", keys: [], order_by: [] })).toBe("Remove repeated rows");
+    expect(d({ type: "dedupe", keys: ["customer"], order_by: [] })).toBe("One row per customer");
+    expect(d({ type: "pivot", rows: ["region"], column: "month", value: "revenue", func: "SUM" })).toBe("Columns for each month, rows by region");
+    expect(d({ type: "unpivot", columns: ["q1", "q2"], name: "quarter", value: "v" })).toBe("Turn q1, q2 into rows");
+  });
+});
+
 describe("Console", () => {
   async function seeded() {
     const mock = new MockBackend();

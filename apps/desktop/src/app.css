@@ -132,6 +132,19 @@
   .btn-primary:hover:not(:disabled) {
     background: #2c3d5a;
   }
+  /* A column that can be switched on and off (group by, keys, …). */
+  .chip {
+    border: 1px solid var(--color-rule-strong);
+    border-radius: 999px;
+    padding: 0.15rem 0.65rem;
+    background: var(--color-panel);
+    cursor: pointer;
+  }
+  .chip[aria-pressed="true"] {
+    background: var(--color-ink);
+    border-color: var(--color-ink);
+    color: white;
+  }
   .btn-quiet {
     border-color: transparent;
     background: transparent;

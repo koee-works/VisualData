@@ -79,6 +79,31 @@ export interface Measure {
   alias: string;
 }
 
+export interface SortKey {
+  column: string;
+  descending: boolean;
+}
+
+export type WindowFunc =
+  | "running_sum"
+  | "row_number"
+  | "rank"
+  | "previous"
+  | "next"
+  | "moving_average"
+  | "change"
+  | "percent_change"
+  | "share_of_total";
+
+export interface WindowColumn {
+  name: string;
+  func: WindowFunc;
+  /** Not used by row number and rank. */
+  column: string | null;
+  /** Rows back or ahead (previous, next), or the window (moving average). */
+  n: number | null;
+}
+
 export type StepOp =
   | { type: "filter"; predicates: Predicate[] }
   | { type: "aggregate"; group_by: string[]; measures: Measure[] }
@@ -87,6 +112,10 @@ export type StepOp =
   | { type: "derive"; columns: { name: string; formula: string }[] }
   | { type: "select"; columns: { column: string; as: string | null }[] }
   | { type: "sort"; by: { column: string; descending: boolean }[]; limit: number | null }
+  | { type: "window"; partition_by: string[]; order_by: SortKey[]; columns: WindowColumn[] }
+  | { type: "dedupe"; keys: string[]; order_by: SortKey[] }
+  | { type: "pivot"; rows: string[]; column: string; value: string | null; func: AggFunc }
+  | { type: "unpivot"; columns: string[]; name: string; value: string }
   | { type: "sql"; sql: string }
   | { type: "python"; code: string; timeout_ms: number }
   | { type: "chart"; mark: Mark; x: string; y: string; title: string | null };

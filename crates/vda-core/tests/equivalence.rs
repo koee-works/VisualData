@@ -322,7 +322,7 @@ fn sum_of_dates_is_rejected_before_execution() {
     let mut duck = DuckDbEngine::new().unwrap();
     let t = duck.import_table(&src).unwrap();
     let err = duck.run_table(&step, &t).unwrap_err().to_string();
-    assert!(err.contains("needs a numeric column") && err.contains("DATE"), "{err}");
+    assert!(err.contains("needs a numeric column") && err.contains("is date"), "{err}");
 }
 
 // ---------------------------------------------------------------- joins

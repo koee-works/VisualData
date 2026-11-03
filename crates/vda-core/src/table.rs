@@ -20,6 +20,18 @@ pub enum DataType {
 }
 
 impl DataType {
+    /// The type in words, for messages.
+    pub fn plain(self) -> &'static str {
+        match self {
+            DataType::Bool => "true/false",
+            DataType::Int => "whole number",
+            DataType::Float => "decimal",
+            DataType::Text => "text",
+            DataType::Date => "date",
+            DataType::Timestamp => "date and time",
+        }
+    }
+
     pub fn name(self) -> &'static str {
         match self {
             DataType::Bool => "BOOLEAN",

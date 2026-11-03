@@ -1,6 +1,6 @@
 # First engineering slice — status
 
-Updated: 2026-11-02. Decisions: [ADR-0001](docs/adr/0001-deployment-model.md) (local-first desktop; Tauri 2 + Rust core + embedded DuckDB + Python child process), [ADR-0002](docs/adr/0002-build-cache.md) (build cache), [ADR-0003](docs/adr/0003-frontend.md) (desktop frontend), [ADR-0004](docs/adr/0004-code-review-and-sandbox.md) (code review and SQL sandbox), [ADR-0005](docs/adr/0005-multi-input-steps.md) (several sources and multi-input steps), [ADR-0006](docs/adr/0006-formulas-and-core-transforms.md) (formulas and core transforms), [ADR-0007](docs/adr/0007-linter-and-console.md) (linter and console).
+Updated: 2026-11-03. Decisions: [ADR-0001](docs/adr/0001-deployment-model.md) (local-first desktop; Tauri 2 + Rust core + embedded DuckDB + Python child process), [ADR-0002](docs/adr/0002-build-cache.md) (build cache), [ADR-0003](docs/adr/0003-frontend.md) (desktop frontend), [ADR-0004](docs/adr/0004-code-review-and-sandbox.md) (code review and SQL sandbox), [ADR-0005](docs/adr/0005-multi-input-steps.md) (several sources and multi-input steps), [ADR-0006](docs/adr/0006-formulas-and-core-transforms.md) (formulas and core transforms), [ADR-0007](docs/adr/0007-linter-and-console.md) (linter and console), [ADR-0008](docs/adr/0008-reshaping-and-window-calculations.md) (reshaping and window calculations).
 
 ## Acceptance scenario coverage
 
@@ -16,7 +16,7 @@ From the "Shared team acceptance" section of the v0.2.0 briefs. Tests: `crates/v
 | 6 | Change an upstream step; downstream stale until rerun | Done | `step6_…`, `undoing_an_edit_reuses_the_earlier_saved_results` |
 | 7 | Controlled failure: diagnose, cancel or correct, recover | Done | `step7_…` (2 tests), `unreadable_saved_result_is_recomputed` |
 
-All 120 Rust tests pass (`cargo test -p vda-core -p vda-app`), plus 34 frontend unit tests and the desktop end-to-end scenario (below). The demo writes a complete project folder: `cargo run -p vda-core --example slice -- <dir>`.
+All 128 Rust tests pass (`cargo test -p vda-core -p vda-app`), plus 38 frontend unit tests and the desktop end-to-end scenario (below). The demo writes a complete project folder: `cargo run -p vda-core --example slice -- <dir>`.
 
 ## What exists
 
@@ -60,7 +60,7 @@ Svelte 5 in Tauri 2 ([ADR-0003](docs/adr/0003-frontend.md)), built and run on Li
 | Notebook | Markdown and step cells in document order, previews of each result, reordering; text is escaped before rendering |
 | Not yet | Creating projects from the welcome screen is wired but was not exercised end to end (file dialogs cannot be scripted under Xvfb); no undo; no column resizing; keyboard navigation inside the grid |
 
-**End to end** (`apps/desktop/e2e/run_e2e.py`, the real app under Xvfb through tauri-driver, with a fresh approvals file), in two phases. First: open a project received from someone else → its Python code is shown for review → *Not now* → run: visual steps run, the Python step needs review and the chart waits → approve from the top bar → run → all current → inspect an aggregate's rows and SQL → edit the upstream filter → all four steps outdated, banner shown → rerun from the banner → notebook with text, tables and chart → chart step → Python step. Passes; screenshots in `docs/screenshots/`. Then a second project with two sources: run → the full join keeps a region with no orders, its SQL is a full outer join → switch to matching rows only → the join and the SQL after it go outdated → rerun → SQL that reads the second source by name → the second source's profile → a spreadsheet source with typed columns, stacked with a CSV by an append → rename a source in the app, rerun, and the SQL that names it follows → a formula error shown while typing and on save, fixed, run, and a top-2 sort after it → the console lists the linter's notes, one is dismissed, the run log shows the runs.
+**End to end** (`apps/desktop/e2e/run_e2e.py`, the real app under Xvfb through tauri-driver, with a fresh approvals file), in two phases. First: open a project received from someone else → its Python code is shown for review → *Not now* → run: visual steps run, the Python step needs review and the chart waits → approve from the top bar → run → all current → inspect an aggregate's rows and SQL → edit the upstream filter → all four steps outdated, banner shown → rerun from the banner → notebook with text, tables and chart → chart step → Python step. Passes; screenshots in `docs/screenshots/`. Then a second project with two sources: run → the full join keeps a region with no orders, its SQL is a full outer join → switch to matching rows only → the join and the SQL after it go outdated → rerun → SQL that reads the second source by name → the second source's profile → a spreadsheet source with typed columns, stacked with a CSV by an append → rename a source in the app, rerun, and the SQL that names it follows → a formula error shown while typing and on save, fixed, run, and a top-2 sort after it → the console lists the linter's notes, one is dismissed, the run log shows the runs → a running total per region gets a rank added in the editor and reruns → a pivot with one column per product switches to counting rows.
 
 Found and fixed while building it: an effect loop in the grid (reading the page cache while clearing it), Vega cloning Svelte's reactive proxies, charts widening the window, and long decimals (now six places on screen, full value on hover).
 
@@ -103,6 +103,18 @@ Before this change, results were in-memory tables. The regional-revenue sample w
 - **Reopening a large project rehashed the source** (1.9 s at 10M rows). The source fingerprint is now saved with the results (355 ms).
 - **Out-of-memory Python steps hung until their timeout.** After a `MemoryError`, Python's shutdown deadlocked in pyarrow's thread pool, so the step sat for the full timeout (30 s by default) instead of failing at once. Found through an intermittent test failure; reproduced by catching the hung process. The wrapper now flushes its error and exits immediately, and the memory test asserts the failure arrives within 10 s. Twenty consecutive stress runs had no hang.
 - **A test changed a process-wide environment variable** while other tests started child processes in parallel (a data race; `set_var` is `unsafe` in newer Rust editions for this reason). The test now inspects the child's whole environment instead.
+
+## Reshaping and window calculations (ADR-0008)
+
+| Part | Behaviour | Tests |
+|---|---|---|
+| Window calculations | Running total, row number, rank, previous/next value, moving average, change and % change from previous, share of total; per group, in an order; rows stay in place. Explicit frames, ties in input order, missing values last, integer overflow an error. | `tests/reshape.rs` (`window_calculations_agree`, `window_errors_agree`) |
+| Keep one row per key | Keys (or every column), first row in an order, missing keys equal, input order kept. | `keeping_one_row_per_key_agrees` |
+| Unpivot | Listed columns become name/value rows, other columns kept, missing values kept, one value type (whole numbers and decimals combine). | `unpivot_agrees` |
+| Pivot | A column per value (text, whole number, true/false, date), a row per group, any summary; columns known after the run; missing pivot values left out, with a warning. | `pivot_agrees` (including no rows and a name clash), `tests/lint.rs` |
+| `bucket(x, width)` | Start of the band holding x; whole numbers or decimals; missing for a width that is not positive. | `bucket_agrees` |
+| Inspectable SQL | A dedupe → window → unpivot → pivot chain as one query gives the step-by-step results. | `inspectable_sql_of_reshaping_steps_executes_to_the_same_result` |
+| UI | Editors for the four steps, sharing an order list with Sort; a note when a window has no order. | `workspace.test.ts`; e2e steps 19–20, `docs/screenshots/14-window.png`, `15-pivot.png` |
 
 ## Linter and console (ADR-0007)
 

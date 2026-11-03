@@ -1,4 +1,4 @@
-import type { Cell, ColumnType, Literal, StepOp, StepView } from "./api/types";
+import type { Cell, ColumnType, Literal, StepOp, StepView, WindowFunc } from "./api/types";
 
 /** A cell's full value, for tooltips. */
 export function exactCell(c: Cell): string {
@@ -101,6 +101,19 @@ export function funcWords(f: string): string {
   return `${p}${suffix} percentile`;
 }
 
+/** Window calculations as the interface names them. */
+export const windowWords: Record<WindowFunc, string> = {
+  running_sum: "Running total",
+  row_number: "Row number",
+  rank: "Rank",
+  previous: "Previous value",
+  next: "Next value",
+  moving_average: "Moving average",
+  change: "Change from previous",
+  percent_change: "% change from previous",
+  share_of_total: "Share of total",
+};
+
 /** Comparison symbols as people write them. */
 export const symbols: Record<string, string> = { "=": "=", "<>": "≠", "<": "<", "<=": "≤", ">": ">", ">=": "≥" };
 
@@ -135,6 +148,17 @@ export function describe(op: StepOp): string {
       const first = op.limit !== null ? `first ${op.limit}` : "";
       return keys ? `Sort by ${keys}${first ? `, ${first}` : ""}` : `Keep the ${first} rows`;
     }
+    case "window": {
+      const what = op.columns.map((c) => (c.column ? `${windowWords[c.func].toLowerCase()} of ${c.column}` : windowWords[c.func].toLowerCase()));
+      const s = what.join(", ") || "Window calculations";
+      return `${s[0]!.toUpperCase()}${s.slice(1)}${op.partition_by.length ? ` per ${op.partition_by.join(", ")}` : ""}`;
+    }
+    case "dedupe":
+      return op.keys.length ? `One row per ${op.keys.join(", ")}` : "Remove repeated rows";
+    case "pivot":
+      return `Columns for each ${op.column || "value"}${op.rows.length ? `, rows by ${op.rows.join(", ")}` : ""}`;
+    case "unpivot":
+      return `Turn ${op.columns.join(", ") || "columns"} into rows`;
     case "append":
       return op.distinct ? "Append rows, without repeats" : "Append rows";
     case "sql":

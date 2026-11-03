@@ -42,7 +42,12 @@ if [ "${2:-}" != "" ]; then
        {"name": "share_of_target", "formula": "round(coalesce(revenue, 0) / target, 3)"},
        {"name": "status", "formula": "if(share_of_target >= 1, \"met\", \"below\")"}]}},
     {"id": "top", "inputs": ["progress"], "label": "Closest to target",
-     "op": {"type": "sort", "by": [{"column": "share_of_target", "descending": true}], "limit": 2}}
+     "op": {"type": "sort", "by": [{"column": "share_of_target", "descending": true}], "limit": 2}},
+    {"id": "running", "inputs": ["source"], "label": "Running revenue by region",
+     "op": {"type": "window", "partition_by": ["region"], "order_by": [{"column": "order_date", "descending": false}],
+       "columns": [{"name": "running_revenue", "func": "running_sum", "column": "revenue", "n": null}]}},
+    {"id": "by_product", "inputs": ["source"], "label": "Revenue by region and product",
+     "op": {"type": "pivot", "rows": ["region"], "column": "product", "value": "revenue", "func": "SUM"}}
   ],
   "cells": [
     {"type": "markdown", "text": "## Which regions are below target?"},

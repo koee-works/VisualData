@@ -116,6 +116,19 @@ pub enum StepKind {
     /// Visual: order rows (missing values last), ties in input order, then
     /// optionally keep only the first `limit` rows.
     Sort { by: Vec<SortKey>, limit: Option<u64> },
+    /// Visual: calculations across rows (running totals, ranks, previous
+    /// values) within groups, in an order; rows keep their input order.
+    Window { partition_by: Vec<String>, order_by: Vec<SortKey>, columns: Vec<WindowColumn> },
+    /// Visual: keep one row per key: the first in `order_by` (ties in input
+    /// order). No keys means rows identical in every column.
+    Dedupe { keys: Vec<String>, order_by: Vec<SortKey> },
+    /// Visual: one row per value of `column` becomes one column per value,
+    /// summarizing `value` for each group of `rows`. The new columns are
+    /// known only after it runs.
+    Pivot { rows: Vec<String>, column: String, value: Option<String>, func: AggFunc },
+    /// Visual: columns become rows: each input row gives one row per listed
+    /// column, with the column's name and value.
+    Unpivot { columns: Vec<String>, name: String, value: String },
     /// Custom SQL. Reads the first input as the relation `input`, and every
     /// input by its id.
     Sql { sql: String },
@@ -136,6 +149,10 @@ impl StepKind {
             StepKind::Derive { .. } => "derive",
             StepKind::Select { .. } => "select",
             StepKind::Sort { .. } => "sort",
+            StepKind::Window { .. } => "window",
+            StepKind::Dedupe { .. } => "dedupe",
+            StepKind::Pivot { .. } => "pivot",
+            StepKind::Unpivot { .. } => "unpivot",
             StepKind::Sql { .. } => "sql",
             StepKind::Python { .. } => "python",
             StepKind::Chart { .. } => "chart",
@@ -154,6 +171,10 @@ impl StepKind {
                 | StepKind::Derive { .. }
                 | StepKind::Select { .. }
                 | StepKind::Sort { .. }
+                | StepKind::Window { .. }
+                | StepKind::Dedupe { .. }
+                | StepKind::Pivot { .. }
+                | StepKind::Unpivot { .. }
                 | StepKind::Chart { .. }
         )
     }
@@ -228,6 +249,72 @@ pub struct Pick {
     pub column: String,
     /// New name, if renamed.
     pub rename: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WindowColumn {
+    pub name: String,
+    pub func: WindowFunc,
+    /// The column it works on (not used by row number and rank).
+    pub column: Option<String>,
+    /// Rows back or ahead (previous, next) or window size (moving average).
+    pub n: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowFunc {
+    RunningSum,
+    RowNumber,
+    /// Ties in the order share a rank; the next rank skips (1, 1, 3).
+    Rank,
+    Previous,
+    Next,
+    MovingAverage,
+    /// This value minus the previous one.
+    Change,
+    /// Change divided by the previous value; missing when that is zero.
+    PercentChange,
+    /// This value divided by the group's total.
+    ShareOfTotal,
+}
+
+impl WindowFunc {
+    pub const ALL: [WindowFunc; 9] = [
+        WindowFunc::RunningSum,
+        WindowFunc::RowNumber,
+        WindowFunc::Rank,
+        WindowFunc::Previous,
+        WindowFunc::Next,
+        WindowFunc::MovingAverage,
+        WindowFunc::Change,
+        WindowFunc::PercentChange,
+        WindowFunc::ShareOfTotal,
+    ];
+    pub fn name(self) -> &'static str {
+        match self {
+            WindowFunc::RunningSum => "running_sum",
+            WindowFunc::RowNumber => "row_number",
+            WindowFunc::Rank => "rank",
+            WindowFunc::Previous => "previous",
+            WindowFunc::Next => "next",
+            WindowFunc::MovingAverage => "moving_average",
+            WindowFunc::Change => "change",
+            WindowFunc::PercentChange => "percent_change",
+            WindowFunc::ShareOfTotal => "share_of_total",
+        }
+    }
+    pub fn parse(s: &str) -> Option<WindowFunc> {
+        WindowFunc::ALL.into_iter().find(|f| f.name() == s)
+    }
+    pub fn needs_column(self) -> bool {
+        !matches!(self, WindowFunc::RowNumber | WindowFunc::Rank)
+    }
+    pub fn needs_number(self) -> bool {
+        matches!(
+            self,
+            WindowFunc::RunningSum | WindowFunc::MovingAverage | WindowFunc::Change | WindowFunc::PercentChange | WindowFunc::ShareOfTotal
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
