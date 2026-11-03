@@ -86,7 +86,7 @@ fn assert_same(case: &str, r: &Table, d: &Table) {
 }
 
 fn pred(column: &str, op: CmpOp, value: Value) -> Predicate {
-    Predicate { column: column.into(), op, value }
+    Predicate { param: None, column: column.into(), op, value }
 }
 
 fn m(func: AggFunc, column: Option<&str>, alias: &str) -> Measure {
@@ -419,6 +419,7 @@ fn inspectable_sql_with_a_join_executes_to_the_same_result() {
     use vda_core::model::{Analysis, Source};
     let (l, r) = (write("p-orders.csv", ORDERS_CSV), write("p-customers.csv", CUSTOMERS_CSV));
     let a = Analysis {
+        parameters: vec![],
         name: "join".into(),
         sources: vec![
             Source::new("orders", l.to_string_lossy()),
@@ -611,6 +612,7 @@ fn inspectable_sql_of_an_append_executes_to_the_same_result() {
     use vda_core::model::{Analysis, Source};
     let paths = [write("pa-jan.csv", JAN), write("pa-feb.csv", FEB)];
     let a = Analysis {
+        parameters: vec![],
         name: "append".into(),
         sources: vec![
             Source::new("jan", paths[0].to_string_lossy()),
@@ -787,6 +789,7 @@ fn inspectable_sql_of_derive_select_sort_executes_to_the_same_result() {
     use vda_core::model::{Analysis, Derived, Pick, SortKey, Source};
     let src = write("pipeline-formulas.csv", FORMULA_CSV);
     let a = Analysis {
+        parameters: vec![],
         name: "transforms".into(),
         sources: vec![Source::primary(src.to_string_lossy())],
         steps: vec![

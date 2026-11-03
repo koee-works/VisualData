@@ -99,6 +99,15 @@ class Session:
         )
         call("POST", f"/session/{self.id}/execute/sync", {"script": script, "args": [ref, value]})
 
+    def set_input(self, xpath, value):
+        """Type into a field and leave it (input and change fire)."""
+        ref = {"element-6066-11e4-a52e-4f735466cecf": self.find(xpath)}
+        script = (
+            "const el = arguments[0]; el.scrollIntoView({block: 'center'}); el.focus(); el.value = arguments[1];"
+            "el.dispatchEvent(new Event('input', {bubbles: true})); el.dispatchEvent(new Event('change', {bubbles: true}))"
+        )
+        call("POST", f"/session/{self.id}/execute/sync", {"script": script, "args": [ref, value]})
+
     def count(self, xpath):
         return len(call("POST", f"/session/{self.id}/elements", {"using": "xpath", "value": xpath}))
 
@@ -137,7 +146,8 @@ STATUS = "//header//p[@role='status']"
 
 def with_app(app, project, shots, approvals, scenario):
     """Start the app on `project` through tauri-driver and run `scenario(s)`."""
-    env = dict(os.environ, VDA_OPEN=project, VDA_APPROVALS=approvals)
+    # Saved notebooks go to the screenshots folder: file dialogs cannot be answered under Xvfb.
+    env = dict(os.environ, VDA_OPEN=project, VDA_APPROVALS=approvals, VDA_SAVE_DIR=os.path.abspath(os.path.join(shots, "exports")))
     driver = subprocess.Popen(["tauri-driver", "--port", "4444"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
     s = None
     try:
@@ -194,7 +204,7 @@ def received_project(s, shots):
         s.click(dialog + "//button[normalize-space()='Not now']")
         assert s.count(mark("Not run")) == 2 and s.count(mark("Needs your review")) == 1
         assert s.count(mark("Waiting on a review")) == 1
-        s.find("//section[@aria-label='Source']//td[normalize-space()='order_date']")
+        s.find("//section[@aria-label='Source']//td[starts-with(normalize-space(), 'order_date')]")
         s.screenshot(f"{shots}/1-opened.png")
 
         step(2, "Run without approving: visual steps run, the Python step and the chart after it do not")
@@ -294,12 +304,12 @@ def joins(s, shots):
 
     step(14, "The second source has its own profile")
     s.click(node("regions.csv"))
-    s.find("//section[@aria-label='Source']//td[normalize-space()='manager']")
+    s.find("//section[@aria-label='Source']//td[starts-with(normalize-space(), 'manager')]")
 
     step(15, "A spreadsheet is a source: its sheet, typed columns, and an append that stacks it with a CSV")
     s.click(node("regions.xlsx"))
     s.wait_text("//section[@aria-label='Source']", "Spreadsheet file")
-    s.find("//section[@aria-label='Source']//td[normalize-space()='since']/following-sibling::td[normalize-space()='date']")
+    s.find("//section[@aria-label='Source']//td[normalize-space()='since date']")
     s.click(node("Regions from both files"))
     s.wait_text(table, "from_file")
     assert "sheet" in s.text(table) and "regions" in s.text(table)
@@ -375,6 +385,80 @@ def joins(s, shots):
     s.wait_text(STATUS, "All results current")
     s.wait_text(table, "Basic")
     s.screenshot(f"{shots}/15-pivot.png")
+
+    step(21, "A parameter used in a formula: a new value outdates only the steps that use it")
+    s.click("//button[@aria-label='Add a parameter']")
+    s.set_input("//input[@aria-label='New parameter name']", "goal")
+    s.click("//section[@aria-label='Parameters']//button[normalize-space()='Add']")
+    s.find("//input[@aria-label='Value of goal']")
+    s.set_input("//input[@aria-label='Value of goal']", "1")
+    s.click(node("Progress against target"))
+    s.clear_and_type("(//textarea[@aria-label='Formula'])[2]", 'if(share_of_target >= @goal, "met", "below")')
+    s.click("//button[normalize-space()='Save step']")
+    s.click("//button[normalize-space()='Run analysis']")
+    s.wait_text(STATUS, "All results current")
+    s.set_input("//input[@aria-label='Value of goal']", "0.5")
+    s.wait_text(STATUS, "2 of 8 results need a run")  # the calculation and the sort after it
+    s.click("//button[normalize-space()='Run analysis']")
+    s.wait_text(STATUS, "All results current")
+    s.click("//button[@role='tab' and normalize-space()='Data']")
+    s.wait_text(table, "met")
+    s.screenshot(f"{shots}/16-parameter.png")
+
+    step(22, "A data check warns about rows with no region, shows examples, and passes the rows on")
+    s.click(node("sales.csv"))
+    s.wait_text("//body", "Typical values")
+    s.click("//button[@aria-label='Add a step']")
+    s.click("//div[@role='menuitem' and contains(., 'Check data quality')]")
+    s.set_input("//input[@aria-label='Rule formula']", "region is not missing")
+    s.click("//button[normalize-space()='Save step']")
+    s.click("//button[normalize-space()='Run analysis']")
+    s.wait_text(STATUS, "All results current")
+    editor = "//section[@aria-label='Step editor']"
+    s.wait_text(editor, "is not true for 2 of 60 rows")
+    s.find("//table[@aria-label='Rows that break rule 1']")
+    s.wait_text(editor, "no repeats")
+    s.screenshot(f"{shots}/17-check.png")
+
+    step(23, "A histogram counts every row of a number column")
+    s.click(node("sales.csv"))
+    s.click("//button[@aria-label='Add a step']")
+    s.click("//div[@role='menuitem' and normalize-space(.//span[1])='Chart']")
+    s.driver_select("//select[@id='chart-mark']", "histogram")
+    s.driver_select("//select[@aria-label='Column to count']", "revenue")
+    s.click("//button[normalize-space()='Save step']")
+    s.click("//button[normalize-space()='Run analysis']")
+    s.wait_text(STATUS, "All results current")
+    s.wait_text("//section[@aria-label='Result']", "Distribution of revenue")
+    widths = call("POST", f"/session/{s.id}/execute/sync", {"script": (
+        "return [...document.querySelectorAll('section[aria-label=Result] path[aria-roledescription=bar]')]"
+        ".map((p) => p.getBBox().width)"), "args": []})
+    assert len(widths) >= 5 and min(widths) > 0, widths
+    s.screenshot(f"{shots}/18-histogram.png")
+
+    step(24, "Export the notebook as a report and as a Jupyter notebook")
+    out = os.path.abspath(os.path.join(shots, "exports"))
+    os.makedirs(out, exist_ok=True)
+    report, nb = os.path.join(out, "Revenue against target.html"), os.path.join(out, "Revenue against target.ipynb")
+    for f in (report, nb):
+        if os.path.exists(f):
+            os.remove(f)
+    s.click("//button[@role='tab' and normalize-space()='Notebook']")
+    export = "//article[@aria-label='Notebook']//button[normalize-space()='Export']"
+    s.click(export)
+    s.find("//div[@role='menuitem' and contains(., 'Report')]")
+    time.sleep(0.4)  # let the menu finish opening
+    s.click("//div[@role='menuitem' and contains(., 'Report')]")
+    s.find("//p[contains(., 'Saved the report')]")
+    s.click(export)
+    s.find("//div[@role='menuitem' and contains(., 'Jupyter notebook')]")
+    time.sleep(0.4)
+    s.click("//div[@role='menuitem' and contains(., 'Jupyter notebook')]")
+    s.find("//p[contains(., 'Saved a Jupyter notebook')]")
+    html = open(report, encoding="utf-8").read()
+    assert "<title>Revenue against target</title>" in html and "<svg" in html and "<script" not in html, html[:400]
+    notebook = json.load(open(nb, encoding="utf-8"))
+    assert notebook["nbformat"] == 4 and any("read_csv" in "".join(c["source"]) for c in notebook["cells"]), notebook["cells"][:2]
 
 
 if __name__ == "__main__":

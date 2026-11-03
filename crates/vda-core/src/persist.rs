@@ -98,11 +98,15 @@ pub fn step_kind_to_json(kind: &StepKind) -> Json {
                     predicates
                         .iter()
                         .map(|p| {
-                            Json::obj(vec![
+                            let mut pairs = vec![
                                 ("column", Json::str(p.column.clone())),
                                 ("op", Json::str(p.op.token())),
                                 ("value", value_to_json(&p.value)),
-                            ])
+                            ];
+                            if let Some(name) = &p.param {
+                                pairs.push(("param", Json::str(name.clone())));
+                            }
+                            Json::obj(pairs)
                         })
                         .collect(),
                 ),
@@ -230,19 +234,50 @@ pub fn step_kind_to_json(kind: &StepKind) -> Json {
             ("name", Json::str(name.clone())),
             ("value", Json::str(value.clone())),
         ]),
+        StepKind::Check { rules, stop } => Json::obj(vec![
+            ("type", Json::str("check")),
+            ("stop", Json::Bool(*stop)),
+            (
+                "rules",
+                Json::Arr(
+                    rules
+                        .iter()
+                        .map(|r| match r {
+                            Rule::Expect { formula } => Json::obj(vec![("rule", Json::str("expect")), ("formula", Json::str(formula.clone()))]),
+                            Rule::Unique { columns } => Json::obj(vec![("rule", Json::str("unique")), ("columns", strs(columns))]),
+                            Rule::RowCount { min, max } => Json::obj(vec![
+                                ("rule", Json::str("rows")),
+                                ("min", min.map(|n| Json::Num(n as f64)).unwrap_or(Json::Null)),
+                                ("max", max.map(|n| Json::Num(n as f64)).unwrap_or(Json::Null)),
+                            ]),
+                        })
+                        .collect(),
+                ),
+            ),
+        ]),
         StepKind::Sql { sql } => Json::obj(vec![("type", Json::str("sql")), ("sql", Json::str(sql.clone()))]),
         StepKind::Python { code, timeout_ms } => Json::obj(vec![
             ("type", Json::str("python")),
             ("code", Json::str(code.clone())),
             ("timeout_ms", Json::Num(*timeout_ms as f64)),
         ]),
-        StepKind::Chart { mark, x, y, title } => Json::obj(vec![
-            ("type", Json::str("chart")),
-            ("mark", Json::str(mark.name())),
-            ("x", Json::str(x.clone())),
-            ("y", Json::str(y.clone())),
-            ("title", title.clone().map(Json::Str).unwrap_or(Json::Null)),
-        ]),
+        StepKind::Chart { mark, x, y, title, color, summary } => {
+            let mut pairs = vec![
+                ("type", Json::str("chart")),
+                ("mark", Json::str(mark.name())),
+                ("x", Json::str(x.clone())),
+                ("y", Json::str(y.clone())),
+                ("title", title.clone().map(Json::Str).unwrap_or(Json::Null)),
+            ];
+            // Written only when set, so charts saved before keep their keys.
+            if let Some(c) = color {
+                pairs.push(("color", Json::str(c.clone())));
+            }
+            if let Some(f) = summary {
+                pairs.push(("summary", Json::str(f.token())));
+            }
+            Json::obj(pairs)
+        }
     }
 }
 
@@ -256,6 +291,7 @@ pub fn step_kind_from_json(j: &Json) -> Result<StepKind, Error> {
                 .iter()
                 .map(|p| {
                     Ok(Predicate {
+                        param: p.get("param").and_then(Json::as_str).map(str::to_string),
                         column: p.req_str("column")?.to_string(),
                         op: CmpOp::from_token(p.req_str("op")?)
                             .ok_or_else(|| Error::Format("unknown operator".into()))?,
@@ -362,6 +398,22 @@ pub fn step_kind_from_json(j: &Json) -> Result<StepKind, Error> {
             name: j.req_str("name")?.to_string(),
             value: j.req_str("value")?.to_string(),
         },
+        "check" => StepKind::Check {
+            stop: j.get("stop") == Some(&Json::Bool(true)),
+            rules: j
+                .req_arr("rules")?
+                .iter()
+                .map(|r| {
+                    let n = |k: &str| r.get(k).and_then(Json::as_f64).map(|x| x as u64);
+                    Ok(match r.req_str("rule")? {
+                        "expect" => Rule::Expect { formula: r.req_str("formula")?.to_string() },
+                        "unique" => Rule::Unique { columns: read_strs(r, "columns")? },
+                        "rows" => Rule::RowCount { min: n("min"), max: n("max") },
+                        other => return Err(Error::Format(format!("unknown rule `{other}`"))),
+                    })
+                })
+                .collect::<Result<_, Error>>()?,
+        },
         "sql" => StepKind::Sql { sql: j.req_str("sql")?.to_string() },
         "python" => StepKind::Python {
             code: j.req_str("code")?.to_string(),
@@ -372,9 +424,40 @@ pub fn step_kind_from_json(j: &Json) -> Result<StepKind, Error> {
             x: j.req_str("x")?.to_string(),
             y: j.req_str("y")?.to_string(),
             title: opt_str("title"),
+            color: opt_str("color"),
+            summary: match opt_str("summary") {
+                Some(f) => Some(AggFunc::parse(&f).ok_or_else(|| Error::Format(format!("unknown summary `{f}`")))?),
+                None => None,
+            },
         },
         other => return Err(Error::Format(format!("unknown step type `{other}`"))),
     })
+}
+
+/// `[{"name": …, "value": …}, …]`, values as in step definitions.
+pub fn parameters_to_json(params: &[crate::params::Parameter]) -> Json {
+    Json::Arr(
+        params
+            .iter()
+            .map(|p| Json::obj(vec![("name", Json::str(p.name.clone())), ("value", value_to_json(&p.value))]))
+            .collect(),
+    )
+}
+
+pub fn parameters_from_json(j: &Json) -> Result<Vec<crate::params::Parameter>, Error> {
+    match j {
+        Json::Null => Ok(vec![]),
+        Json::Arr(items) => items
+            .iter()
+            .map(|p| {
+                Ok(crate::params::Parameter {
+                    name: p.req_str("name")?.to_string(),
+                    value: value_from_json(p.get("value").unwrap_or(&Json::Null))?,
+                })
+            })
+            .collect(),
+        _ => Err(Error::Format("parameters must be a list".into())),
+    }
 }
 
 pub fn analysis_to_json(a: &Analysis) -> Json {
@@ -416,6 +499,7 @@ pub fn analysis_to_json(a: &Analysis) -> Json {
                     .collect(),
             ),
         ),
+        ("parameters", parameters_to_json(&a.parameters)),
         (
             "cells",
             Json::Arr(
@@ -463,7 +547,9 @@ pub fn analysis_from_json(j: &Json) -> Result<Analysis, Error> {
             })
             .collect::<Result<_, Error>>()?
     };
+    let parameters = parameters_from_json(j.get("parameters").unwrap_or(&Json::Null))?;
     Ok(Analysis {
+        parameters,
         name: j.req_str("name")?.to_string(),
         sources,
         steps: j

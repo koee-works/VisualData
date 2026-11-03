@@ -283,6 +283,8 @@ pub struct Session {
     review: ReviewPolicy,
     /// Output of the step being executed, picked up by the run record.
     step_output: Option<String>,
+    /// Column details by dataset content hash.
+    details: HashMap<String, Vec<crate::profile::ColumnDetail>>,
 }
 
 impl Session {
@@ -308,6 +310,7 @@ impl Session {
             cancel: Arc::new(AtomicBool::new(false)),
             review: ReviewPolicy::default(),
             step_output: None,
+            details: HashMap::new(),
         })
     }
 
@@ -478,7 +481,7 @@ impl Session {
         let sources = self.source_fingerprints()?;
         let engine = self.engine.fingerprint();
         plan::plan(
-            &self.analysis,
+            &self.analysis.bound(),
             &Fingerprints { sources: &sources, engine: &engine, python: self.python_fp.as_deref() },
         )
     }
@@ -527,6 +530,13 @@ impl Session {
     pub fn source_profile(&mut self, id: &str) -> Result<Vec<ColumnProfile>, Error> {
         let ds = self.source_dataset(id)?;
         self.engine.profile(&ds)
+    }
+
+    /// The report of a check step's current result (or of its last run, if
+    /// it stopped there).
+    pub fn check_report(&self, step_id: &str) -> Option<crate::check::CheckReport> {
+        let key = self.plan().ok()?.keys.get(step_id)?.clone();
+        crate::check::CheckReport::from_json(&self.artifacts.load_check(&key)?).ok()
     }
 
     pub fn output(&self, step_id: &str) -> Option<&Output> {
@@ -600,6 +610,25 @@ impl Session {
     }
 
     /// Per-column profile of a dataset, from the engine.
+    /// The basic profile and the details of a source's or step's current
+    /// columns (computed once per content).
+    pub fn column_details(&mut self, id: &str) -> Result<(Vec<ColumnProfile>, Vec<crate::profile::ColumnDetail>), Error> {
+        let ds = self.dataset_of(id).ok_or_else(|| Error::Validation(format!("`{id}` has no table result yet; run the analysis")))?;
+        let profile = self.engine.profile(&ds)?;
+        if let Some(d) = self.details.get(&ds.content_hash) {
+            return Ok((profile, d.clone()));
+        }
+        let artifacts = &self.artifacts;
+        let mut n = 0;
+        let mut scratch = || {
+            n += 1;
+            artifacts.temp_path(&format!("details-{}-{n}", &ds.content_hash[..16.min(ds.content_hash.len())]))
+        };
+        let d = crate::profile::details(self.engine.as_mut(), &ds, &profile, &mut scratch)?;
+        self.details.insert(ds.content_hash.clone(), d.clone());
+        Ok((profile, d))
+    }
+
     pub fn profile_dataset(&mut self, ds: &Dataset) -> Result<Vec<ColumnProfile>, Error> {
         self.engine.profile(ds)
     }
@@ -632,7 +661,7 @@ impl Session {
                 schemas.insert(id, schema);
             }
         }
-        compile::pipeline_sql_with(&self.analysis, step_id, &|id| schemas.get(id).cloned())
+        compile::pipeline_sql_with(&self.analysis.bound(), step_id, &|id| schemas.get(id).cloned())
     }
 
     /// Run every step in dependency order, reusing results whose key is
@@ -739,7 +768,8 @@ impl Session {
 
     /// Execute one step and save its result under `key`.
     fn execute(&mut self, step_id: &str, key: &str) -> Result<Output, Error> {
-        let step = self.analysis.step(step_id).unwrap().clone();
+        let written = self.analysis.step(step_id).unwrap().clone();
+        let step = crate::params::bind_step(&written, &self.analysis.parameters);
         let inputs = step.inputs.iter().map(|i| self.input_dataset(i)).collect::<Result<Vec<_>, _>>()?;
         let input = inputs[0].clone();
         let tmp = self.artifacts.temp_path(key);
@@ -760,6 +790,22 @@ impl Session {
                     let ds = self.engine.run_step(&step, &inputs, &tmp)?;
                     Ok(Output::Table(self.artifacts.commit_table(key, ds)?))
                 }
+                StepKind::Check { stop, .. } => {
+                    let artifacts = &self.artifacts;
+                    let mut n = 0;
+                    let mut scratch = || {
+                        n += 1;
+                        artifacts.temp_path(&format!("{key}-check{n}"))
+                    };
+                    let report = crate::check::evaluate(self.engine.as_mut(), &step, &written, &input, &mut scratch)?;
+                    self.step_output = Some(report.text());
+                    self.artifacts.save_check(key, &report.to_json())?;
+                    if *stop && report.failed().next().is_some() {
+                        return Err(Error::Data(report.failure_summary()));
+                    }
+                    let ds = self.engine.run_step(&step, &inputs, &tmp)?;
+                    Ok(Output::Table(self.artifacts.commit_table(key, ds)?))
+                }
                 StepKind::Python { code, timeout_ms } => {
                     let runner = self.python.as_ref().ok_or_else(|| {
                         Error::Python("no Python interpreter is configured for this project".into())
@@ -773,17 +819,24 @@ impl Session {
                     let raw = self.artifacts.temp_path(key);
                     let named: Vec<(String, PathBuf)> =
                         step.inputs.iter().cloned().zip(inputs.iter().map(|d| d.path.clone())).collect();
-                    let run = runner.run_inputs(code, &named, &raw, Duration::from_millis(*timeout_ms), &self.cancel);
+                    let params = crate::params::python_json(&self.analysis.parameters);
+                    let run = runner.run_with_params(code, &named, &params, &raw, Duration::from_millis(*timeout_ms), &self.cancel);
                     self.step_output = Some(run.output);
                     let ran = run.result;
                     let adopted = ran.and_then(|_| self.engine.adopt_parquet(&raw, &tmp));
                     let _ = fs::remove_file(&raw);
                     Ok(Output::Table(self.artifacts.commit_table(key, adopted?)?))
                 }
-                StepKind::Chart { mark, x, y, title } => {
+                StepKind::Chart { .. } => {
                     compile::output_schema(&step, std::slice::from_ref(&input.schema))?;
-                    let data = self.engine.columns(&input, &[x, y], chart::MAX_CHART_ROWS as u64)?;
-                    let spec = chart::vega_lite(&data, input.rows, *mark, x, y, title.as_deref())?;
+                    let artifacts = &self.artifacts;
+                    let mut n = 0;
+                    let mut scratch = || {
+                        n += 1;
+                        artifacts.temp_path(&format!("{key}-chart{n}"))
+                    };
+                    let data = chart::data(self.engine.as_mut(), &step, &input, &mut scratch)?;
+                    let spec = chart::vega_lite(&step.kind, &data)?;
                     self.artifacts.save_chart(key, &spec)?;
                     Ok(Output::Chart(spec))
                 }

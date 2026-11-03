@@ -99,6 +99,8 @@ pub fn step_sql(kind: &StepKind) -> Option<String> {
             ))
         }
         StepKind::Sql { sql } => Some(sql.trim().trim_end_matches(';').to_string()),
+        // Rows pass through; the rules are evaluated separately (check.rs).
+        StepKind::Check { .. } => Some("SELECT * FROM input".into()),
         StepKind::Join { .. }
         | StepKind::Append { .. }
         | StepKind::Derive { .. }
@@ -649,6 +651,10 @@ fn join_plan(step: &Step, left: &Schema, right: &Schema) -> Result<JoinPlan, Err
     Ok(JoinPlan { right_columns, schema: Schema { fields } })
 }
 
+pub(crate) fn require_column<'a>(schema: &'a Schema, col: &str, step: &str) -> Result<&'a Field, Error> {
+    require(schema, col, step)
+}
+
 fn require<'a>(schema: &'a Schema, col: &str, step: &str) -> Result<&'a Field, Error> {
     schema.field(col).ok_or_else(|| {
         let available: Vec<&str> = schema.fields.iter().map(|f| f.name.as_str()).collect();
@@ -767,14 +773,53 @@ pub fn output_schema(step: &Step, inputs: &[Schema]) -> Result<Option<Schema>, E
             Ok(Some(input.clone()))
         }
         StepKind::Unpivot { .. } => Ok(Some(unpivot_schema(step, input)?)),
+        StepKind::Check { rules, .. } => {
+            if rules.is_empty() {
+                return Err(Error::Validation(format!("step `{id}`: add a rule to check")));
+            }
+            for (i, r) in rules.iter().enumerate() {
+                let n = i + 1;
+                match r {
+                    crate::model::Rule::Expect { formula } => {
+                        let t = crate::formula::parse(formula)
+                            .and_then(|e| crate::formula::result_type(&e, input))
+                            .map_err(|m| Error::Validation(format!("step `{id}`: rule {n}: {m}")))?;
+                        if t != DataType::Bool {
+                            return Err(Error::Validation(format!(
+                                "step `{id}`: rule {n} must be true or false for each row (like `units > 0`), but gives {}",
+                                t.plain()
+                            )));
+                        }
+                    }
+                    crate::model::Rule::Unique { columns } => {
+                        if columns.is_empty() {
+                            return Err(Error::Validation(format!("step `{id}`: rule {n}: choose the columns that should not repeat")));
+                        }
+                        for c in columns {
+                            require(input, c, id)?;
+                        }
+                    }
+                    crate::model::Rule::RowCount { min, max } => {
+                        if min.is_none() && max.is_none() {
+                            return Err(Error::Validation(format!("step `{id}`: rule {n}: set a smallest or largest number of rows")));
+                        }
+                        if let (Some(a), Some(b)) = (min, max) {
+                            if a > b {
+                                return Err(Error::Validation(format!("step `{id}`: rule {n}: at least {a} and at most {b} rows cannot both hold")));
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(Some(input.clone()))
+        }
         // The new columns are the values found when it runs.
         StepKind::Pivot { .. } => {
             pivot_check(step, input)?;
             Ok(None)
         }
-        StepKind::Chart { x, y, .. } => {
-            require(input, x, id)?;
-            require(input, y, id)?;
+        StepKind::Chart { .. } => {
+            crate::chart::validate(step, input)?;
             Ok(None)
         }
         StepKind::Sql { .. } | StepKind::Python { .. } => Ok(None),
@@ -922,8 +967,8 @@ mod tests {
     fn filter_sql_quotes_identifiers_and_literals() {
         let k = StepKind::Filter {
             predicates: vec![
-                Predicate { column: "re\"gion".into(), op: CmpOp::Eq, value: Value::Text("O'Hare".into()) },
-                Predicate { column: "units".into(), op: CmpOp::IsNotNull, value: Value::Null },
+                Predicate { param: None, column: "re\"gion".into(), op: CmpOp::Eq, value: Value::Text("O'Hare".into()) },
+                Predicate { param: None, column: "units".into(), op: CmpOp::IsNotNull, value: Value::Null },
             ],
         };
         assert_eq!(
@@ -950,17 +995,17 @@ mod tests {
     #[test]
     fn validation_catches_bad_columns_and_types() {
         let bad_col = step(StepKind::Filter {
-            predicates: vec![Predicate { column: "nope".into(), op: CmpOp::Eq, value: Value::Int(1) }],
+            predicates: vec![Predicate { param: None, column: "nope".into(), op: CmpOp::Eq, value: Value::Int(1) }],
         });
         assert!(matches!(output_schema(&bad_col, &[schema()]), Err(Error::Validation(_))));
 
         let bad_type = step(StepKind::Filter {
-            predicates: vec![Predicate { column: "region".into(), op: CmpOp::Gt, value: Value::Int(1) }],
+            predicates: vec![Predicate { param: None, column: "region".into(), op: CmpOp::Gt, value: Value::Int(1) }],
         });
         assert!(output_schema(&bad_type, &[schema()]).is_err());
 
         let eq_null = step(StepKind::Filter {
-            predicates: vec![Predicate { column: "units".into(), op: CmpOp::Eq, value: Value::Null }],
+            predicates: vec![Predicate { param: None, column: "units".into(), op: CmpOp::Eq, value: Value::Null }],
         });
         let msg = output_schema(&eq_null, &[schema()]).unwrap_err().to_string();
         assert!(msg.contains("IS NULL"), "{msg}");

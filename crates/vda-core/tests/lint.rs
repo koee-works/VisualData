@@ -25,6 +25,7 @@ fn step(id: &str, inputs: &[&str], kind: StepKind) -> Step {
 
 fn session(dir: &Path, steps: Vec<Step>) -> Session {
     let a = Analysis {
+        parameters: vec![],
         name: "lint".into(),
         sources: vec![Source::primary("sales.csv"), Source::new("regions", "regions.csv")],
         cells: steps.iter().map(|s| Cell::Step { step_id: s.id.clone() }).collect(),
@@ -117,10 +118,10 @@ fn the_last_run_explains_surprising_results() {
             step(
                 "none",
                 &["source"],
-                StepKind::Filter { predicates: vec![Predicate { column: "units".into(), op: CmpOp::Gt, value: vda_core::table::Value::Int(1000) }] },
+                StepKind::Filter { predicates: vec![Predicate { param: None, column: "units".into(), op: CmpOp::Gt, value: vda_core::table::Value::Int(1000) }] },
             ),
             step("ratio", &["source"], derive("per_unit", "revenue / (units - units)")),
-            step("bars", &["source"], StepKind::Chart { mark: Mark::Bar, x: "order_id".into(), y: "revenue".into(), title: None }),
+            step("bars", &["source"], StepKind::Chart { mark: Mark::Bar, x: "order_id".into(), y: "revenue".into(), title: None, color: None, summary: None }),
             step("withmissing", &["regions"], derive("product", "if(region = \"North\", format(1 / 0, 0), \"p\")")),
             step("wide", &["withmissing"], StepKind::Pivot { rows: vec![], column: "product".into(), value: None, func: AggFunc::Count }),
             step(

@@ -171,6 +171,12 @@ pub fn plan(a: &Analysis, fp: &Fingerprints) -> Result<Plan, Error> {
         }
         if let StepKind::Python { .. } = step.kind {
             h.update(fp.python.unwrap_or("python:unavailable").as_bytes());
+            // Python can read any parameter. Without parameters the key is
+            // unchanged, so older projects keep their saved results.
+            if !a.parameters.is_empty() {
+                h.update(b"\nparams:");
+                h.update(crate::params::python_json(&a.parameters).as_bytes());
+            }
         }
         keys.insert(id.clone(), h.hex_digest());
     }

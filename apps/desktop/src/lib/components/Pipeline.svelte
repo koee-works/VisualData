@@ -19,11 +19,13 @@
     CopyMinus,
     Table2,
     ListTree,
+    ShieldCheck,
   } from "@lucide/svelte";
   import type { Workspace } from "../workspace.svelte";
   import type { StepOp, StepView } from "../api/types";
   import { formatCount, stepTitle } from "../format";
   import StateMark from "./StateMark.svelte";
+  import ParametersPanel from "./ParametersPanel.svelte";
 
   let { ws }: { ws: Workspace } = $props();
 
@@ -39,6 +41,7 @@
     dedupe: CopyMinus,
     pivot: Table2,
     unpivot: ListTree,
+    check: ShieldCheck,
     sql: Braces,
     python: Code,
     chart: ChartColumn,
@@ -114,7 +117,18 @@
       case "python":
         return { type, code: "# `df` is the input as a pandas DataFrame.\nresult = df", timeout_ms: 60000 };
       case "chart":
-        return { type, mark: "bar", x: text, y: numeric, title: null };
+        return { type, mark: "bar", x: text, y: numeric, title: null, color: null, summary: "SUM" };
+      case "check": {
+        const key = cols.find((c) => /(^|_)id$/i.test(c.name))?.name ?? first;
+        return {
+          type,
+          stop: false,
+          rules: [
+            { rule: "expect", formula: numeric ? `${ref(numeric)} is not missing` : "true" },
+            { rule: "unique", columns: key ? [key] : [] },
+          ],
+        };
+      }
     }
   }
 
@@ -130,6 +144,7 @@
     { type: "unpivot", name: "Unpivot: columns to rows", hint: "Visual" },
     { type: "join", name: "Join with another table", hint: "Visual" },
     { type: "append", name: "Append another table's rows", hint: "Visual" },
+    { type: "check", name: "Check data quality", hint: "Visual" },
     { type: "chart", name: "Chart", hint: "Visual" },
     { type: "sql", name: "SQL", hint: "Code" },
     { type: "python", name: "Python", hint: "Code" },
@@ -251,6 +266,7 @@
     <button class="btn btn-quiet mt-1 w-full justify-start !px-2" disabled={ws.running} onclick={() => ws.addSource()}>
       <FilePlus2 size={15} /> Add source
     </button>
+    <ParametersPanel {ws} />
   </div>
 </nav>
 

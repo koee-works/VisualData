@@ -6,6 +6,7 @@
   import DataGrid from "./DataGrid.svelte";
   import ProfileTable from "./ProfileTable.svelte";
   import ChartView from "./ChartView.svelte";
+  import type { ColumnDetail } from "../api/types";
 
   let { ws }: { ws: Workspace } = $props();
 
@@ -31,6 +32,19 @@
     ws.backend.chart(id).then(
       (s) => ((chartSpec = s), (chartError = null)),
       (e) => ((chartSpec = null), (chartError = errorMessage(e))),
+    );
+  });
+
+  // Column details are computed when the Columns tab is first opened.
+  let details = $state<ColumnDetail[] | null>(null);
+  $effect(() => {
+    void ws.revision;
+    const id = ws.selected;
+    details = null;
+    if (tab !== "columns" || isSource || !step || step.rows === null) return;
+    ws.backend.columnDetails(id).then(
+      (d) => id === ws.selected && (details = d),
+      () => {},
     );
   });
 
@@ -114,7 +128,7 @@
           <DataGrid {fetchPage} {resetKey} />
         </Tabs.Content>
         <Tabs.Content value="columns" class="min-h-0 flex-1 overflow-auto">
-          <ProfileTable profile={null} columns={step?.columns ?? []} />
+          <ProfileTable details={details} columns={step?.columns ?? []} loading={details === null && tab === "columns"} />
         </Tabs.Content>
       {:else}
         <Tabs.Content value="chart" class="min-h-0 flex-1 overflow-auto">

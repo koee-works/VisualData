@@ -29,7 +29,7 @@ fn project(name: &str, rows: usize) -> PathBuf {
 }
 
 fn analysis(steps: Vec<Step>) -> Analysis {
-    Analysis { name: "orders".into(), sources: vec![Source::primary("orders.csv")], steps, cells: vec![] }
+    Analysis { parameters: vec![], name: "orders".into(), sources: vec![Source::primary("orders.csv")], steps, cells: vec![] }
 }
 
 fn step(id: &str, input: &str, kind: StepKind) -> Step {
@@ -111,7 +111,7 @@ fn chart_over_a_large_result_is_labelled_partial() {
     let chart = step(
         "scatter",
         SOURCE_ID,
-        StepKind::Chart { mark: Mark::Point, x: "order_id".into(), y: "amount".into(), title: Some("Amounts".into()) },
+        StepKind::Chart { mark: Mark::Point, x: "order_id".into(), y: "amount".into(), title: Some("Amounts".into()), color: None, summary: None },
     );
     let mut s = session(&dir, vec![chart], EngineOptions::default());
     assert!(s.run_all().unwrap().succeeded());

@@ -11,6 +11,7 @@ result = result.sort_values("revenue", ascending=False).reset_index(drop=True)
 
 pub fn regional_revenue(source_path: &str) -> Analysis {
     Analysis {
+        parameters: vec![],
         name: "Regional revenue".into(),
         sources: vec![Source::primary(source_path)],
         steps: vec![
@@ -20,8 +21,8 @@ pub fn regional_revenue(source_path: &str) -> Analysis {
                 label: Some("Orders with a region and revenue of at least 20".into()),
                 kind: StepKind::Filter {
                     predicates: vec![
-                        Predicate { column: "region".into(), op: CmpOp::IsNotNull, value: Value::Null },
-                        Predicate { column: "revenue".into(), op: CmpOp::Ge, value: Value::Int(20) },
+                        Predicate { param: None, column: "region".into(), op: CmpOp::IsNotNull, value: Value::Null },
+                        Predicate { param: None, column: "revenue".into(), op: CmpOp::Ge, value: Value::Int(20) },
                     ],
                 },
             },
@@ -53,6 +54,8 @@ pub fn regional_revenue(source_path: &str) -> Analysis {
                     x: "region".into(),
                     y: "revenue_share".into(),
                     title: Some("Share of revenue by region".into()),
+                    color: None,
+                    summary: None,
                 },
             },
         ],

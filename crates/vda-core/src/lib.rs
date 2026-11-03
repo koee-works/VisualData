@@ -4,6 +4,7 @@
 
 pub mod artifacts;
 pub mod chart;
+pub mod check;
 pub mod compile;
 pub mod csv;
 pub mod dataset;
@@ -15,10 +16,13 @@ pub mod export;
 pub mod formula;
 pub mod hash;
 pub mod json;
+pub mod jupyter;
 pub mod lint;
 pub mod model;
 pub mod notebook;
+pub mod params;
 pub mod persist;
+pub mod profile;
 pub mod plan;
 pub mod python;
 pub mod reference;

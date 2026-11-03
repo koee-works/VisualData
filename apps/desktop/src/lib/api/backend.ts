@@ -12,6 +12,9 @@ import type {
   RunView,
   StepEvent,
   StepOp,
+  CheckReport,
+  ColumnDetail,
+  Parameter,
 } from "./types";
 
 export interface RunHandlers {
@@ -63,6 +66,20 @@ export interface Backend {
   runLog(limit: number): Promise<RunView[]>;
   /** Export a source or a current step result; the format follows the extension. */
   exportResult(id: string, path: string): Promise<number>;
+  /** Replace the parameters (added, removed, new values). */
+  setParameters(params: Parameter[]): Promise<AnalysisView>;
+  /** Rename a parameter where formulas, SQL and filters use it; returns Python steps still naming it. */
+  renameParameter(old: string, name: string): Promise<[AnalysisView, string[]]>;
+  /** The last report of a check step. */
+  checkReport(stepId: string): Promise<CheckReport | null>;
+  /** Columns of a source or step result with averages, spread, common values. */
+  columnDetails(id: string): Promise<ColumnDetail[]>;
+  /** Write a Jupyter notebook that reproduces the analysis. */
+  exportNotebook(path: string): Promise<void>;
+  /** Write an HTML report of the notebook. */
+  saveReport(path: string, html: string): Promise<void>;
+  /** Ask where to save a report or notebook. */
+  pickDocumentPath(defaultName: string, kind: "html" | "ipynb"): Promise<string | null>;
 }
 
 /** Errors from the backend carry a user-facing message. */

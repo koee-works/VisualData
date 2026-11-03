@@ -146,6 +146,13 @@ fn tokenize(src: &str) -> Result<Vec<(Tok, usize)>, String> {
                 .ok_or_else(|| format!("column name starting at character {at} has no closing ]"))?;
             out.push((Tok::Quoted(chars[i + 1..i + 1 + end].iter().collect()), at));
             i += end + 2;
+        } else if c == '@' {
+            let name: String = chars[i + 1..].iter().take_while(|ch| ch.is_ascii_alphanumeric() || **ch == '_').collect();
+            return Err(if name.is_empty() {
+                format!("`@` at character {at} starts a parameter name, like @start_date")
+            } else {
+                format!("there is no parameter `@{name}` (at character {at}); add it under Parameters")
+            });
         } else if c.is_alphabetic() || c == '_' {
             let start = i;
             while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {

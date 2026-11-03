@@ -163,6 +163,36 @@ async fn rename(s: State<'_, Shared>, name: String) -> Res<AnalysisView> {
 }
 
 #[tauri::command]
+async fn set_parameters(s: State<'_, Shared>, params: Value) -> Res<AnalysisView> {
+    with(&s, |a| a.set_parameters(&params))
+}
+
+#[tauri::command]
+async fn rename_parameter(s: State<'_, Shared>, old: String, new: String) -> Res<(AnalysisView, Vec<String>)> {
+    with(&s, |a| a.rename_parameter(&old, &new))
+}
+
+#[tauri::command]
+async fn column_details(s: State<'_, Shared>, id: String) -> Res<Value> {
+    with(&s, |a| a.column_details(&id))
+}
+
+#[tauri::command]
+async fn export_notebook(s: State<'_, Shared>, path: PathBuf) -> Res<()> {
+    with(&s, |a| a.export_notebook(&path))
+}
+
+#[tauri::command]
+async fn save_report(s: State<'_, Shared>, path: PathBuf, html: String) -> Res<()> {
+    with(&s, |a| a.save_report(&path, &html))
+}
+
+#[tauri::command]
+async fn check_report(s: State<'_, Shared>, step_id: String) -> Res<Option<Value>> {
+    with(&s, |a| a.check_report(&step_id))
+}
+
+#[tauri::command]
 async fn run(window: tauri::Window, s: State<'_, Shared>) -> Res<RunSummary> {
     let flag = with(&s, |a| a.cancel_handle())?;
     *s.cancel.lock().unwrap() = Some(flag);
@@ -185,6 +215,17 @@ async fn cancel(s: State<'_, Shared>) -> Res<()> {
         flag.store(true, Ordering::SeqCst);
     }
     Ok(())
+}
+
+/// With `VDA_SAVE_DIR` set, saving a notebook writes into that folder under
+/// its suggested name instead of asking; for scripted use and the end-to-end
+/// tests, where file dialogs cannot be answered.
+#[tauri::command]
+fn preset_save_path(name: String) -> Option<PathBuf> {
+    let dir = std::env::var_os("VDA_SAVE_DIR").filter(|d| !d.is_empty())?;
+    // Only the file name: a suggested name cannot point outside the folder.
+    let file = std::path::Path::new(&name).file_name()?;
+    Some(PathBuf::from(dir).join(file))
 }
 
 /// `--open <dir>` (or `VDA_OPEN`) opens a project at startup; used by the
@@ -233,6 +274,13 @@ fn main() {
             remove_step,
             set_cells,
             rename,
+            set_parameters,
+            rename_parameter,
+            check_report,
+            column_details,
+            export_notebook,
+            save_report,
+            preset_save_path,
             run,
             cancel
         ])

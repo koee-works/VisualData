@@ -47,7 +47,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install Python step dependencies
-        run: python -m pip install pandas pyarrow
+        run: python -m pip install pandas pyarrow duckdb  # duckdb: the exported Jupyter notebook is run in tests
 
       # The desktop crate needs WebKitGTK; it is built and tested in the
       # desktop job below.
@@ -85,7 +85,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - run: python -m pip install pandas pyarrow
+      - run: python -m pip install pandas pyarrow duckdb  # duckdb: the exported Jupyter notebook is run in tests
       - uses: actions/setup-node@v4
         with:
           node-version: 22

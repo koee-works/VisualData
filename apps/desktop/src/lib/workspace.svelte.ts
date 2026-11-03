@@ -2,7 +2,7 @@
 // The backend is the source of truth; every edit returns a fresh view.
 
 import { errorMessage, type Backend } from "./api/backend";
-import type { AnalysisView, Column, NotebookCell, Problem, Problems, SourceView, StepEvent, StepOp, StepView } from "./api/types";
+import type { AnalysisView, Column, NotebookCell, Problem, Problems, SourceView, StepEvent, StepOp, StepView, Parameter } from "./api/types";
 import { SOURCE_ID } from "./api/types";
 import { stepTitle } from "./format";
 
@@ -152,6 +152,37 @@ export class Workspace {
     if (!path) return;
     const rows = await this.act("Export", () => this.backend.exportResult(id, path));
     if (rows !== undefined) this.notice = `Exported ${rows.toLocaleString("en-US")} row${rows === 1 ? "" : "s"} to ${path}`;
+  }
+
+  /** Replace the parameters; steps using a changed one become outdated. */
+  async setParameters(params: Parameter[]) {
+    const v = await this.act("Save parameters", () => this.backend.setParameters(params));
+    this.apply(v);
+    return v !== undefined;
+  }
+
+  async renameParameter(old: string, name: string) {
+    const r = await this.act("Rename parameter", () => this.backend.renameParameter(old, name));
+    if (!r) return false;
+    this.apply(r[0]);
+    if (r[1].length)
+      this.notice = `Renamed @${old} to @${name}. Python code is not changed: edit params["${old}"] in ${r[1].map((id) => this.nameOf(id)).join(", ")}.`;
+    return true;
+  }
+
+  /** Save the notebook as an HTML report or a Jupyter notebook. */
+  async exportNotebook(kind: "html" | "ipynb") {
+    const base = (this.view?.name || "notebook").replace(/[\\/:*?"<>|]+/g, "-");
+    const path = await this.backend.pickDocumentPath(`${base}.${kind}`, kind);
+    if (!path) return;
+    const ok = await this.act(kind === "html" ? "Save report" : "Export notebook", async () => {
+      if (kind === "html") {
+        const { buildReport } = await import("./report");
+        await this.backend.saveReport(path, await buildReport(this));
+      } else await this.backend.exportNotebook(path);
+      return true;
+    });
+    if (ok) this.notice = kind === "html" ? `Saved the report to ${path}` : `Saved a Jupyter notebook that reproduces the analysis to ${path}`;
   }
 
   /** "Trust all in this session": run all Python without review until the app quits. */

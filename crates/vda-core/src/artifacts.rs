@@ -27,6 +27,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 const TABLE_EXT: &str = ".parquet";
 const META_EXT: &str = ".meta.json";
 const CHART_EXT: &str = ".vl.json";
+const CHECK_EXT: &str = ".check.json";
 
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -96,6 +97,18 @@ impl ArtifactStore {
         Ok(())
     }
 
+    /// A check step's report, saved beside its result.
+    pub fn save_check(&self, key: &str, report: &Json) -> Result<(), Error> {
+        let tmp = self.dir.join(format!(".{key}{CHECK_EXT}.tmp"));
+        fs::write(&tmp, report.to_string_pretty())?;
+        fs::rename(tmp, self.dir.join(format!("{key}{CHECK_EXT}")))?;
+        Ok(())
+    }
+
+    pub fn load_check(&self, key: &str) -> Option<Json> {
+        Json::parse(&fs::read_to_string(self.dir.join(format!("{key}{CHECK_EXT}"))).ok()?).ok()
+    }
+
     /// The saved result for `key`, or `None` if absent or not intact.
     /// Never reads the data itself: metadata, file size and the Parquet
     /// footer magic are checked instead.
@@ -125,11 +138,12 @@ impl ArtifactStore {
             let key = name
                 .strip_suffix(META_EXT)
                 .or_else(|| name.strip_suffix(CHART_EXT))
+                .or_else(|| name.strip_suffix(CHECK_EXT))
                 .or_else(|| name.strip_suffix(TABLE_EXT));
             if let Some(k) = key {
                 if !keep.contains(k) {
                     fs::remove_file(&path)?;
-                    if !name.ends_with(META_EXT) {
+                    if !name.ends_with(META_EXT) && !name.ends_with(CHECK_EXT) {
                         removed += 1;
                     }
                 }

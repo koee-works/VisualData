@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { ArrowUp, ArrowDown, Plus, X } from "@lucide/svelte";
+  import { ArrowUp, ArrowDown, Plus, X, Download } from "@lucide/svelte";
+  import { DropdownMenu } from "bits-ui";
   import type { Workspace } from "../workspace.svelte";
   import type { NotebookCell, Page } from "../api/types";
   import { formatCell, formatCount, stepTitle } from "../format";
@@ -56,7 +57,31 @@
 </script>
 
 <article class="mx-auto max-w-[46rem] px-6 py-6" aria-label="Notebook">
-  <h1 class="mb-1 text-xl font-bold">{ws.view?.name}</h1>
+  <div class="mb-1 flex items-start gap-3">
+    <h1 class="flex-1 text-xl font-bold">{ws.view?.name}</h1>
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger class="btn btn-quiet !min-h-8 !px-2" disabled={ws.running}>
+        <Download size={14} /> Export
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          class="z-50 min-w-64 rounded-md border border-rule-strong bg-panel p-1 shadow-[0_6px_24px_rgba(29,42,63,0.14)]"
+          align="end"
+          sideOffset={4}
+        >
+          {#each [["html", "Report", "A web page to share or print"], ["ipynb", "Jupyter notebook", "Reruns the analysis in Python"]] as [kind, name, hint] (kind)}
+            <DropdownMenu.Item
+              class="flex cursor-pointer flex-col rounded px-2 py-1.5 outline-none data-[highlighted]:bg-select"
+              onSelect={() => ws.exportNotebook(kind as "html" | "ipynb")}
+            >
+              <span>{name}</span>
+              <span class="text-xs text-ink-faint">{hint}</span>
+            </DropdownMenu.Item>
+          {/each}
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  </div>
   <p class="mb-6 text-sm text-ink-soft">
     Notebook order is for reading. Steps still run in pipeline order, whatever their place here.
   </p>

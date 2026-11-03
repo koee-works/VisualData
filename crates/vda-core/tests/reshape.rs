@@ -270,6 +270,7 @@ fn inspectable_sql_of_reshaping_steps_executes_to_the_same_result() {
     let src = write(DATA);
     let step = |id: &str, input: &str, kind: StepKind| Step { id: id.into(), inputs: vec![input.into()], label: None, kind };
     let a = Analysis {
+        parameters: vec![],
         name: "reshape".into(),
         sources: vec![Source::primary(src.to_string_lossy())],
         steps: vec![
@@ -307,6 +308,7 @@ fn inspectable_sql_of_reshaping_steps_executes_to_the_same_result() {
 #[test]
 fn reshaping_steps_round_trip_through_the_project_file() {
     let a = Analysis {
+        parameters: vec![],
         name: "rt".into(),
         sources: vec![Source::primary("data.csv")],
         steps: vec![

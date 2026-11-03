@@ -13,6 +13,8 @@ import type {
   RunView,
   StepEvent,
   StepOp,
+  CheckReport,
+  ColumnDetail,
 } from "./types";
 
 /** Commands registered in apps/desktop/src-tauri/src/main.rs. */
@@ -77,6 +79,21 @@ export const tauriBackend: Backend = {
   dismiss: (step, code, dismissed) => invoke<Problems>("dismiss", { step, code, dismissed }),
   restoreDismissed: () => invoke<Problems>("restore_dismissed"),
   runLog: (limit) => invoke<RunView[]>("run_log", { limit }),
+  setParameters: (params) => invoke<AnalysisView>("set_parameters", { params }),
+  renameParameter: (old, name) => invoke<[AnalysisView, string[]]>("rename_parameter", { old, new: name }),
+  checkReport: (stepId) => invoke<CheckReport | null>("check_report", { stepId }),
+  columnDetails: (id) => invoke<ColumnDetail[]>("column_details", { id }),
+  exportNotebook: (path) => invoke<void>("export_notebook", { path }),
+  saveReport: (path, html) => invoke<void>("save_report", { path, html }),
+  async pickDocumentPath(defaultName, kind) {
+    const preset = await invoke<string | null>("preset_save_path", { name: defaultName });
+    if (preset) return preset;
+    const p = await save({
+      defaultPath: defaultName,
+      filters: [kind === "html" ? { name: "Web page", extensions: ["html"] } : { name: "Jupyter notebook", extensions: ["ipynb"] }],
+    });
+    return typeof p === "string" ? p : null;
+  },
   async pickFolder() {
     const p = await open({ multiple: false, directory: true });
     return typeof p === "string" ? p : null;

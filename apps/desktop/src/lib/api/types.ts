@@ -65,12 +65,14 @@ export type AggFunc =
   | "STDDEV"
   /** The p-th percentile, P1 to P99. */
   | `P${number}`;
-export type Mark = "bar" | "line" | "point";
+export type Mark = "bar" | "line" | "point" | "area" | "histogram" | "boxplot";
 
 export interface Predicate {
   column: string;
   op: CmpOp;
   value: Literal;
+  /** Compare with this parameter's value instead of `value`. */
+  param?: string | null;
 }
 
 export interface Measure {
@@ -116,9 +118,68 @@ export type StepOp =
   | { type: "dedupe"; keys: string[]; order_by: SortKey[] }
   | { type: "pivot"; rows: string[]; column: string; value: string | null; func: AggFunc }
   | { type: "unpivot"; columns: string[]; name: string; value: string }
+  | { type: "check"; stop: boolean; rules: Rule[] }
   | { type: "sql"; sql: string }
   | { type: "python"; code: string; timeout_ms: number }
-  | { type: "chart"; mark: Mark; x: string; y: string; title: string | null };
+  | {
+      type: "chart";
+      mark: Mark;
+      x: string;
+      y: string;
+      title: string | null;
+      /** One color per value of this column (bars stack). */
+      color?: string | null;
+      /** One value per x (and color), computed over every row. */
+      summary?: AggFunc | null;
+    };
+
+export type Rule =
+  | { rule: "expect"; formula: string }
+  | { rule: "unique"; columns: string[] }
+  | { rule: "rows"; min: number | null; max: number | null };
+
+export interface RuleResult {
+  rule: number;
+  passed: boolean;
+  failing: number;
+  message: string;
+  columns: string[];
+  examples: string[][];
+}
+
+export interface CheckReport {
+  rows: number;
+  results: RuleResult[];
+}
+
+export interface Parameter {
+  name: string;
+  value: Literal;
+}
+
+/** A column's basic profile with its details (numbers null where they do not apply). */
+export interface ColumnDetail {
+  name: string;
+  type: ColumnType;
+  rows: number;
+  missing: number;
+  distinct: number;
+  min: string | null;
+  max: string | null;
+  mean: number | null;
+  stddev: number | null;
+  q1: number | null;
+  median: number | null;
+  q3: number | null;
+  zeros: number | null;
+  negatives: number | null;
+  blank: number | null;
+  min_length: number | null;
+  max_length: number | null;
+  top: { value: string; count: number }[];
+  /** Ten equal-width bars from min to max (numbers only). */
+  histogram: number[];
+}
 
 export type StepMode = "visual" | "sql" | "python" | "chart";
 export type StepStateLabel = "fresh" | "stale" | "not run" | "failed" | "cancelled" | "blocked" | "needs review" | "waiting on review";
@@ -152,6 +213,7 @@ export interface AnalysisView {
   review: ReviewItem[];
   /** Python runs without review until the app quits (never saved). */
   trust_all: boolean;
+  parameters: Parameter[];
 }
 
 /** Code the user is asked to read before it runs. */

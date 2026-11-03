@@ -1,18 +1,18 @@
 <script lang="ts">
   import type { Workspace } from "../workspace.svelte";
   import { Trash2 } from "@lucide/svelte";
-  import type { ProfileRow, SourceView } from "../api/types";
+  import type { ColumnDetail, SourceView } from "../api/types";
   import { formatCount } from "../format";
   import ProfileTable from "./ProfileTable.svelte";
 
   let { ws, source }: { ws: Workspace; source: SourceView } = $props();
 
-  let profile = $state<ProfileRow[] | null>(null);
+  let profile = $state<ColumnDetail[] | null>(null);
   $effect(() => {
     void ws.revision;
     const id = source.id;
     profile = null;
-    ws.backend.sourceProfile(id).then(
+    ws.backend.columnDetails(id).then(
       (p) => id === source.id && (profile = p),
       () => (profile = null),
     );
@@ -97,6 +97,6 @@
     {/if}
   </header>
   <div class="flex-1 overflow-auto">
-    <ProfileTable {profile} columns={source.columns} />
+    <ProfileTable details={profile} columns={source.columns} loading={profile === null} />
   </div>
 </section>

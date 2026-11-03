@@ -45,6 +45,7 @@ pub fn eval_step(step: &Step, inputs: &[Table]) -> Result<Table, Error> {
         StepKind::Window { partition_by, order_by, columns } => window(input, partition_by, order_by, columns, &schema)?,
         StepKind::Dedupe { keys, order_by } => dedupe(input, keys, order_by),
         StepKind::Unpivot { columns, .. } => unpivot(input, columns, &schema),
+        StepKind::Check { .. } => input.rows.clone(),
         _ => unreachable!("output_schema returned Some for a non-table step"),
     };
     Ok(Table { schema, rows })
@@ -546,12 +547,12 @@ mod tests {
     #[test]
     fn filter_excludes_nulls_from_comparisons() {
         let s = step(StepKind::Filter {
-            predicates: vec![Predicate { column: "amount".into(), op: CmpOp::Gt, value: Value::Int(5) }],
+            predicates: vec![Predicate { param: None, column: "amount".into(), op: CmpOp::Gt, value: Value::Int(5) }],
         });
         let out = eval_step(&s, &[data()]).unwrap();
         assert_eq!(out.rows.len(), 2); // 10.5 and 7; NULL amount excluded
         let ne = step(StepKind::Filter {
-            predicates: vec![Predicate { column: "region".into(), op: CmpOp::Ne, value: Value::Text("East".into()) }],
+            predicates: vec![Predicate { param: None, column: "region".into(), op: CmpOp::Ne, value: Value::Text("East".into()) }],
         });
         assert_eq!(eval_step(&ne, &[data()]).unwrap().rows.len(), 2); // NULL region excluded
     }

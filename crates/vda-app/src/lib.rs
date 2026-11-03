@@ -158,6 +158,8 @@ pub struct AnalysisView {
     pub review: Vec<ReviewItem>,
     /// Python runs without review until the app quits (never saved).
     pub trust_all: bool,
+    /// `[{"name", "value"}]`, values as in filter steps.
+    pub parameters: J,
 }
 
 /// Code the user is asked to read before it runs.
@@ -254,6 +256,15 @@ pub struct RunSummary {
     pub run_id: String,
     pub succeeded: bool,
     pub steps: Vec<StepEvent>,
+}
+
+/// Write through a temporary file, so a failed write leaves no half file.
+fn write_file(path: &Path, text: &str) -> Result<()> {
+    let tmp = path.with_extension("vda-tmp");
+    std::fs::write(&tmp, text).and_then(|_| std::fs::rename(&tmp, path)).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        AppError::from(format!("cannot write {}: {e}", path.display()).as_str())
+    })
 }
 
 fn to_serde(j: &Json) -> J {
@@ -400,6 +411,7 @@ impl App {
         std::fs::create_dir_all(dir)?;
         std::fs::copy(csv, dir.join(&source.path))?;
         let analysis = Analysis {
+        parameters: vec![],
             name: name.into(),
             sources: vec![source],
             steps: vec![],
@@ -484,7 +496,51 @@ impl App {
                 })
                 .collect(),
             trust_all,
+            parameters: to_serde(&persist::parameters_to_json(&a.parameters)),
         })
+    }
+
+    /// Replace the analysis parameters (added, removed or given new values).
+    pub fn set_parameters(&mut self, params: &J) -> Result<AnalysisView> {
+        let params = persist::parameters_from_json(&from_serde(params)?)?;
+        vda_core::params::validate(&params)?;
+        let mut a = self.session()?.analysis.clone();
+        a.parameters = params;
+        self.commit(a)
+    }
+
+    /// Rename a parameter and every formula, SQL query and filter using it.
+    /// Returns the view and the Python steps whose code still names it.
+    pub fn rename_parameter(&mut self, old: &str, new: &str) -> Result<(AnalysisView, Vec<String>)> {
+        let mut a = self.session()?.analysis.clone();
+        let python = vda_core::params::rename(&mut a, old, new)?;
+        Ok((self.commit(a)?, python))
+    }
+
+    /// Every column of a source or a step's result, with averages, spread,
+    /// common values and a distribution (computed once per result).
+    pub fn column_details(&mut self, id: &str) -> Result<J> {
+        let (profile, details) = self.session()?.column_details(id)?;
+        Ok(to_serde(&vda_core::profile::to_json(&profile, &details)))
+    }
+
+    /// Write a Jupyter notebook that reproduces the analysis with DuckDB and pandas.
+    pub fn export_notebook(&mut self, path: &Path) -> Result<()> {
+        let nb = vda_core::jupyter::notebook(self.session()?)?;
+        write_file(path, &nb.to_string_pretty())
+    }
+
+    /// Write the notebook as rendered in the app (a self-contained HTML page).
+    pub fn save_report(&mut self, path: &Path, html: &str) -> Result<()> {
+        if path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() != Some("html") {
+            return fail("a report is saved as an .html file".to_string());
+        }
+        write_file(path, html)
+    }
+
+    /// The last report of a check step: each rule, passed or not, with examples.
+    pub fn check_report(&mut self, step_id: &str) -> Result<Option<J>> {
+        Ok(self.session()?.check_report(step_id).map(|r| to_serde(&r.to_json())))
     }
 
     pub fn source_profile(&mut self, source_id: &str) -> Result<Vec<ProfileRow>> {
@@ -540,7 +596,7 @@ impl App {
         let schemas: Option<Vec<_>> = step.inputs.iter().map(|i| s.schema_of(i)).collect();
         if let Some(schemas) = schemas {
             if schemas.len() == step.inputs.len() && step.kind.arity().0 <= schemas.len() {
-                compile::output_schema(step, &schemas)?;
+                compile::output_schema(&vda_core::params::bind_step(step, &s.analysis.parameters), &schemas)?;
             }
         }
         Ok(())

@@ -171,7 +171,7 @@ fn step6_upstream_change_marks_downstream_stale_until_rerun() {
 
     // Tighten the filter: it and everything downstream become stale.
     if let StepKind::Filter { predicates } = &mut s.analysis.step_mut("valid_orders").unwrap().kind {
-        predicates[1] = Predicate { column: "revenue".into(), op: CmpOp::Ge, value: Value::Int(100) };
+        predicates[1] = Predicate { param: None, column: "revenue".into(), op: CmpOp::Ge, value: Value::Int(100) };
     }
     for id in ALL {
         assert_eq!(state(&s, id), StepState::Stale, "{id}");
@@ -328,7 +328,7 @@ fn switching_engines_marks_results_stale() {
 
 fn set_min_revenue(s: &mut Session, min: i64) {
     if let StepKind::Filter { predicates } = &mut s.analysis.step_mut("valid_orders").unwrap().kind {
-        predicates[1] = Predicate { column: "revenue".into(), op: CmpOp::Ge, value: Value::Int(min) };
+        predicates[1] = Predicate { param: None, column: "revenue".into(), op: CmpOp::Ge, value: Value::Int(min) };
     }
 }
 

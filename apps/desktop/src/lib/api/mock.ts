@@ -20,6 +20,9 @@ import type {
   StepOp,
   StepStateLabel,
   StepView,
+  CheckReport,
+  ColumnDetail,
+  Parameter,
 } from "./types";
 import { SOURCE_ID } from "./types";
 
@@ -125,10 +128,23 @@ export class MockBackend implements Backend {
   stepDelay = 0;
   private cancelled = false;
 
+  parameters: Parameter[] = [];
+  checkReports = new Map<string, CheckReport>();
+  /** Reports and notebooks written, for tests: [path, contents]. */
+  documents: [string, string][] = [];
+
+  /** Parameters a step names: @x in formulas, $x in SQL, a filter's parameter. */
+  private paramsOf(op: StepOp): Parameter[] {
+    const text = JSON.stringify(op);
+    return this.parameters.filter(
+      (p) => op.type === "python" || new RegExp(`[@$]${p.name}\\b|"param":"${p.name}"`).test(text),
+    );
+  }
+
   private def(id: string): string {
     const s = this.steps.find((x) => x.id === id);
     if (!s) return id;
-    return JSON.stringify([s.op, s.inputs.map((i) => this.def(i))]);
+    return JSON.stringify([s.op, s.inputs.map((i) => this.def(i)), this.paramsOf(s.op).map((p) => p.value)]);
   }
 
   private inputOf(id: string): Result | { columns: Column[]; rows: Row[] } | undefined {
@@ -164,7 +180,7 @@ export class MockBackend implements Backend {
         inputs: s.inputs,
         label: s.label,
         op: s.op,
-        mode: ["filter", "aggregate", "join", "append", "derive", "select", "sort", "window", "dedupe", "pivot", "unpivot"].includes(s.op.type)
+        mode: ["filter", "aggregate", "join", "append", "derive", "select", "sort", "window", "dedupe", "pivot", "unpivot", "check"].includes(s.op.type)
           ? "visual"
           : (s.op.type as "sql" | "python" | "chart"),
         state: this.state(s),
@@ -194,7 +210,95 @@ export class MockBackend implements Backend {
         .filter((s) => this.needsReview(s))
         .map((s) => ({ step_id: s.id, label: s.label, inputs: s.inputs, code: s.op.type === "python" ? s.op.code : "" })),
       trust_all: this.trustAll,
+      parameters: this.parameters.map((p) => ({ ...p })),
     };
+  }
+
+  async setParameters(params: Parameter[]): Promise<AnalysisView> {
+    for (const [i, p] of params.entries()) {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(p.name)) throw { message: `parameter name \`${p.name}\`: use letters, digits and _, starting with a letter` };
+      if (params.slice(0, i).some((q) => q.name === p.name)) throw { message: `there are two parameters called \`${p.name}\`` };
+      if (p.value === null) throw { message: `parameter \`${p.name}\` needs a value: a number, text, true/false or a date` };
+    }
+    this.parameters = params.map((p) => ({ ...p }));
+    return this.view();
+  }
+
+  async renameParameter(old: string, name: string): Promise<[AnalysisView, string[]]> {
+    const p = this.parameters.find((x) => x.name === old);
+    if (!p) throw { message: `unknown parameter \`${old}\`` };
+    if (this.parameters.some((x) => x.name === name)) throw { message: `there is already a parameter called \`${name}\`` };
+    p.name = name;
+    const python: string[] = [];
+    for (const s of this.steps) {
+      if (s.op.type === "python") {
+        if (s.op.code.includes(old)) python.push(s.id);
+        continue;
+      }
+      s.op = JSON.parse(
+        JSON.stringify(s.op)
+          .replace(new RegExp(`([@$])${old}\\b`, "g"), `$1${name}`)
+          .replace(`"param":"${old}"`, `"param":"${name}"`),
+      ) as StepOp;
+    }
+    return [await this.view(), python];
+  }
+
+  async checkReport(stepId: string): Promise<CheckReport | null> {
+    return this.checkReports.get(stepId) ?? null;
+  }
+
+  async columnDetails(id: string): Promise<ColumnDetail[]> {
+    const t = this.inputOf(id);
+    if (!t) throw { message: `\`${id}\` has no table result yet; run the analysis` };
+    return t.columns.map((c, i) => {
+      const vals = t.rows.map((r) => r[i]!).filter((v) => v.t !== "null");
+      const nums = vals.map(num).filter((x): x is number => x !== null).sort((a, b) => a - b);
+      const sorted = [...vals].sort((a, b) => compare(a, b) ?? 0);
+      const counts = new Map<string, number>();
+      for (const v of vals) counts.set(String((v as { v: unknown }).v), (counts.get(String((v as { v: unknown }).v)) ?? 0) + 1);
+      const isNum = c.type === "BIGINT" || c.type === "DOUBLE";
+      const q = (p: number) => (nums.length ? nums[Math.floor((nums.length - 1) * p)]! : null);
+      const mean = nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : null;
+      const lo = nums[0] ?? 0;
+      const hi = nums[nums.length - 1] ?? 0;
+      const bars = Array.from({ length: 10 }, () => 0);
+      if (isNum) for (const x of nums) bars[hi > lo ? Math.min(9, Math.floor(((x - lo) / (hi - lo)) * 10)) : 0]!++;
+      return {
+        name: c.name,
+        type: c.type,
+        rows: t.rows.length,
+        missing: t.rows.length - vals.length,
+        distinct: counts.size,
+        min: sorted[0] ? String((sorted[0] as { v: unknown }).v) : null,
+        max: sorted.length ? String((sorted[sorted.length - 1] as { v: unknown }).v) : null,
+        mean: isNum ? mean : null,
+        stddev: null,
+        q1: isNum ? q(0.25) : null,
+        median: isNum ? q(0.5) : null,
+        q3: isNum ? q(0.75) : null,
+        zeros: isNum ? nums.filter((x) => x === 0).length : null,
+        negatives: isNum ? nums.filter((x) => x < 0).length : null,
+        blank: c.type === "VARCHAR" ? vals.filter((v) => String((v as { v: unknown }).v).trim() === "").length : null,
+        min_length: null,
+        max_length: null,
+        top: [...counts.entries()].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).slice(0, 5).map(([value, count]) => ({ value, count })),
+        histogram: isNum ? bars : [],
+      };
+    });
+  }
+
+  async exportNotebook(path: string): Promise<void> {
+    this.documents.push([path, JSON.stringify({ nbformat: 4, cells: [] })]);
+  }
+
+  async saveReport(path: string, html: string): Promise<void> {
+    if (!path.endsWith(".html")) throw { message: "a report is saved as an .html file" };
+    this.documents.push([path, html]);
+  }
+
+  async pickDocumentPath(defaultName: string): Promise<string | null> {
+    return `/exports/${defaultName}`;
   }
 
   async createProject(): Promise<AnalysisView> {
@@ -601,12 +705,46 @@ export class MockBackend implements Backend {
           const v = r[idx[k]!]!;
           if (p.op === "IS NULL") return v.t === "null";
           if (p.op === "IS NOT NULL") return v.t !== "null";
-          const c = compare(v, literal(p.value));
+          const fixed = p.param ? this.parameters.find((x) => x.name === p.param)?.value ?? null : p.value;
+          const c = compare(v, literal(fixed));
           if (c === null) return false;
           return { "=": c === 0, "<>": c !== 0, "<": c < 0, "<=": c <= 0, ">": c > 0, ">=": c >= 0 }[p.op];
         }),
       );
       return { def: this.def(s.id), columns: input.columns, rows };
+    }
+    if (op.type === "check") {
+      // A stand-in: formulas are not evaluated (they pass); keys and row counts are.
+      const results = op.rules.map((r, i) => {
+        if (r.rule === "rows") {
+          const n = input.rows.length;
+          const ok = (r.min === null || n >= r.min) && (r.max === null || n <= r.max);
+          return { rule: i, passed: ok, failing: ok ? 0 : 1, message: `${n} rows`, columns: [], examples: [] };
+        }
+        if (r.rule === "unique") {
+          const idx = r.columns.map(col);
+          const seen = new Map<string, number>();
+          for (const row of input.rows) {
+            const k = JSON.stringify(idx.map((j) => row[j]));
+            seen.set(k, (seen.get(k) ?? 0) + 1);
+          }
+          const rep = [...seen.entries()].filter(([, n]) => n > 1);
+          return {
+            rule: i,
+            passed: rep.length === 0,
+            failing: rep.length,
+            message: rep.length ? `one row per ${r.columns.join(", ")}: ${rep.length} values appear more than once` : `one row per ${r.columns.join(", ")}: no repeats`,
+            columns: [...r.columns, "rows"],
+            examples: rep.slice(0, 5).map(([k, n]) => [...(JSON.parse(k) as Cell[]).map((c) => (c.t === "null" ? "missing" : String(c.v))), String(n)]),
+          };
+        }
+        return { rule: i, passed: true, failing: 0, message: `\`${r.formula}\` holds for every row`, columns: [], examples: [] };
+      });
+      const report = { rows: input.rows.length, results };
+      this.checkReports.set(s.id, report);
+      const broken = results.filter((r) => !r.passed);
+      if (op.stop && broken.length) throw new Error(`${broken.length} of ${results.length} checks failed: ${broken.map((r) => r.message).join("; ")}`);
+      return { def: this.def(s.id), columns: input.columns, rows: input.rows };
     }
     if (op.type === "aggregate") {
       const gi = op.group_by.map((g) => input.columns.findIndex((c) => c.name === g));

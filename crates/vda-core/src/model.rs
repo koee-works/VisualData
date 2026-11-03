@@ -17,6 +17,8 @@ pub struct Analysis {
     pub sources: Vec<Source>,
     pub steps: Vec<Step>,
     pub cells: Vec<Cell>,
+    /// Named values steps can refer to (`@name` in formulas, `$name` in SQL).
+    pub parameters: Vec<crate::params::Parameter>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -129,14 +131,19 @@ pub enum StepKind {
     /// Visual: columns become rows: each input row gives one row per listed
     /// column, with the column's name and value.
     Unpivot { columns: Vec<String>, name: String, value: String },
+    /// Visual: rules the data must meet. Rows pass through unchanged; with
+    /// `stop`, a broken rule fails the step (and what reads it waits).
+    Check { rules: Vec<Rule>, stop: bool },
     /// Custom SQL. Reads the first input as the relation `input`, and every
     /// input by its id.
     Sql { sql: String },
     /// Custom Python. Receives the first input as `df` and every input in the
     /// dict `dfs` by id (pandas), and must assign a DataFrame to `result`.
     Python { code: String, timeout_ms: u64 },
-    /// Visual: chart specification over the upstream result.
-    Chart { mark: Mark, x: String, y: String, title: Option<String> },
+    /// Visual: chart specification over the upstream result. With a
+    /// `summary`, one value per `x` (and `color`) is computed over all rows;
+    /// `y` is unused by histograms and row counts, `x` optional for box plots.
+    Chart { mark: Mark, x: String, y: String, title: Option<String>, color: Option<String>, summary: Option<AggFunc> },
 }
 
 impl StepKind {
@@ -153,6 +160,7 @@ impl StepKind {
             StepKind::Dedupe { .. } => "dedupe",
             StepKind::Pivot { .. } => "pivot",
             StepKind::Unpivot { .. } => "unpivot",
+            StepKind::Check { .. } => "check",
             StepKind::Sql { .. } => "sql",
             StepKind::Python { .. } => "python",
             StepKind::Chart { .. } => "chart",
@@ -175,6 +183,7 @@ impl StepKind {
                 | StepKind::Dedupe { .. }
                 | StepKind::Pivot { .. }
                 | StepKind::Unpivot { .. }
+                | StepKind::Check { .. }
                 | StepKind::Chart { .. }
         )
     }
@@ -249,6 +258,32 @@ pub struct Pick {
     pub column: String,
     /// New name, if renamed.
     pub rename: Option<String>,
+}
+
+/// A data quality rule.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Rule {
+    /// The formula is true for every row (missing counts as not true).
+    Expect { formula: String },
+    /// No two rows share these columns' values.
+    Unique { columns: Vec<String> },
+    /// The number of rows is within the bounds.
+    RowCount { min: Option<u64>, max: Option<u64> },
+}
+
+impl Rule {
+    pub fn formula(&self) -> Option<&str> {
+        match self {
+            Rule::Expect { formula } => Some(formula),
+            _ => None,
+        }
+    }
+    pub fn formula_mut(&mut self) -> Option<&mut String> {
+        match self {
+            Rule::Expect { formula } => Some(formula),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -335,6 +370,8 @@ pub struct Predicate {
     pub op: CmpOp,
     /// Ignored for `IsNull` / `IsNotNull`.
     pub value: Value,
+    /// Compare with this parameter's value instead (set when steps are bound).
+    pub param: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -461,18 +498,50 @@ pub enum Mark {
     Bar,
     Line,
     Point,
+    Area,
+    /// Counts of `x` in round-width bins.
+    Histogram,
+    /// The spread of `y` (min, quartiles, max), per value of `x` if given.
+    Boxplot,
 }
 
 impl Mark {
+    pub const ALL: [Mark; 6] = [Mark::Bar, Mark::Line, Mark::Point, Mark::Area, Mark::Histogram, Mark::Boxplot];
     pub fn name(self) -> &'static str {
         match self {
             Mark::Bar => "bar",
             Mark::Line => "line",
             Mark::Point => "point",
+            Mark::Area => "area",
+            Mark::Histogram => "histogram",
+            Mark::Boxplot => "boxplot",
         }
     }
     pub fn parse(s: &str) -> Option<Mark> {
-        [Mark::Bar, Mark::Line, Mark::Point].into_iter().find(|m| m.name() == s)
+        Mark::ALL.into_iter().find(|m| m.name() == s)
+    }
+}
+
+/// An aggregate in words, for titles ("sum", "90th percentile").
+pub fn agg_words(f: AggFunc) -> String {
+    match f {
+        AggFunc::Count => "count".into(),
+        AggFunc::Sum => "sum".into(),
+        AggFunc::Avg => "average".into(),
+        AggFunc::Min => "minimum".into(),
+        AggFunc::Max => "maximum".into(),
+        AggFunc::Median => "median".into(),
+        AggFunc::CountDistinct => "distinct count".into(),
+        AggFunc::Stddev => "standard deviation".into(),
+        AggFunc::Percentile(p) => {
+            let suffix = match (p % 10, p % 100) {
+                (1, x) if x != 11 => "st",
+                (2, x) if x != 12 => "nd",
+                (3, x) if x != 13 => "rd",
+                _ => "th",
+            };
+            format!("{p}{suffix} percentile")
+        }
     }
 }
 
@@ -492,6 +561,18 @@ impl Step {
 }
 
 impl Analysis {
+    /// Every step with parameter references replaced by their values: what
+    /// is planned, keyed and run (see `params`).
+    pub fn bound(&self) -> Analysis {
+        if self.parameters.is_empty() {
+            return self.clone();
+        }
+        Analysis {
+            steps: self.steps.iter().map(|s| crate::params::bind_step(s, &self.parameters)).collect(),
+            ..self.clone()
+        }
+    }
+
     pub fn source(&self, id: &str) -> Option<&Source> {
         self.sources.iter().find(|s| s.id == id)
     }

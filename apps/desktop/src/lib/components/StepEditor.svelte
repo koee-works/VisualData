@@ -18,6 +18,8 @@
   import DedupeEditor from "./DedupeEditor.svelte";
   import PivotEditor from "./PivotEditor.svelte";
   import UnpivotEditor from "./UnpivotEditor.svelte";
+  import CheckEditor from "./CheckEditor.svelte";
+  import type { CheckReport } from "../api/types";
 
   let { ws, step }: { ws: Workspace; step: StepView } = $props();
 
@@ -87,7 +89,21 @@
     // Notes (unused, outdated) belong in the console, not in the editor.
     (draftProblems ?? ws.problemsFor(step.id)).filter((p) => p.severity !== "info" && p.code !== "failed"),
   );
-  let general = $derived(shown.filter((p) => !p.field?.startsWith("columns.") && p.field !== "code" && p.field !== "sql"));
+  let general = $derived(
+    shown.filter((p) => !p.field?.startsWith("columns.") && !p.field?.startsWith("rules.") && p.field !== "code" && p.field !== "sql"),
+  );
+
+  // A check step's last report, shown beside its rules while they are unchanged.
+  let report = $state<CheckReport | null>(null);
+  $effect(() => {
+    void ws.revision;
+    const id = step.id;
+    if (step.op.type !== "check" || step.state === "not run") {
+      report = null;
+      return;
+    }
+    ws.backend.checkReport(id).then((r) => id === step.id && (report = r), () => (report = null));
+  });
   let byField = $derived.by(() => {
     const m: Record<string, Problem[]> = {};
     for (const p of shown) if (p.field) (m[p.field] ??= []).push(p);
@@ -176,7 +192,7 @@
     {/if}
 
     {#if draft.type === "filter"}
-      <FilterEditor bind:predicates={draft.predicates} columns={inputColumns} bind:invalid />
+      <FilterEditor bind:predicates={draft.predicates} columns={inputColumns} parameters={ws.view?.parameters ?? []} bind:invalid />
     {:else if draft.type === "aggregate"}
       <AggregateEditor bind:groupBy={draft.group_by} bind:measures={draft.measures} columns={inputColumns} />
     {:else if draft.type === "join"}
@@ -204,6 +220,8 @@
       <PivotEditor bind:rows={draft.rows} bind:column={draft.column} bind:value={draft.value} bind:func={draft.func} columns={inputColumns} />
     {:else if draft.type === "unpivot"}
       <UnpivotEditor bind:picked={draft.columns} bind:name={draft.name} bind:value={draft.value} columns={inputColumns} />
+    {:else if draft.type === "check"}
+      <CheckEditor bind:rules={draft.rules} bind:stop={draft.stop} columns={inputColumns} problems={byField} report={dirty ? null : report} />
     {:else if draft.type === "append"}
       <AppendEditor {ws} bind:inputs bind:distinct={draft.distinct} bind:origin={draft.origin} choices={readable} />
     {:else if draft.type === "sql" || draft.type === "python"}
@@ -256,7 +274,15 @@
         </label>
       {/if}
     {:else if draft.type === "chart"}
-      <ChartEditor bind:mark={draft.mark} bind:x={draft.x} bind:y={draft.y} bind:title={draft.title} columns={inputColumns} />
+      <ChartEditor
+        bind:mark={draft.mark}
+        bind:x={draft.x}
+        bind:y={draft.y}
+        bind:title={draft.title}
+        bind:color={draft.color}
+        bind:summary={draft.summary}
+        columns={inputColumns}
+      />
     {/if}
 
     {#if dirty}

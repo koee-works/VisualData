@@ -183,6 +183,15 @@ impl Linter {
                 ));
             }
         }
+        for p in &a.parameters {
+            let used = a.steps.iter().any(|st| {
+                crate::params::used_by(st).contains(&p.name)
+                    || matches!(&st.kind, StepKind::Python { code, .. } if code.contains(&p.name))
+            });
+            if !used {
+                out.push(Diagnostic::new(Severity::Info, "unused-parameter", None, format!("parameter `{}` is not used by any step", p.name)));
+            }
+        }
         if outdated > 0 {
             out.push(Diagnostic::new(
                 Severity::Info,
@@ -226,8 +235,9 @@ impl Linter {
             }
         }
         let Ok(order) = crate::plan::validate(a) else { return known };
+        let bound = a.bound();
         for id in order {
-            let step = a.step(&id).unwrap();
+            let step = bound.step(&id).unwrap();
             let inputs: Option<Vec<Schema>> = step.inputs.iter().map(|i| known.get(i).cloned()).collect();
             match (&step.kind, inputs) {
                 (StepKind::Sql { .. } | StepKind::Python { .. }, _) => {
@@ -294,6 +304,25 @@ impl Linter {
     }
 
     fn code_checks(&mut self, s: &Session, a: &Analysis, step: &Step, out: &mut Vec<Diagnostic>) {
+        // Formulas report unknown parameters themselves, where they are written.
+        if matches!(step.kind, StepKind::Filter { .. } | StepKind::Sql { .. }) {
+            for name in crate::params::used_by(step) {
+                if !a.parameters.iter().any(|p| p.name == name) {
+                    let (written, field) = if matches!(step.kind, StepKind::Sql { .. }) { (format!("${name}"), Some("sql")) } else { (name.clone(), None) };
+                    let mut d = Diagnostic::new(
+                        Severity::Error,
+                        "unknown-parameter",
+                        Some(&step.id),
+                        format!("uses the parameter `{written}`, which does not exist; add it under Parameters"),
+                    );
+                    if let Some(f) = field {
+                        d = d.at(f, None, None);
+                    }
+                    out.push(d);
+                }
+            }
+        }
+        let step = &crate::params::bind_step(step, &a.parameters);
         match &step.kind {
             StepKind::Window { order_by, columns, .. } if order_by.is_empty() => {
                 use crate::model::WindowFunc as W;
@@ -471,6 +500,17 @@ impl Linter {
                                 .last_run(),
                             );
                         }
+                    }
+                }
+            }
+            (StepKind::Check { .. }, Some(_), _) => {
+                if let Some(report) = s.check_report(id) {
+                    for r in report.failed() {
+                        out.push(
+                            Diagnostic::new(Severity::Warning, "check-failed", Some(id), r.message.clone())
+                                .at(format!("rules.{}", r.rule), None, None)
+                                .last_run(),
+                        );
                     }
                 }
             }

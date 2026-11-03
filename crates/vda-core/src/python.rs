@@ -55,7 +55,12 @@ try:
     df = dfs[pairs[0]]
     with open(code_path, encoding="utf-8") as f:
         code = f.read()
-    ns = {"df": df, "dfs": dfs, "pd": pd, "__name__": "__vda_step__"}
+    import json, datetime
+    def param(kind, v):
+        return int(v) if kind == "int" else datetime.date.fromisoformat(v) if kind == "date" else v
+    with open("params.json", encoding="utf-8") as f:
+        params = {name: param(kind, v) for name, kind, v in json.load(f)}
+    ns = {"df": df, "dfs": dfs, "pd": pd, "params": params, "__name__": "__vda_step__"}
 except BaseException:
     finish(4, "VDA_SETUP: could not prepare the Python step", show_traceback=True)
 
@@ -131,6 +136,20 @@ impl PythonRunner {
         timeout: Duration,
         cancel: &AtomicBool,
     ) -> PythonRun {
+        self.run_with_params(code, inputs, "[]", output, timeout, cancel)
+    }
+
+    /// [`Self::run_inputs`] with the analysis parameters as `params` (JSON
+    /// from [`crate::params::python_json`]).
+    pub fn run_with_params(
+        &self,
+        code: &str,
+        inputs: &[(String, PathBuf)],
+        params: &str,
+        output: &Path,
+        timeout: Duration,
+        cancel: &AtomicBool,
+    ) -> PythonRun {
         if inputs.is_empty() {
             return PythonRun { result: Err(Error::Python("a Python step needs at least one input".into())), output: String::new() };
         }
@@ -140,6 +159,9 @@ impl PythonRunner {
             Ok(d) => d,
             Err(e) => return PythonRun { result: Err(e.into()), output: String::new() },
         };
+        if let Err(e) = fs::write(dir.join("params.json"), params) {
+            return PythonRun { result: Err(e.into()), output: String::new() };
+        }
         let result = self.run_in(&dir, code, inputs, output, timeout, cancel);
         let _ = fs::remove_dir_all(&dir);
         result

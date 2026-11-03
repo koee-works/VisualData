@@ -3,7 +3,7 @@
 An integrated workspace for exploring, transforming, analyzing and visualizing data through visual controls, SQL/Python code, and notebooks, without losing the thread of the analysis.
 
 - Product briefs (v0.2.0): [docs/briefs/](docs/briefs/)
-- Decisions: [ADR-0001 deployment model](docs/adr/0001-deployment-model.md), [ADR-0002 build cache](docs/adr/0002-build-cache.md), [ADR-0003 desktop frontend](docs/adr/0003-frontend.md), [ADR-0004 code review and SQL sandbox](docs/adr/0004-code-review-and-sandbox.md), [ADR-0005 several sources and multi-input steps](docs/adr/0005-multi-input-steps.md), [ADR-0006 formulas and core transforms](docs/adr/0006-formulas-and-core-transforms.md), [ADR-0007 linter and console](docs/adr/0007-linter-and-console.md), [ADR-0008 reshaping and window calculations](docs/adr/0008-reshaping-and-window-calculations.md)
+- Decisions: [ADR-0001 deployment model](docs/adr/0001-deployment-model.md), [ADR-0002 build cache](docs/adr/0002-build-cache.md), [ADR-0003 desktop frontend](docs/adr/0003-frontend.md), [ADR-0004 code review and SQL sandbox](docs/adr/0004-code-review-and-sandbox.md), [ADR-0005 several sources and multi-input steps](docs/adr/0005-multi-input-steps.md), [ADR-0006 formulas and core transforms](docs/adr/0006-formulas-and-core-transforms.md), [ADR-0007 linter and console](docs/adr/0007-linter-and-console.md), [ADR-0008 reshaping and window calculations](docs/adr/0008-reshaping-and-window-calculations.md), [ADR-0009 charts, column details, checks, parameters and export](docs/adr/0009-charts-profiles-checks-parameters-export.md)
 - Current state of the first engineering slice: [STATUS.md](STATUS.md)
 
 ## Layout
@@ -61,6 +61,16 @@ A console under the result has three tabs. **Problems** lists what the linter fi
 **Running totals, ranks, previous values** adds columns calculated across rows, separately for each group and in an order: running totals, row numbers, ranks, the previous or next value, moving averages, change and % change from the previous row, and share of the group's total. Rows stay where they are. **Remove duplicates** keeps one row per key, such as the latest order per customer. **Pivot** makes a column for each value (revenue by region, a column per product), and **Unpivot** turns columns back into rows. The formula function `bucket(x, width)` groups numbers into bands for histograms. See [ADR-0008](docs/adr/0008-reshaping-and-window-calculations.md).
 
 ![A pivot with one column per product](docs/screenshots/15-pivot.png)
+
+### Charts, checks and parameters
+
+Charts can be bars, lines, areas, points, histograms or box plots, split by a color column, and summarized per category (totals and averages cover every row, however many). Each column's page shows averages, quartiles, zeros, blank text, the most common values and a small distribution. A **Check data quality** step states what the data must look like (a formula true for every row, a unique key, a number of rows) and shows the rows that break each rule, then either warns or stops the steps after it. **Parameters** are named values shared by steps: `@goal` in a formula or filter, `$goal` in SQL, `params["goal"]` in Python; changing one outdates only the steps that use it. See [ADR-0009](docs/adr/0009-charts-profiles-checks-parameters-export.md).
+
+![A check that finds orders with no region, with the rows that break it](docs/screenshots/17-check.png)
+
+### Sharing the notebook
+
+**Export** on the notebook saves a **report**, one web page with the text, tables, check results and charts that opens anywhere and prints as it is, or a **Jupyter notebook** that reruns the analysis with DuckDB and pandas outside the app. With `VDA_SAVE_DIR` set, notebooks are saved into that folder without a dialog (for scripted use).
 
 ### Combining data
 

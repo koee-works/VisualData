@@ -1,6 +1,6 @@
 <script lang="ts">
   import { X, Plus } from "@lucide/svelte";
-  import type { CmpOp, Column, Predicate } from "../api/types";
+  import type { CmpOp, Column, Parameter, Predicate } from "../api/types";
   import { literalText, parseLiteral } from "../format";
   import ColumnPicker from "./ColumnPicker.svelte";
 
@@ -8,7 +8,8 @@
     predicates = $bindable(),
     columns,
     invalid = $bindable(false),
-  }: { predicates: Predicate[]; columns: Column[] | null; invalid?: boolean } = $props();
+    parameters = [],
+  }: { predicates: Predicate[]; columns: Column[] | null; invalid?: boolean; parameters?: Parameter[] } = $props();
 
   const ops: { op: CmpOp; words: string }[] = [
     { op: "=", words: "is" },
@@ -75,7 +76,25 @@
       <select class="field" aria-label="Condition" bind:value={p.op} onchange={() => commit(i)}>
         {#each ops as o (o.op)}<option value={o.op}>{o.words}</option>{/each}
       </select>
-      {#if p.op !== "IS NULL" && p.op !== "IS NOT NULL"}
+      {#if p.op !== "IS NULL" && p.op !== "IS NOT NULL" && (parameters.length || p.param)}
+        <select
+          class="field"
+          aria-label="Compare with"
+          value={p.param ?? ""}
+          onchange={(e) => {
+            p.param = e.currentTarget.value || null;
+            if (p.param) {
+              errors[i] = null;
+              invalid = errors.some((x) => x !== null);
+            } else commit(i);
+          }}
+        >
+          <option value="">a value</option>
+          {#each parameters as q (q.name)}<option value={q.name}>@{q.name} ({literalText(q.value)})</option>{/each}
+          {#if p.param && !parameters.some((q) => q.name === p.param)}<option value={p.param}>@{p.param} (missing)</option>{/if}
+        </select>
+      {/if}
+      {#if p.op !== "IS NULL" && p.op !== "IS NOT NULL" && !p.param}
         <div class="flex flex-col">
           <input
             class="field w-40"

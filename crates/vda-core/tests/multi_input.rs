@@ -40,6 +40,7 @@ fn step(id: &str, inputs: &[&str], kind: StepKind) -> Step {
 /// SQL step and a Python step that each read two inputs.
 fn analysis() -> Analysis {
     Analysis {
+        parameters: vec![],
         name: "Revenue against target".into(),
         sources: vec![Source::primary("sales.csv"), Source::new("regions", "regions.csv")],
         steps: vec![

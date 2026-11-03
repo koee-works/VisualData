@@ -165,8 +165,15 @@ export function describe(op: StepOp): string {
       return "Custom SQL";
     case "python":
       return "Custom Python";
-    case "chart":
-      return `${op.mark[0]!.toUpperCase()}${op.mark.slice(1)} chart of ${op.y} by ${op.x}`;
+    case "chart": {
+      if (op.mark === "histogram") return `Histogram of ${op.x}`;
+      if (op.mark === "boxplot") return `Box plot of ${op.y}${op.x ? ` by ${op.x}` : ""}`;
+      const name = { bar: "Bar", line: "Line", point: "Point", area: "Area" }[op.mark];
+      const y = !op.summary ? op.y : op.summary === "COUNT" ? "rows" : `${funcWords(op.summary).toLowerCase()} of ${op.y}`;
+      return `${name} chart of ${y} by ${op.x}${op.color ? ` and ${op.color}` : ""}`;
+    }
+    case "check":
+      return op.rules.length === 1 ? "Check 1 rule" : `Check ${op.rules.length} rules`;
   }
 }
 

@@ -97,6 +97,7 @@ fn project() -> (PathBuf, Analysis) {
         s
     };
     let a = Analysis {
+        parameters: vec![],
         name: "formats".into(),
         sources: vec![
             sheet(Source::new("sheet", "regions.xlsx"), "Targets"),

@@ -2,7 +2,7 @@
 //! inspectable SQL, its state, and a bounded result preview.
 //!
 //! This is a review/export rendering for the slice. The desktop UI will render
-//! the same cells interactively. `.ipynb` export is NOT IMPLEMENTED.
+//! the same cells interactively. `jupyter.rs` exports a runnable `.ipynb`.
 
 use crate::model::{Cell, StepKind};
 use crate::session::{Output, Session, StepState};

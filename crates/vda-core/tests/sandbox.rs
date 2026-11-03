@@ -23,6 +23,7 @@ fn session(project: &Path, extra: Vec<PathBuf>, sql: &str) -> Session {
     allowed.extend(extra);
     let opts = EngineOptions { allowed_paths: Some(allowed), ..Default::default() };
     let analysis = Analysis {
+        parameters: vec![],
         name: "sandbox".into(),
         sources: vec![Source::primary("data.csv")],
         steps: vec![Step { id: "q".into(), inputs: vec![SOURCE_ID.into()], label: None, kind: StepKind::Sql { sql: sql.into() } }],

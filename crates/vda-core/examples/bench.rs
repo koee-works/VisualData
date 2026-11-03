@@ -60,6 +60,7 @@ fn generate(path: &PathBuf, rows: u64) -> std::io::Result<()> {
 fn analysis() -> Analysis {
     let st = |id: &str, input: &str, kind| Step { id: id.into(), inputs: vec![input.into()], label: None, kind };
     Analysis {
+        parameters: vec![],
         name: "Orders benchmark".into(),
         sources: vec![Source::primary("orders.csv")],
         steps: vec![
@@ -68,8 +69,8 @@ fn analysis() -> Analysis {
                 SOURCE_ID,
                 StepKind::Filter {
                     predicates: vec![
-                        Predicate { column: "region".into(), op: CmpOp::IsNotNull, value: Value::Null },
-                        Predicate { column: "revenue".into(), op: CmpOp::Ge, value: Value::Int(20) },
+                        Predicate { param: None, column: "region".into(), op: CmpOp::IsNotNull, value: Value::Null },
+                        Predicate { param: None, column: "revenue".into(), op: CmpOp::Ge, value: Value::Int(20) },
                     ],
                 },
             ),
@@ -96,7 +97,7 @@ fn analysis() -> Analysis {
             st(
                 "chart",
                 "share",
-                StepKind::Chart { mark: Mark::Bar, x: "product".into(), y: "share".into(), title: None },
+                StepKind::Chart { mark: Mark::Bar, x: "product".into(), y: "share".into(), title: None, color: None, summary: None },
             ),
             st(
                 "top_customers",

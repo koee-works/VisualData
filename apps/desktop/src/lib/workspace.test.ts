@@ -390,6 +390,114 @@ describe("Reshaping and window calculations", () => {
   });
 });
 
+describe("Parameters, checks and notebook export", () => {
+  async function seeded() {
+    const mock = new MockBackend();
+    await mock.seedDemo({ run: true, editAfterRun: false });
+    const ws = new Workspace(mock);
+    await ws.open("/projects/x");
+    return { ws, mock };
+  }
+
+  it("outdates the steps that use a parameter, and Python steps, when its value changes", async () => {
+    const { ws } = await seeded();
+    await ws.setParameters([{ name: "min_revenue", value: { int: "100" } }]);
+    ws.selected = "source";
+    const d = await ws.addStep({ type: "derive", columns: [{ name: "big", formula: "revenue >= @min_revenue" }] });
+    await ws.run();
+    expect(ws.view!.steps.every((s) => s.state === "fresh")).toBe(true);
+    await ws.setParameters([{ name: "min_revenue", value: { int: "250" } }]);
+    const stale = ws.view!.steps.filter((s) => s.state === "stale").map((s) => s.id);
+    // Python gets every parameter, so it (and the chart after it) is outdated
+    // too; the filter and the aggregate are not.
+    expect(stale.sort()).toEqual([d!.id, "python_1", "chart_1"].sort());
+  });
+
+  it("refuses a parameter name that formulas cannot use", async () => {
+    const { ws } = await seeded();
+    expect(await ws.setParameters([{ name: "2nd", value: true }])).toBe(false);
+    expect(ws.error?.message).toContain("starting with a letter");
+  });
+
+  it("renames a parameter in formulas and names the Python steps to edit", async () => {
+    const { ws, mock } = await seeded();
+    await ws.setParameters([{ name: "cut", value: { int: "5" } }]);
+    ws.selected = "source";
+    const d = await ws.addStep({ type: "derive", columns: [{ name: "x", formula: "revenue > @cut" }] });
+    const py = mock.steps.find((s) => s.op.type === "python")!;
+    if (py.op.type === "python") py.op.code = 'result = df[df.revenue > params["cut"]]';
+    expect(await ws.renameParameter("cut", "threshold")).toBe(true);
+    const op = ws.view!.steps.find((s) => s.id === d!.id)!.op;
+    expect(op.type === "derive" && op.columns[0]!.formula).toBe("revenue > @threshold");
+    expect(ws.notice).toContain('edit params["cut"] in Share of revenue');
+  });
+
+  it("warns about a broken rule and passes the rows on, or stops", async () => {
+    const { ws } = await seeded();
+    ws.selected = "source";
+    const c = await ws.addStep({ type: "check", stop: false, rules: [{ rule: "unique", columns: ["region"] }, { rule: "rows", min: 1, max: null }] });
+    await ws.run();
+    expect(ws.view!.steps.find((s) => s.id === c!.id)!.state).toBe("fresh");
+    const report = await ws.backend.checkReport(c!.id);
+    expect(report!.results.map((r) => r.passed)).toEqual([false, true]);
+    expect(report!.results[0]!.message).toContain("appear more than once");
+    await ws.saveStep(c!.id, null, { type: "check", stop: true, rules: [{ rule: "unique", columns: ["region"] }] });
+    await ws.run();
+    const failed = ws.view!.steps.find((s) => s.id === c!.id)!;
+    expect(failed.state).toBe("failed");
+    expect(failed.detail).toContain("1 of 1 checks failed");
+  });
+
+  it("saves the notebook as a self-contained report with tables and charts", async () => {
+    const { ws, mock } = await seeded();
+    await ws.exportNotebook("html");
+    const [path, html] = mock.documents.at(-1)!;
+    expect(path).toMatch(/Regional revenue\.html$/);
+    expect(html).toContain("<title>Regional revenue</title>");
+    expect(html).toContain("Which regions bring in most of the revenue?");
+    expect(html).toContain("<table>");
+    expect(html).toContain("<svg");
+    expect(html).not.toContain("<script");
+    expect(ws.notice).toContain("Saved the report");
+  });
+
+  it("shows what a check found in the report, not the rows it passes on", async () => {
+    const { ws, mock } = await seeded();
+    ws.selected = "source";
+    const c = await ws.addStep({ type: "check", stop: false, rules: [{ rule: "unique", columns: ["region"] }] });
+    await ws.setCells([...ws.view!.cells, { type: "step", step: c!.id }]);
+    await ws.run();
+    await ws.exportNotebook("html");
+    const html = mock.documents.at(-1)![1];
+    const section = html.slice(html.indexOf("Check 1 rule"));
+    expect(section).toContain("1 of 1 checks not met");
+    expect(section).toContain("appear more than once");
+  });
+
+  it("lists every kind of parameter value in the report", async () => {
+    const { ws, mock } = await seeded();
+    await ws.setParameters([
+      { name: "share", value: { float: 0.5 } },
+      { name: "cap", value: { int: "10" } },
+      { name: "region", value: "East" },
+      { name: "since", value: { date: "2026-07-01" } },
+      { name: "strict", value: true },
+    ]);
+    await ws.exportNotebook("html");
+    expect(ws.error).toBeNull();
+    const html = mock.documents.at(-1)![1];
+    for (const s of ["<code>share</code> = 0.5", "<code>cap</code> = 10", "<code>region</code> = East", "<code>since</code> = 2026-07-01", "<code>strict</code> = true"])
+      expect(html).toContain(s);
+  });
+
+  it("exports a Jupyter notebook", async () => {
+    const { ws, mock } = await seeded();
+    await ws.exportNotebook("ipynb");
+    expect(mock.documents.at(-1)![0]).toMatch(/\.ipynb$/);
+    expect(ws.notice).toContain("reproduces the analysis");
+  });
+});
+
 describe("Console", () => {
   async function seeded() {
     const mock = new MockBackend();
