@@ -66,6 +66,19 @@ pub enum Value {
 }
 
 impl Value {
+    /// The value's type; `None` for a missing value.
+    pub fn dtype(&self) -> Option<DataType> {
+        Some(match self {
+            Value::Null => return None,
+            Value::Bool(_) => DataType::Bool,
+            Value::Int(_) => DataType::Int,
+            Value::Float(_) => DataType::Float,
+            Value::Text(_) => DataType::Text,
+            Value::Date(_) => DataType::Date,
+            Value::Timestamp(_) => DataType::Timestamp,
+        })
+    }
+
     pub fn is_null(&self) -> bool {
         matches!(self, Value::Null)
     }

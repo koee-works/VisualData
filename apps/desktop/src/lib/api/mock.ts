@@ -161,7 +161,9 @@ export class MockBackend implements Backend {
         inputs: s.inputs,
         label: s.label,
         op: s.op,
-        mode: ["filter", "aggregate", "join", "append"].includes(s.op.type) ? "visual" : (s.op.type as "sql" | "python" | "chart"),
+        mode: ["filter", "aggregate", "join", "append", "derive", "select", "sort"].includes(s.op.type)
+          ? "visual"
+          : (s.op.type as "sql" | "python" | "chart"),
         state: this.state(s),
         detail: this.failed.get(s.id) ?? null,
         rows: r ? r.rows.length : null,
@@ -373,6 +375,51 @@ export class MockBackend implements Backend {
     const input = this.inputOf(s.inputs[0]!);
     if (!input) throw new Error(`upstream step \`${s.inputs[0]}\` did not succeed`);
     const op = s.op;
+    if (op.type === "select") {
+      const idx = op.columns.map((c) => input.columns.findIndex((x) => x.name === c.column));
+      if (idx.some((i) => i < 0)) throw new Error("column not found");
+      return {
+        def: this.def(s.id),
+        columns: op.columns.map((c, k) => ({ ...input.columns[idx[k]!]!, name: c.as ?? c.column })),
+        rows: input.rows.map((r) => idx.map((i) => r[i]!)),
+      };
+    }
+    if (op.type === "sort") {
+      const keys = op.by.map((k) => ({ i: input.columns.findIndex((c) => c.name === k.column), d: k.descending }));
+      const rows = [...input.rows].sort((a, b) => {
+        for (const { i, d } of keys) {
+          const [x, y] = [a[i]!, b[i]!];
+          if (x.t === "null" || y.t === "null") {
+            if (x.t !== y.t) return x.t === "null" ? 1 : -1;
+            continue;
+          }
+          const c = compare(x, y) ?? 0;
+          if (c) return d ? -c : c;
+        }
+        return 0;
+      });
+      return { def: this.def(s.id), columns: input.columns, rows: op.limit === null ? rows : rows.slice(0, op.limit) };
+    }
+    if (op.type === "derive") {
+      // The mock does not evaluate formulas: a bare column name is copied,
+      // anything else is left missing. The real evaluator is in Rust.
+      let columns = [...input.columns];
+      let rows = input.rows.map((r) => [...r]);
+      for (const d of op.columns) {
+        const src = columns.findIndex((c) => c.name === d.formula.trim());
+        const at = columns.findIndex((c) => c.name === d.name);
+        const type = src >= 0 ? columns[src]!.type : "VARCHAR";
+        rows = rows.map((r) => {
+          const v: Cell = src >= 0 ? r[src]! : { t: "null" };
+          if (at >= 0) r[at] = v;
+          else r.push(v);
+          return r;
+        });
+        if (at >= 0) columns[at] = { name: d.name, type };
+        else columns = [...columns, { name: d.name, type }];
+      }
+      return { def: this.def(s.id), columns, rows };
+    }
     if (op.type === "append") {
       const tables = s.inputs.map((i) => {
         const t = this.inputOf(i);
@@ -478,9 +525,25 @@ export class MockBackend implements Backend {
             const ci = input.columns.findIndex((c) => c.name === m.column);
             const xs = rs.map((r) => num(r[ci]!)).filter((x): x is number => x !== null);
             if (!xs.length) return { t: "null" };
+            if (m.func === "COUNT_DISTINCT") return { t: "int", v: String(new Set(xs).size) };
             const sum = xs.reduce((a, b) => a + b, 0);
-            const v = { SUM: sum, AVG: sum / xs.length, MIN: Math.min(...xs), MAX: Math.max(...xs) }[m.func];
-            return { t: "float", v };
+            const sorted = [...xs].sort((a, b) => a - b);
+            const q = (p: number) => {
+              const h = (sorted.length - 1) * p;
+              const lo = Math.floor(h);
+              return sorted[lo]! + (h - lo) * (sorted[Math.min(lo + 1, sorted.length - 1)]! - sorted[lo]!);
+            };
+            const mean = sum / xs.length;
+            const fixed: Record<string, number | null> = {
+              SUM: sum,
+              AVG: mean,
+              MIN: Math.min(...xs),
+              MAX: Math.max(...xs),
+              MEDIAN: q(0.5),
+              STDDEV: xs.length < 2 ? null : Math.sqrt(xs.reduce((a, x) => a + (x - mean) ** 2, 0) / (xs.length - 1)),
+            };
+            const v = m.func in fixed ? fixed[m.func]! : q(Number(m.func.slice(1)) / 100);
+            return v === null ? { t: "null" } : { t: "float", v };
           }),
         ]);
       return { def: this.def(s.id), columns, rows };
@@ -586,6 +649,19 @@ export class MockBackend implements Backend {
   csvToPick = "/data/regions.csv";
   async pickCsv(): Promise<string | null> {
     return this.csvToPick;
+  }
+  /** Exports made, for tests: [id, path]. */
+  exports: [string, string][] = [];
+  async pickSavePath(defaultName: string): Promise<string | null> {
+    return `/exports/${defaultName}`;
+  }
+  async exportResult(id: string, path: string): Promise<number> {
+    const s = this.steps.find((x) => x.id === id);
+    if (s && this.state(s) !== "fresh") throw { message: `the result of \`${id}\` is outdated; run the analysis first so the file matches the step` };
+    const t = this.inputOf(id);
+    if (!t) throw { message: `step \`${id}\` has no result yet; run the analysis first` };
+    this.exports.push([id, path]);
+    return t.rows.length;
   }
   async pickFolder(): Promise<string | null> {
     return "/projects/new";

@@ -74,6 +74,11 @@ async fn update_source(s: State<'_, Shared>, id: String, new_id: Option<String>,
 }
 
 #[tauri::command]
+async fn export(s: State<'_, Shared>, id: String, path: String) -> Res<u64> {
+    with(&s, |a| a.export(&id, std::path::Path::new(&path)))
+}
+
+#[tauri::command]
 async fn remove_source(s: State<'_, Shared>, id: String) -> Res<AnalysisView> {
     with(&s, |a| a.remove_source(&id))
 }
@@ -182,6 +187,7 @@ fn main() {
             approve,
             add_source,
             remove_source,
+            export,
             source_sheets,
             update_source,
             set_trust_all,

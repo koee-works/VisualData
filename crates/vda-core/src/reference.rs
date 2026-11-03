@@ -32,6 +32,12 @@ pub fn eval_step(step: &Step, inputs: &[Table]) -> Result<Table, Error> {
         StepKind::Aggregate { group_by, measures } => aggregate(input, group_by, measures)?,
         StepKind::Join { how, on } => join(*how, on, &inputs[0], &inputs[1], &schema),
         StepKind::Append { distinct, origin } => append(&step.inputs, inputs, &schema, *distinct, origin.as_deref()),
+        StepKind::Derive { columns } => derive(step, columns, input)?,
+        StepKind::Select { columns } => {
+            let idx: Vec<usize> = columns.iter().map(|c| input.schema.index_of(&c.column).unwrap()).collect();
+            input.rows.iter().map(|r| idx.iter().map(|&i| r[i].clone()).collect()).collect()
+        }
+        StepKind::Sort { by, limit } => sort(by, *limit, input),
         _ => unreachable!("output_schema returned Some for a non-table step"),
     };
     Ok(Table { schema, rows })
@@ -89,6 +95,50 @@ fn join(how: JoinKind, on: &[JoinKey], left: &Table, right: &Table, out: &Schema
                 rows.push(row_of(None, Some(r)));
             }
         }
+    }
+    rows
+}
+
+fn derive(step: &Step, columns: &[crate::model::Derived], input: &Table) -> Result<Vec<Vec<Value>>, Error> {
+    let plan = crate::compile::derive_plan(step, &input.schema)?;
+    let mut rows = Vec::with_capacity(input.rows.len());
+    for r in &input.rows {
+        let mut row = r.clone();
+        for ((expr, schema), c) in plan.iter().zip(columns) {
+            let v = crate::formula::eval(expr, schema, &row)?;
+            match schema.index_of(&c.name) {
+                Some(i) => row[i] = v,
+                None => row.push(v),
+            }
+        }
+        rows.push(row);
+    }
+    Ok(rows)
+}
+
+fn sort(by: &[crate::model::SortKey], limit: Option<u64>, input: &Table) -> Vec<Vec<Value>> {
+    let idx: Vec<(usize, bool)> = by.iter().map(|k| (input.schema.index_of(&k.column).unwrap(), k.descending)).collect();
+    let mut rows = input.rows.clone();
+    // A stable sort keeps ties in input order. Missing values go last either way.
+    rows.sort_by(|a, b| {
+        for &(i, desc) in &idx {
+            let o = match (a[i].is_null(), b[i].is_null()) {
+                (true, true) => Ordering::Equal,
+                (true, false) => Ordering::Greater,
+                (false, true) => Ordering::Less,
+                _ => {
+                    let o = a[i].sql_cmp(&b[i]).unwrap_or(Ordering::Equal);
+                    if desc { o.reverse() } else { o }
+                }
+            };
+            if o != Ordering::Equal {
+                return o;
+            }
+        }
+        Ordering::Equal
+    });
+    if let Some(n) = limit {
+        rows.truncate(n as usize);
     }
     rows
 }
@@ -196,6 +246,16 @@ fn aggregate(input: &Table, group_by: &[String], measures: &[Measure]) -> Result
     Ok(out)
 }
 
+/// Continuous quantile: linear interpolation between the closest ranks.
+fn quantile(vals: &[&Value], p: f64) -> Value {
+    let mut xs: Vec<f64> = vals.iter().filter_map(|v| v.as_f64()).collect();
+    xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+    let h = (xs.len() - 1) as f64 * p;
+    let lo = h.floor() as usize;
+    let hi = (lo + 1).min(xs.len() - 1);
+    Value::Float(xs[lo] + (h - lo as f64) * (xs[hi] - xs[lo]))
+}
+
 fn measure(m: &Measure, rows: &[&Vec<Value>], input: &Table) -> Result<Value, Error> {
     let col = match &m.column {
         None => return Ok(Value::Int(rows.len() as i64)),
@@ -204,6 +264,10 @@ fn measure(m: &Measure, rows: &[&Vec<Value>], input: &Table) -> Result<Value, Er
     let vals: Vec<&Value> = rows.iter().map(|r| &r[col]).filter(|v| !v.is_null()).collect();
     if m.func == AggFunc::Count {
         return Ok(Value::Int(vals.len() as i64));
+    }
+    if m.func == AggFunc::CountDistinct {
+        let keys: std::collections::HashSet<String> = vals.iter().map(|v| v.key()).collect();
+        return Ok(Value::Int(keys.len() as i64));
     }
     if vals.is_empty() {
         return Ok(Value::Null);
@@ -230,6 +294,19 @@ fn measure(m: &Measure, rows: &[&Vec<Value>], input: &Table) -> Result<Value, Er
         }
         AggFunc::Min => (*vals.iter().min_by(|a, b| a.sort_cmp(b)).unwrap()).clone(),
         AggFunc::Max => (*vals.iter().max_by(|a, b| a.sort_cmp(b)).unwrap()).clone(),
+        AggFunc::Median => quantile(&vals, 0.5),
+        AggFunc::Percentile(p) => quantile(&vals, p as f64 / 100.0),
+        AggFunc::Stddev => {
+            let xs: Vec<f64> = vals.iter().filter_map(|v| v.as_f64()).collect();
+            if xs.len() < 2 {
+                Value::Null
+            } else {
+                let mean = xs.iter().sum::<f64>() / xs.len() as f64;
+                let ss: f64 = xs.iter().map(|x| (x - mean) * (x - mean)).sum();
+                Value::Float((ss / (xs.len() - 1) as f64).sqrt())
+            }
+        }
+        AggFunc::CountDistinct => unreachable!(),
     })
 }
 

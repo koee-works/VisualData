@@ -1,7 +1,7 @@
 <script lang="ts">
   import { X, Plus } from "@lucide/svelte";
   import type { AggFunc, Column, Measure } from "../api/types";
-  import { isNumericType } from "../format";
+  import { funcWords, isNumericType } from "../format";
   import ColumnPicker from "./ColumnPicker.svelte";
 
   let {
@@ -10,13 +10,17 @@
     columns,
   }: { groupBy: string[]; measures: Measure[]; columns: Column[] | null } = $props();
 
-  const funcs: { f: AggFunc; words: string }[] = [
-    { f: "COUNT", words: "Count" },
-    { f: "SUM", words: "Sum" },
-    { f: "AVG", words: "Average" },
-    { f: "MIN", words: "Minimum" },
-    { f: "MAX", words: "Maximum" },
+  // "P" stands for any percentile; its number is chosen beside it.
+  const funcs: { f: string; words: string }[] = [
+    ...(["COUNT", "SUM", "AVG", "MIN", "MAX", "MEDIAN", "COUNT_DISTINCT", "STDDEV"] as const).map((f) => ({ f, words: funcWords(f) })),
+    { f: "P", words: "Percentile" },
   ];
+  const kind = (m: Measure) => (/^P\d+$/.test(m.func) ? "P" : m.func);
+  const pct = (m: Measure) => (kind(m) === "P" ? Number(m.func.slice(1)) : 90);
+  function setKind(m: Measure, k: string) {
+    m.func = (k === "P" ? `P${pct(m)}` : k) as AggFunc;
+    suggestAlias(m);
+  }
 
   function toggle(name: string) {
     const i = groupBy.indexOf(name);
@@ -28,8 +32,8 @@
     m.alias = m.func === "COUNT" && !m.column ? "rows" : `${m.func.toLowerCase()}_${m.column ?? ""}`;
   }
 
-  // Sum and average need numbers; the core rejects anything else.
-  const needsNumber = (m: Measure) => m.func === "SUM" || m.func === "AVG";
+  // These need numbers; the core rejects anything else.
+  const needsNumber = (m: Measure) => ["SUM", "AVG", "MEDIAN", "STDDEV", "P"].includes(kind(m));
 </script>
 
 <div class="space-y-4">
@@ -62,9 +66,24 @@
     <legend class="mb-2 text-sm text-ink-soft">Summaries</legend>
     {#each measures as m, i (i)}
       <div class="flex flex-wrap items-center gap-2">
-        <select class="field" aria-label="Summary" bind:value={m.func} onchange={() => suggestAlias(m)}>
+        <select class="field" aria-label="Summary" value={kind(m)} onchange={(e) => setKind(m, e.currentTarget.value)}>
           {#each funcs as f (f.f)}<option value={f.f}>{f.words}</option>{/each}
         </select>
+        {#if kind(m) === "P"}
+          <input
+            class="field w-16"
+            type="number"
+            min="1"
+            max="99"
+            aria-label="Percentile"
+            value={pct(m)}
+            onchange={(e) => {
+              const n = Math.min(99, Math.max(1, Math.round(Number(e.currentTarget.value) || 90)));
+              m.func = `P${n}` as AggFunc;
+              suggestAlias(m);
+            }}
+          />
+        {/if}
         <span class="text-ink-faint">of</span>
         <ColumnPicker
           bind:value={m.column}

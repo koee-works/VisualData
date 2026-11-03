@@ -10,3 +10,5 @@ duckdb = { version = "=1.20000.1", features = ["bundled", "parquet", "json"] }
 # Excel and OpenDocument spreadsheets, read in Rust (DuckDB's Excel
 # extension would have to be downloaded at run time; ADR-0001).
 calamine = { version = "=0.38.0", default-features = false }
+# Writing Excel files when results are exported; constant memory streams rows.
+rust_xlsxwriter = { version = "=0.102.0", features = ["constant_memory"] }

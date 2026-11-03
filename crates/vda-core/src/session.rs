@@ -724,6 +724,9 @@ impl Session {
                 | StepKind::Aggregate { .. }
                 | StepKind::Join { .. }
                 | StepKind::Append { .. }
+                | StepKind::Derive { .. }
+                | StepKind::Select { .. }
+                | StepKind::Sort { .. }
                 | StepKind::Sql { .. } => {
                     let ds = self.engine.run_step(&step, &inputs, &tmp)?;
                     Ok(Output::Table(self.artifacts.commit_table(key, ds)?))

@@ -108,6 +108,14 @@ pub enum StepKind {
     /// column an input lacks is missing in its rows. Optionally drop
     /// repeated rows, and record which input each row came from.
     Append { distinct: bool, origin: Option<String> },
+    /// Visual: add or replace columns computed by formulas, in order; each
+    /// formula sees the columns before it, including earlier ones here.
+    Derive { columns: Vec<Derived> },
+    /// Visual: keep these columns, in this order, optionally renamed.
+    Select { columns: Vec<Pick> },
+    /// Visual: order rows (missing values last), ties in input order, then
+    /// optionally keep only the first `limit` rows.
+    Sort { by: Vec<SortKey>, limit: Option<u64> },
     /// Custom SQL. Reads the first input as the relation `input`, and every
     /// input by its id.
     Sql { sql: String },
@@ -125,6 +133,9 @@ impl StepKind {
             StepKind::Aggregate { .. } => "aggregate",
             StepKind::Join { .. } => "join",
             StepKind::Append { .. } => "append",
+            StepKind::Derive { .. } => "derive",
+            StepKind::Select { .. } => "select",
+            StepKind::Sort { .. } => "sort",
             StepKind::Sql { .. } => "sql",
             StepKind::Python { .. } => "python",
             StepKind::Chart { .. } => "chart",
@@ -140,6 +151,9 @@ impl StepKind {
                 | StepKind::Aggregate { .. }
                 | StepKind::Join { .. }
                 | StepKind::Append { .. }
+                | StepKind::Derive { .. }
+                | StepKind::Select { .. }
+                | StepKind::Sort { .. }
                 | StepKind::Chart { .. }
         )
     }
@@ -199,6 +213,27 @@ pub struct JoinKey {
     pub left: String,
     pub op: CmpOp,
     pub right: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Derived {
+    /// A new column, or an existing one to replace.
+    pub name: String,
+    /// Formula text, as typed (see `formula`).
+    pub formula: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Pick {
+    pub column: String,
+    /// New name, if renamed.
+    pub rename: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SortKey {
+    pub column: String,
+    pub descending: bool,
 }
 
 impl JoinKey {
@@ -274,22 +309,63 @@ pub enum AggFunc {
     Avg,
     Min,
     Max,
+    /// The middle value (linear interpolation between the two middle values).
+    Median,
+    /// The p-th percentile, 1 to 99, interpolated like `Median`.
+    Percentile(u8),
+    /// Number of different values, missing values not counted.
+    CountDistinct,
+    /// Sample standard deviation; missing for fewer than two values.
+    Stddev,
 }
 
 impl AggFunc {
-    pub fn sql(self) -> &'static str {
+    /// Name in `analysis.json` and messages: `COUNT`, `MEDIAN`, `P90`, ...
+    pub fn token(self) -> String {
         match self {
-            AggFunc::Count => "COUNT",
-            AggFunc::Sum => "SUM",
-            AggFunc::Avg => "AVG",
-            AggFunc::Min => "MIN",
-            AggFunc::Max => "MAX",
+            AggFunc::Count => "COUNT".into(),
+            AggFunc::Sum => "SUM".into(),
+            AggFunc::Avg => "AVG".into(),
+            AggFunc::Min => "MIN".into(),
+            AggFunc::Max => "MAX".into(),
+            AggFunc::Median => "MEDIAN".into(),
+            AggFunc::Percentile(p) => format!("P{p}"),
+            AggFunc::CountDistinct => "COUNT_DISTINCT".into(),
+            AggFunc::Stddev => "STDDEV".into(),
         }
     }
-    pub fn from_sql(s: &str) -> Option<AggFunc> {
-        [AggFunc::Count, AggFunc::Sum, AggFunc::Avg, AggFunc::Min, AggFunc::Max]
-            .into_iter()
-            .find(|f| f.sql() == s)
+
+    pub fn parse(s: &str) -> Option<AggFunc> {
+        Some(match s {
+            "COUNT" => AggFunc::Count,
+            "SUM" => AggFunc::Sum,
+            "AVG" => AggFunc::Avg,
+            "MIN" => AggFunc::Min,
+            "MAX" => AggFunc::Max,
+            "MEDIAN" => AggFunc::Median,
+            "COUNT_DISTINCT" => AggFunc::CountDistinct,
+            "STDDEV" => AggFunc::Stddev,
+            p => match p.strip_prefix('P').and_then(|n| n.parse::<u8>().ok()) {
+                Some(n) if (1..=99).contains(&n) => AggFunc::Percentile(n),
+                _ => return None,
+            },
+        })
+    }
+
+    /// The SQL aggregate over `arg` (a quoted column, or `*` for COUNT).
+    pub fn sql_over(self, arg: &str) -> String {
+        match self {
+            AggFunc::Median => format!("CAST(quantile_cont(CAST({arg} AS DOUBLE), 0.5) AS DOUBLE)"),
+            AggFunc::Percentile(p) => format!("CAST(quantile_cont(CAST({arg} AS DOUBLE), {}) AS DOUBLE)", p as f64 / 100.0),
+            AggFunc::CountDistinct => format!("COUNT(DISTINCT {arg})"),
+            AggFunc::Stddev => format!("stddev_samp(CAST({arg} AS DOUBLE))"),
+            f => format!("{}({arg})", f.token()),
+        }
+    }
+
+    /// Needs a numeric column, and gives a decimal.
+    pub fn is_statistical(self) -> bool {
+        matches!(self, AggFunc::Median | AggFunc::Percentile(_) | AggFunc::Stddev)
     }
 }
 

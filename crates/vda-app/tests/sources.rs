@@ -197,3 +197,27 @@ fn renaming_a_source_updates_steps_and_keeps_approved_code_approved() {
     let err = app.update_source("targets", Some("aggregate_1".into()), None).unwrap_err().message;
     assert!(err.contains("already used"), "{err}");
 }
+
+#[test]
+fn current_results_and_sources_export_and_outdated_ones_do_not() {
+    let dir = fresh("export");
+    let mut app = app("export");
+    app.create_project(&dir, &samples().join("sales.csv"), "Export").unwrap();
+    app.add_step(&ids(&["source"]), None, &by_region()).unwrap();
+    let out = fresh("export-out").with_extension("d");
+    fs::create_dir_all(&out).unwrap();
+
+    let err = app.export("aggregate_1", &out.join("r.csv")).unwrap_err().message;
+    assert!(err.contains("no result yet"), "{err}");
+    app.run(&mut |_| {}).unwrap();
+    assert_eq!(app.export("aggregate_1", &out.join("r.csv")).unwrap(), 5);
+    let text = fs::read_to_string(out.join("r.csv")).unwrap();
+    assert!(text.starts_with("region,revenue\n"), "{text}");
+    assert_eq!(app.export("aggregate_1", &out.join("r.xlsx")).unwrap(), 5);
+    assert_eq!(app.export("source", &out.join("all.parquet")).unwrap(), 60);
+
+    app.update_step("aggregate_1", None, &json!({"type": "aggregate", "group_by": ["product"], "measures": []}), None).unwrap();
+    let err = app.export("aggregate_1", &out.join("r2.csv")).unwrap_err().message;
+    assert!(err.contains("outdated"), "{err}");
+    assert!(app.export("aggregate_1", &out.join("r.txt")).unwrap_err().message.contains(".csv, .xlsx or .parquet"));
+}

@@ -3,7 +3,7 @@
 An integrated workspace for exploring, transforming, analyzing and visualizing data through visual controls, SQL/Python code, and notebooks, without losing the thread of the analysis.
 
 - Product briefs (v0.2.0): [docs/briefs/](docs/briefs/)
-- Decisions: [ADR-0001 deployment model](docs/adr/0001-deployment-model.md), [ADR-0002 build cache](docs/adr/0002-build-cache.md), [ADR-0003 desktop frontend](docs/adr/0003-frontend.md), [ADR-0004 code review and SQL sandbox](docs/adr/0004-code-review-and-sandbox.md), [ADR-0005 several sources and multi-input steps](docs/adr/0005-multi-input-steps.md)
+- Decisions: [ADR-0001 deployment model](docs/adr/0001-deployment-model.md), [ADR-0002 build cache](docs/adr/0002-build-cache.md), [ADR-0003 desktop frontend](docs/adr/0003-frontend.md), [ADR-0004 code review and SQL sandbox](docs/adr/0004-code-review-and-sandbox.md), [ADR-0005 several sources and multi-input steps](docs/adr/0005-multi-input-steps.md), [ADR-0006 formulas and core transforms](docs/adr/0006-formulas-and-core-transforms.md)
 - Current state of the first engineering slice: [STATUS.md](STATUS.md)
 
 ## Layout
@@ -20,6 +20,7 @@ crates/vda-core/          Rust core: model, compiler, planner, sessions, DuckDB 
   tests/sandbox.rs        custom SQL: project files only, one read-only query
   tests/multi_input.rs    several sources, joins, SQL/Python reading several inputs, renaming, format 1 compatibility
   tests/source_formats.rs Excel, Parquet and JSON sources (fixtures in tests/fixtures/)
+  tests/export.rs         export to CSV, Excel and Parquet reads back to the same table
   examples/slice.rs       runs the slice end to end and writes a project folder
   examples/bench.rs       large-data benchmark (see STATUS.md for results)
 examples/regional-revenue/sales.csv   sample dataset (60 orders, with missing values)
@@ -43,6 +44,12 @@ npm run tauri dev                  # the app, with hot reload
 npm run dev                        # the UI alone in a browser, against an in-memory mock (?demo=1 seeds an analysis)
 npm run check && npm test          # types and unit tests
 ```
+
+### Shaping data
+
+**Calculate columns** adds or replaces columns with formulas: `units * unit_price`, `coalesce(region, "Unknown")`, `date_trunc("month", order_date)`, `if(revenue >= target, "met", "below")`. The formula language is checked as you save and behaves the same in DuckDB and the reference engine (dividing by zero gives a missing value, not infinity). **Choose and rename columns**, **Sort rows, keep the top**, and summaries with median, percentiles, distinct counts and standard deviation are visual steps too. Any current result can be **exported** to CSV, Excel or Parquet. See [ADR-0006](docs/adr/0006-formulas-and-core-transforms.md).
+
+![A calculated column, with the formulas that make it](docs/screenshots/12-formula.png)
 
 ### Combining data
 

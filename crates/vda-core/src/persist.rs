@@ -84,7 +84,7 @@ pub fn step_kind_to_json(kind: &StepKind) -> Json {
                         .iter()
                         .map(|m| {
                             Json::obj(vec![
-                                ("func", Json::str(m.func.sql())),
+                                ("func", Json::str(m.func.token())),
                                 ("column", m.column.clone().map(Json::Str).unwrap_or(Json::Null)),
                                 ("alias", Json::str(m.alias.clone())),
                             ])
@@ -117,6 +117,47 @@ pub fn step_kind_to_json(kind: &StepKind) -> Json {
             ("type", Json::str("append")),
             ("distinct", Json::Bool(*distinct)),
             ("origin", origin.clone().map(Json::Str).unwrap_or(Json::Null)),
+        ]),
+        StepKind::Derive { columns } => Json::obj(vec![
+            ("type", Json::str("derive")),
+            (
+                "columns",
+                Json::Arr(
+                    columns
+                        .iter()
+                        .map(|c| Json::obj(vec![("name", Json::str(c.name.clone())), ("formula", Json::str(c.formula.clone()))]))
+                        .collect(),
+                ),
+            ),
+        ]),
+        StepKind::Select { columns } => Json::obj(vec![
+            ("type", Json::str("select")),
+            (
+                "columns",
+                Json::Arr(
+                    columns
+                        .iter()
+                        .map(|c| {
+                            Json::obj(vec![
+                                ("column", Json::str(c.column.clone())),
+                                ("as", c.rename.clone().map(Json::Str).unwrap_or(Json::Null)),
+                            ])
+                        })
+                        .collect(),
+                ),
+            ),
+        ]),
+        StepKind::Sort { by, limit } => Json::obj(vec![
+            ("type", Json::str("sort")),
+            (
+                "by",
+                Json::Arr(
+                    by.iter()
+                        .map(|k| Json::obj(vec![("column", Json::str(k.column.clone())), ("descending", Json::Bool(k.descending))]))
+                        .collect(),
+                ),
+            ),
+            ("limit", limit.map(|n| Json::Num(n as f64)).unwrap_or(Json::Null)),
         ]),
         StepKind::Sql { sql } => Json::obj(vec![("type", Json::str("sql")), ("sql", Json::str(sql.clone()))]),
         StepKind::Python { code, timeout_ms } => Json::obj(vec![
@@ -163,7 +204,7 @@ pub fn step_kind_from_json(j: &Json) -> Result<StepKind, Error> {
                 .iter()
                 .map(|m| {
                     Ok(Measure {
-                        func: AggFunc::from_sql(m.req_str("func")?)
+                        func: AggFunc::parse(m.req_str("func")?)
                             .ok_or_else(|| Error::Format("unknown aggregate".into()))?,
                         column: m.get("column").and_then(Json::as_str).map(str::to_string),
                         alias: m.req_str("alias")?.to_string(),
@@ -188,6 +229,39 @@ pub fn step_kind_from_json(j: &Json) -> Result<StepKind, Error> {
         "append" => StepKind::Append {
             distinct: j.get("distinct") == Some(&Json::Bool(true)),
             origin: opt_str("origin").filter(|o| !o.is_empty()),
+        },
+        "derive" => StepKind::Derive {
+            columns: j
+                .req_arr("columns")?
+                .iter()
+                .map(|c| Ok(Derived { name: c.req_str("name")?.to_string(), formula: c.req_str("formula")?.to_string() }))
+                .collect::<Result<_, Error>>()?,
+        },
+        "select" => StepKind::Select {
+            columns: j
+                .req_arr("columns")?
+                .iter()
+                .map(|c| {
+                    Ok(Pick {
+                        column: c.req_str("column")?.to_string(),
+                        rename: c.get("as").and_then(Json::as_str).filter(|s| !s.is_empty()).map(str::to_string),
+                    })
+                })
+                .collect::<Result<_, Error>>()?,
+        },
+        "sort" => StepKind::Sort {
+            by: j
+                .req_arr("by")?
+                .iter()
+                .map(|k| {
+                    Ok(SortKey { column: k.req_str("column")?.to_string(), descending: k.get("descending") == Some(&Json::Bool(true)) })
+                })
+                .collect::<Result<_, Error>>()?,
+            limit: match j.get("limit").and_then(Json::as_f64) {
+                Some(n) if n >= 0.0 && n.fract() == 0.0 => Some(n as u64),
+                Some(_) => return Err(Error::Format("limit must be a whole number".into())),
+                None => None,
+            },
         },
         "sql" => StepKind::Sql { sql: j.req_str("sql")?.to_string() },
         "python" => StepKind::Python {

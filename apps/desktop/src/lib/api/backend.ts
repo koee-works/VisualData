@@ -40,6 +40,10 @@ export interface Backend {
   startupProject(): Promise<string | null>;
   pickCsv(): Promise<string | null>;
   pickFolder(): Promise<string | null>;
+  /** Ask where to save a file; `null` if cancelled. */
+  pickSavePath(defaultName: string): Promise<string | null>;
+  /** Export a source or a current step result; the format follows the extension. */
+  exportResult(id: string, path: string): Promise<number>;
 }
 
 /** Errors from the backend carry a user-facing message. */

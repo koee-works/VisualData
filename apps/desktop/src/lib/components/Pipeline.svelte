@@ -1,6 +1,21 @@
 <script lang="ts">
   import { DropdownMenu } from "bits-ui";
-  import { Plus, Database, Filter, Sigma, Braces, Code, ChartColumn, Combine, FilePlus2, Rows3, Sheet } from "@lucide/svelte";
+  import {
+    Plus,
+    Database,
+    Filter,
+    Sigma,
+    Braces,
+    Code,
+    ChartColumn,
+    Combine,
+    FilePlus2,
+    Rows3,
+    Sheet,
+    Calculator,
+    Columns3,
+    ArrowDownUp,
+  } from "@lucide/svelte";
   import type { Workspace } from "../workspace.svelte";
   import type { StepOp, StepView } from "../api/types";
   import { formatCount, stepTitle } from "../format";
@@ -8,7 +23,18 @@
 
   let { ws }: { ws: Workspace } = $props();
 
-  const icons = { filter: Filter, aggregate: Sigma, join: Combine, append: Rows3, sql: Braces, python: Code, chart: ChartColumn };
+  const icons = {
+    filter: Filter,
+    aggregate: Sigma,
+    join: Combine,
+    append: Rows3,
+    derive: Calculator,
+    select: Columns3,
+    sort: ArrowDownUp,
+    sql: Braces,
+    python: Code,
+    chart: ChartColumn,
+  };
 
   // Columns of whatever the new step would read.
   let inputColumns = $derived(ws.columnsOf(ws.selected) ?? []);
@@ -21,6 +47,9 @@
     return options.find((o) => ws.isSource(o.id)) ?? options[0] ?? null;
   });
 
+  /** A column as a formula refers to it. */
+  const ref = (name: string) => (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ? name : `[${name}]`);
+
   function starter(type: StepOp["type"]): StepOp {
     const cols = inputColumns;
     const first = cols[0]?.name ?? "";
@@ -29,6 +58,14 @@
     switch (type) {
       case "append":
         return { type, distinct: false, origin: null };
+      case "derive":
+        return numeric && cols.some((c) => c.name === numeric && (c.type === "BIGINT" || c.type === "DOUBLE"))
+          ? { type, columns: [{ name: `${numeric}_rounded`, formula: `round(${ref(numeric)}, 2)` }] }
+          : { type, columns: [{ name: "label", formula: text ? `upper(${ref(text)})` : '"…"' }] };
+      case "select":
+        return { type, columns: cols.map((c) => ({ column: c.name, as: null })) };
+      case "sort":
+        return { type, by: [{ column: numeric, descending: true }], limit: null };
       case "join": {
         // Prefer a column both sides share by name.
         const other = joinPartner ? (ws.columnsOf(joinPartner.id) ?? []) : [];
@@ -52,6 +89,9 @@
 
   const choices: { type: StepOp["type"]; name: string; hint: string }[] = [
     { type: "filter", name: "Filter rows", hint: "Visual" },
+    { type: "derive", name: "Calculate columns", hint: "Visual" },
+    { type: "select", name: "Choose and rename columns", hint: "Visual" },
+    { type: "sort", name: "Sort rows, keep the top", hint: "Visual" },
     { type: "aggregate", name: "Group and summarize", hint: "Visual" },
     { type: "join", name: "Join with another table", hint: "Visual" },
     { type: "append", name: "Append another table's rows", hint: "Visual" },

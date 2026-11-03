@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import type { Backend, RunHandlers } from "./backend";
 import type { AnalysisView, NotebookCell, Page, ProfileRow, RunSummary, StepEvent, StepOp } from "./types";
 
@@ -49,6 +49,18 @@ export const tauriBackend: Backend = {
     });
     return typeof p === "string" ? p : null;
   },
+  async pickSavePath(defaultName) {
+    const p = await save({
+      defaultPath: defaultName,
+      filters: [
+        { name: "CSV", extensions: ["csv"] },
+        { name: "Excel workbook", extensions: ["xlsx"] },
+        { name: "Parquet", extensions: ["parquet"] },
+      ],
+    });
+    return typeof p === "string" ? p : null;
+  },
+  exportResult: (id, path) => invoke<number>("export", { id, path }),
   async pickFolder() {
     const p = await open({ multiple: false, directory: true });
     return typeof p === "string" ? p : null;

@@ -160,5 +160,7 @@
     font-family: var(--font-mono);
     font-size: 0.8125rem;
     line-height: 1.55;
+    /* Show what to type: ">=" stays two characters, not a ligature. */
+    font-variant-ligatures: none;
   }
 }

@@ -36,7 +36,13 @@ if [ "${2:-}" != "" ]; then
     {"id": "below", "inputs": ["vs_target", "regions"], "label": "Regions below target",
      "op": {"type": "sql", "sql": "SELECT region, manager, revenue, target\nFROM input\nWHERE region IN (SELECT region FROM regions) AND coalesce(revenue, 0) < target\nORDER BY region"}},
     {"id": "all_regions", "inputs": ["regions", "sheet"], "label": "Regions from both files",
-     "op": {"type": "append", "distinct": false, "origin": "from_file"}}
+     "op": {"type": "append", "distinct": false, "origin": "from_file"}},
+    {"id": "progress", "inputs": ["vs_target"], "label": "Progress against target",
+     "op": {"type": "derive", "columns": [
+       {"name": "share_of_target", "formula": "round(coalesce(revenue, 0) / target, 3)"},
+       {"name": "status", "formula": "if(share_of_target >= 1, \"met\", \"below\")"}]}},
+    {"id": "top", "inputs": ["progress"], "label": "Closest to target",
+     "op": {"type": "sort", "by": [{"column": "share_of_target", "descending": true}], "limit": 2}}
   ],
   "cells": [
     {"type": "markdown", "text": "## Which regions are below target?"},

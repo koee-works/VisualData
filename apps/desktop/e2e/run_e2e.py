@@ -84,6 +84,9 @@ class Session:
 
     def clear_and_type(self, xpath, value):
         el = self.find(xpath)
+        # Editors scroll inside their panel; WebKit's driver does not scroll there itself.
+        ref = {"element-6066-11e4-a52e-4f735466cecf": el}
+        call("POST", f"/session/{self.id}/execute/sync", {"script": "arguments[0].scrollIntoView({block: 'center'})", "args": [ref]})
         call("POST", f"/session/{self.id}/element/{el}/clear", {})
         call("POST", f"/session/{self.id}/element/{el}/value", {"text": value})
 
@@ -254,7 +257,7 @@ def joins(s, shots):
     step(11, "Run: the full join keeps a region with no orders; its SQL is a full outer join")
     s.click("//button[normalize-space()='Run analysis']")
     s.wait_text(STATUS, "All results current")
-    assert s.count(mark("Current")) == 4
+    assert s.count(mark("Current")) == 6
     s.click(node("Revenue against target"))
     s.wait_text(table, "Central")
     assert "Mei Chen" in s.text(table)
@@ -266,7 +269,7 @@ def joins(s, shots):
     s.click("//button[@role='tab' and normalize-space()='Data']")
     s.click("//label[.//span[normalize-space()='Only rows that match']]")
     s.click("//button[normalize-space()='Save step']")
-    s.wait_text(STATUS, "2 of 4 results need a run")
+    s.wait_text(STATUS, "4 of 6 results need a run")
     s.click("//button[normalize-space()='Run analysis']")
     s.wait_text(STATUS, "All results current")
     s.wait_text(node("Revenue against target"), "4 rows")
@@ -304,6 +307,25 @@ def joins(s, shots):
     s.click(node("Regions below target"))
     s.click("//button[@role='tab' and normalize-space()='SQL']")
     s.wait_text("//pre", "FROM targets")
+
+    step(17, "Calculated columns: a formula error says what is wrong; fixed, it runs and the sort keeps the top two")
+    s.click(node("Progress against target"))
+    s.click("//button[@role='tab' and normalize-space()='Data']")
+    s.wait_text(table, "share_of_target")
+    formula = "(//textarea[@aria-label='Formula'])[2]"
+    s.clear_and_type(formula, 'if(share_of_target >= 1, "met", 0)')
+    s.click("//button[normalize-space()='Save step']")
+    s.wait_text("//*[@role='alert']", "mixes text and a whole number")
+    s.screenshot(f"{shots}/11-formula-error.png")
+    s.clear_and_type(formula, 'if(share_of_target >= 1, "met", "below " & format(share_of_target * 100, 0) & "%")')
+    s.click("//button[normalize-space()='Save step']")
+    s.wait_text(STATUS, "need a run")
+    s.click("//button[normalize-space()='Run analysis']")
+    s.wait_text(STATUS, "All results current")
+    s.wait_text(table, "below ")
+    s.screenshot(f"{shots}/12-formula.png")
+    s.click(node("Closest to target"))
+    s.wait_text(node("Closest to target"), "2 rows")
 
 
 if __name__ == "__main__":

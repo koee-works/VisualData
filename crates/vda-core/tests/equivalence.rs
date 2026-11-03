@@ -635,3 +635,202 @@ fn inspectable_sql_of_an_append_executes_to_the_same_result() {
     let combined = DuckDbEngine::new().unwrap().query(&sql).unwrap_or_else(|e| panic!("{e}\n{sql}"));
     assert_same("append pipeline", &direct, &combined);
 }
+
+// --------------------------------------------- formulas, select, sort, stats
+
+const FORMULA_CSV: &str = "\
+id,units,price,region,name,day,at,flag,code
+1,3,2.5,East, Ada ,2026-07-19,2026-07-19 10:30:00,true,7
+2,0,-1.25,West,bo,2026-01-01,2026-01-01 00:00:00,false,2.5
+3,,4,,Cy Smith,,,,abc
+4,-7,0,North,dé,1969-12-31,1969-12-31 23:59:59.5,true,
+5,9223372036854775806,1e10,South,Eve,2024-02-29,2024-02-29 12:00:00,false,12
+";
+
+fn derive(formulas: &[(&str, &str)]) -> StepKind {
+    StepKind::Derive {
+        columns: formulas
+            .iter()
+            .map(|(n, f)| vda_core::model::Derived { name: (*n).into(), formula: (*f).into() })
+            .collect(),
+    }
+}
+
+#[test]
+fn formulas_agree() {
+    let formulas = [
+        // arithmetic and its edges
+        "units * 2", "units + price", "price - units", "units / 2", "units / 0", "price / units", "units % 3", "-units",
+        "units % 0", "price % 0.75", "power(price, 2)", "sqrt(price)", "sqrt(-1)", "abs(units)", "abs(price)",
+        "round(price)", "round(price, 1)", "round(-2.5)", "round(2.675, 2)", "floor(price)", "ceil(price)",
+        "round(units)", "1 + 2 * 3 - 4 / 2", "(1 + 2) * 3", "1e300 * 1e300", ".5 + 1",
+        // comparisons and logic
+        "units > 0", "price <= 0", "region = \"East\"", "region <> 'East'", "units >= price", "day > at",
+        "flag and units > 0", "flag or units > 0", "not flag", "region is missing", "units is not missing",
+        "flag = true", "units > 0 and price > 0 or region = 'West'",
+        // if / coalesce / missing values
+        "if(units > 0, \"positive\", \"not positive\")", "if(flag, units, price)", "coalesce(region, 'Unknown')",
+        "coalesce(units, 0)", "coalesce(units, price, 0)", "if(region is missing, missing, region & '!')",
+        "missing", "coalesce(day, at)",
+        // text
+        "upper(name)", "lower(name)", "trim(name)", "length(name)", "region & '-' & name", "concat(region, '/', name)",
+        "contains(name, 'y')", "starts_with(name, 'C')", "ends_with(name, 'o')", "replace(name, 'o', '0')",
+        "replace(name, '', 'x')", "substr(name, 2, 3)", "substr(name, 0, 2)", "substr(name, -1, 2)", "substr(name, 9, 2)",
+        "substr(name, 1, -1)", "text(units)", "text(flag)", "text(day)", "text(at)", "format(price, 2)",
+        "format(units, 0)", "format(-0.001, 2)",
+        // conversions
+        "number(code)", "integer(code)", "number(units)", "integer(price)", "integer('2.5')", "integer('-2.5')",
+        "integer('1e3')", "number(' 1.5 ')", "number('abc')", "number('inf')", "date('2026-07-03')", "date('7/3/2026')",
+        "date(at)", "date(day)",
+        // dates
+        "year(day)", "quarter(day)", "month(day)", "day(day)", "weekday(day)", "hour(at)", "minute(at)", "hour(day)",
+        "date_trunc('month', day)", "date_trunc('week', day)", "date_trunc('quarter', day)", "date_trunc('year', at)",
+        "date_trunc('day', at)", "date_trunc('hour', at)", "date_trunc('minute', at)", "days_between(day, '2026-12-25')",
+        "days_between(day, at)", "add_days(day, 30)", "add_days(at, -1)", "add_days(day, units)",
+    ];
+    let src = write("formulas.csv", FORMULA_CSV);
+    let (mut reference, mut duck) = (ReferenceEngine::new(), DuckDbEngine::new().unwrap());
+    let (r_src, d_src) = (reference.import_table(&src).unwrap(), duck.import_table(&src).unwrap());
+    let mut failures = Vec::new();
+    for f in formulas {
+        // Each formula alone, so one difference does not hide the others.
+        let step = Step { id: "s".into(), inputs: vec![SOURCE_ID.into()], label: None, kind: derive(&[("out", f)]) };
+        let case = format!("formula `{f}`");
+        match (reference.run_table(&step, &r_src), duck.run_table(&step, &d_src)) {
+            (Ok(r), Ok(d)) => {
+                if std::panic::catch_unwind(|| assert_same(&case, &r, &d)).is_err() {
+                    failures.push(format!("{case}: results differ (see above)"));
+                }
+            }
+            (Err(_), Err(_)) => {}
+            (Ok(_), Err(e)) => failures.push(format!("{case}: only DuckDB failed: {e}")),
+            (Err(e), Ok(_)) => failures.push(format!("{case}: only the reference failed: {e}")),
+        }
+    }
+    assert!(failures.is_empty(), "{} formulas disagree:\n{}", failures.len(), failures.join("\n"));
+}
+
+#[test]
+fn formula_overflow_is_an_error_in_both() {
+    for f in ["units + 2", "units * 2", "abs(-9223372036854775807 - 1)", "-(-9223372036854775807 - 1)"] {
+        let src = write("formulas.csv", FORMULA_CSV);
+        let step = Step { id: "s".into(), inputs: vec![SOURCE_ID.into()], label: None, kind: derive(&[("out", f)]) };
+        let r = ReferenceEngine::new().run_table(&step, &ReferenceEngine::new().import_table(&src).unwrap());
+        let mut duck = DuckDbEngine::new().unwrap();
+        let d_src = duck.import_table(&src).unwrap();
+        let d = duck.run_table(&step, &d_src);
+        assert!(r.is_err() && d.is_err(), "`{f}`: reference {:?}, duckdb {:?}", r.map(|_| ()), d.map(|_| ()));
+    }
+}
+
+#[test]
+fn derived_columns_chain_and_replace() {
+    let src = write("formulas.csv", FORMULA_CSV);
+    run_both(&src, "chain", derive(&[("total", "units * price"), ("big", "total > 5"), ("region", "coalesce(region, '?')")]));
+    let mut duck = DuckDbEngine::new().unwrap();
+    let d_src = duck.import_table(&src).unwrap();
+    let step = Step {
+        id: "s".into(),
+        inputs: vec![SOURCE_ID.into()],
+        label: None,
+        kind: derive(&[("total", "units * price"), ("region", "coalesce(region, '?')")]),
+    };
+    let out = duck.run_table(&step, &d_src).unwrap();
+    let names: Vec<&str> = out.schema.fields.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["id", "units", "price", "region", "name", "day", "at", "flag", "code", "total"], "replaced in place");
+    assert_eq!(out.rows[2][3], Value::Text("?".into()));
+}
+
+#[test]
+fn select_and_sort_agree() {
+    use vda_core::model::{Pick, SortKey};
+    let src = write("formulas.csv", FORMULA_CSV);
+    run_both(&src, "select", StepKind::Select {
+        columns: vec![
+            Pick { column: "region".into(), rename: Some("area".into()) },
+            Pick { column: "id".into(), rename: None },
+        ],
+    });
+    let key = |c: &str, d: bool| SortKey { column: c.into(), descending: d };
+    run_both(&src, "sort asc", StepKind::Sort { by: vec![key("price", false)], limit: None });
+    run_both(&src, "sort desc nulls last", StepKind::Sort { by: vec![key("units", true)], limit: None });
+    run_both(&src, "sort two keys with ties", StepKind::Sort { by: vec![key("flag", false), key("region", true)], limit: Some(3) });
+    run_both(&src, "limit only", StepKind::Sort { by: vec![], limit: Some(2) });
+    run_both(&src, "limit zero", StepKind::Sort { by: vec![key("id", false)], limit: Some(0) });
+    let edge = write("edge.csv", EDGE_CSV);
+    run_both(&edge, "sort text with ties", StepKind::Sort { by: vec![key("k", false)], limit: None });
+}
+
+#[test]
+fn statistical_aggregates_agree() {
+    let src = write("edge.csv", EDGE_CSV);
+    use AggFunc::*;
+    run_both(&src, "stats by group", StepKind::Aggregate {
+        group_by: vec!["k".into()],
+        measures: vec![
+            m(Median, Some("n"), "median_n"),
+            m(Percentile(90), Some("x"), "p90_x"),
+            m(Percentile(10), Some("n"), "p10_n"),
+            m(CountDistinct, Some("g"), "distinct_g"),
+            m(CountDistinct, Some("s"), "distinct_s"),
+            m(Stddev, Some("x"), "sd_x"),
+        ],
+    });
+    run_both(&src, "stats overall", StepKind::Aggregate {
+        group_by: vec![],
+        measures: vec![m(Median, Some("x"), "median"), m(Stddev, Some("n"), "sd"), m(CountDistinct, Some("k"), "keys")],
+    });
+}
+
+#[test]
+fn inspectable_sql_of_derive_select_sort_executes_to_the_same_result() {
+    use vda_core::model::{Analysis, Derived, Pick, SortKey, Source};
+    let src = write("pipeline-formulas.csv", FORMULA_CSV);
+    let a = Analysis {
+        name: "transforms".into(),
+        sources: vec![Source::primary(src.to_string_lossy())],
+        steps: vec![
+            Step {
+                id: "calc".into(),
+                inputs: vec![SOURCE_ID.into()],
+                label: None,
+                kind: StepKind::Derive {
+                    columns: vec![
+                        Derived { name: "total".into(), formula: "coalesce(units, 0) * price".into() },
+                        Derived { name: "month".into(), formula: "date_trunc('month', day)".into() },
+                    ],
+                },
+            },
+            Step {
+                id: "pick".into(),
+                inputs: vec!["calc".into()],
+                label: None,
+                kind: StepKind::Select {
+                    columns: vec![
+                        Pick { column: "region".into(), rename: Some("area".into()) },
+                        Pick { column: "total".into(), rename: None },
+                        Pick { column: "month".into(), rename: None },
+                    ],
+                },
+            },
+            Step {
+                id: "top".into(),
+                inputs: vec!["pick".into()],
+                label: None,
+                kind: StepKind::Sort { by: vec![SortKey { column: "total".into(), descending: true }], limit: Some(3) },
+            },
+        ],
+        cells: vec![],
+    };
+    let mut duck = DuckDbEngine::new().unwrap();
+    let mut tables = std::collections::HashMap::new();
+    tables.insert(SOURCE_ID.to_string(), duck.import_table(&src).unwrap());
+    for step in &a.steps {
+        let t = duck.run_tables(step, &[&tables[&step.inputs[0]]]).unwrap_or_else(|e| panic!("{}: {e}", step.id));
+        tables.insert(step.id.clone(), t);
+        let sql = vda_core::compile::pipeline_sql_with(&a, &step.id, &|id| tables.get(id).map(|t| t.schema.clone())).unwrap();
+        let direct = DuckDbEngine::new().unwrap().query(&sql).unwrap_or_else(|e| panic!("{e}\n{sql}"));
+        assert_same(&format!("pipeline for {}", step.id), &tables[&step.id], &direct);
+    }
+    assert_eq!(tables["top"].rows.len(), 3);
+}

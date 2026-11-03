@@ -22,6 +22,8 @@ export class Workspace {
   revision = $state(0);
   /** Whether the code review dialog is open. */
   reviewOpen = $state(false);
+  /** A short confirmation to show (an export finished, say). */
+  notice = $state<string | null>(null);
 
   constructor(readonly backend: Backend) {}
 
@@ -95,6 +97,15 @@ export class Workspace {
     this.progress = {};
     // Code someone else wrote is shown before anything can run it.
     this.reviewOpen = this.pendingReview.length > 0;
+  }
+
+  /** Ask where to save, then export a source or a current result. */
+  async exportResult(id: string, ext: "csv" | "xlsx" | "parquet") {
+    const base = (this.nameOf(id) || id).replace(/\.[^.]+$/, "").replace(/[\\/:*?"<>|]+/g, "-");
+    const path = await this.backend.pickSavePath(`${base}.${ext}`);
+    if (!path) return;
+    const rows = await this.act("Export", () => this.backend.exportResult(id, path));
+    if (rows !== undefined) this.notice = `Exported ${rows.toLocaleString("en-US")} row${rows === 1 ? "" : "s"} to ${path}`;
   }
 
   /** "Trust all in this session": run all Python without review until the app quits. */

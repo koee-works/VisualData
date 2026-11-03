@@ -278,3 +278,54 @@ describe("Append, comparison joins and source settings", () => {
     expect(ws.error?.message).toContain("already used");
   });
 });
+
+describe("Core transforms and export", () => {
+  async function seeded() {
+    const mock = new MockBackend();
+    await mock.seedDemo({ run: false, editAfterRun: false });
+    const ws = new Workspace(mock);
+    await ws.open("/projects/x");
+    return { ws, mock };
+  }
+
+  it("selects, renames and reorders columns", async () => {
+    const { ws } = await seeded();
+    ws.selected = "source";
+    await ws.addStep({ type: "select", columns: [{ column: "revenue", as: "amount" }, { column: "region", as: null }] });
+    await ws.run();
+    const page = await ws.backend.page("select_1", 0, 5);
+    expect(page.columns.map((c) => c.name)).toEqual(["amount", "region"]);
+  });
+
+  it("sorts with missing values last and keeps the top rows", async () => {
+    const { ws } = await seeded();
+    ws.selected = "source";
+    await ws.addStep({ type: "sort", by: [{ column: "revenue", descending: true }], limit: 3 });
+    await ws.run();
+    const page = await ws.backend.page("sort_1", 0, 10);
+    expect(page.total_rows).toBe(3);
+    const vals = page.rows.map((r) => (r[3]!.t === "float" ? r[3]!.v : null));
+    expect(vals).toEqual([...vals].sort((a, b) => b! - a!));
+  });
+
+  it("describes the new steps in words", async () => {
+    const { describe: d } = await import("./format");
+    expect(d({ type: "sort", by: [{ column: "revenue", descending: true }], limit: 10 })).toBe("Sort by revenue (highest first), first 10");
+    expect(d({ type: "derive", columns: [{ name: "total", formula: "a * b" }] })).toBe("Calculate total");
+    expect(d({ type: "aggregate", group_by: ["region"], measures: [{ func: "P90", column: "revenue", alias: "p" }] })).toBe(
+      "90th percentile of revenue by region",
+    );
+  });
+
+  it("exports a current result and refuses an outdated one", async () => {
+    const { ws, mock } = await seeded();
+    await ws.run();
+    await ws.exportResult("aggregate_1", "xlsx");
+    expect(mock.exports).toEqual([["aggregate_1", "/exports/Revenue by region.xlsx"]]);
+    expect(ws.notice).toContain("Exported 4 rows");
+    const f = ws.view!.steps.find((s) => s.id === "filter_1")!;
+    if (f.op.type === "filter") await ws.saveStep("filter_1", f.label, { ...f.op, predicates: [] });
+    await ws.exportResult("aggregate_1", "csv");
+    expect(ws.error?.message).toContain("outdated");
+  });
+});

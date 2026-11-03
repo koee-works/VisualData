@@ -59,7 +59,7 @@ pub fn step_sql(kind: &StepKind) -> Option<String> {
                     Some(c) => quote_ident(c),
                     None => "*".into(),
                 };
-                cols.push(format!("{}({}) AS {}", m.func.sql(), arg, quote_ident(&m.alias)));
+                cols.push(format!("{} AS {}", m.func.sql_over(&arg), quote_ident(&m.alias)));
             }
             let mut sql = format!("SELECT {} FROM input", cols.join(", "));
             if !group_by.is_empty() {
@@ -73,8 +73,37 @@ pub fn step_sql(kind: &StepKind) -> Option<String> {
             }
             Some(sql)
         }
+        StepKind::Select { columns } => Some(format!(
+            "SELECT {} FROM input",
+            columns
+                .iter()
+                .map(|c| match &c.rename {
+                    Some(n) => format!("{} AS {}", quote_ident(&c.column), quote_ident(n)),
+                    None => quote_ident(&c.column),
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+        StepKind::Sort { by, limit } => {
+            // Row numbers keep ties in input order; missing values sort last
+            // in both directions.
+            let mut keys: Vec<String> = by
+                .iter()
+                .map(|k| format!("{} {} NULLS LAST", quote_ident(&k.column), if k.descending { "DESC" } else { "ASC" }))
+                .collect();
+            keys.push("__vda_r".into());
+            let limit = limit.map(|n| format!(" LIMIT {n}")).unwrap_or_default();
+            Some(format!(
+                "SELECT * EXCLUDE (__vda_r) FROM (SELECT *, row_number() OVER () AS __vda_r FROM input) ORDER BY {}{limit}",
+                keys.join(", ")
+            ))
+        }
         StepKind::Sql { sql } => Some(sql.trim().trim_end_matches(';').to_string()),
-        StepKind::Join { .. } | StepKind::Append { .. } | StepKind::Python { .. } | StepKind::Chart { .. } => None,
+        StepKind::Join { .. }
+        | StepKind::Append { .. }
+        | StepKind::Derive { .. }
+        | StepKind::Python { .. }
+        | StepKind::Chart { .. } => None,
     }
 }
 
@@ -157,8 +186,59 @@ pub fn step_sql_for(step: &Step, inputs: &[Schema]) -> Result<Option<String>, Er
                 parts.join(" UNION ALL ")
             )))
         }
+        StepKind::Derive { columns } => {
+            let mut schema = inputs.first().cloned().ok_or_else(|| Error::Validation(format!("step `{}` has no input", step.id)))?;
+            let mut sql = "SELECT * FROM input".to_string();
+            for c in columns {
+                let (expr, dtype) = derived(step, c, &schema)?;
+                let body = crate::formula::to_sql(&expr, &schema).map_err(|m| derive_error(step, c, m))?;
+                sql = if schema.field(&c.name).is_some() {
+                    format!("SELECT * REPLACE ({body} AS {}) FROM ({sql})", quote_ident(&c.name))
+                } else {
+                    format!("SELECT *, {body} AS {} FROM ({sql})", quote_ident(&c.name))
+                };
+                set_field(&mut schema, &c.name, dtype);
+            }
+            Ok(Some(sql))
+        }
         kind => Ok(step_sql(kind)),
     }
+}
+
+fn derive_error(step: &Step, c: &crate::model::Derived, m: String) -> Error {
+    let name = if c.name.trim().is_empty() { "the new column".to_string() } else { format!("`{}`", c.name) };
+    Error::Validation(format!("step `{}`: formula for {name}: {m}", step.id))
+}
+
+/// Parse and type a derived column against the columns before it.
+fn derived(step: &Step, c: &crate::model::Derived, schema: &Schema) -> Result<(crate::formula::Expr, DataType), Error> {
+    if c.name.trim().is_empty() {
+        return Err(Error::Validation(format!("step `{}`: name each calculated column", step.id)));
+    }
+    let expr = crate::formula::parse(&c.formula).map_err(|m| derive_error(step, c, m))?;
+    let dtype = crate::formula::result_type(&expr, schema).map_err(|m| derive_error(step, c, m))?;
+    Ok((expr, dtype))
+}
+
+fn set_field(schema: &mut Schema, name: &str, dtype: DataType) {
+    match schema.fields.iter_mut().find(|f| f.name == name) {
+        Some(f) => f.dtype = dtype,
+        None => schema.fields.push(Field { name: name.to_string(), dtype }),
+    }
+}
+
+/// The schemas a derive step sees before each of its columns, and the
+/// parsed formulas (for the reference engine).
+pub fn derive_plan(step: &Step, input: &Schema) -> Result<Vec<(crate::formula::Expr, Schema)>, Error> {
+    let StepKind::Derive { columns } = &step.kind else { unreachable!("derive_plan is only called for derives") };
+    let mut schema = input.clone();
+    let mut out = Vec::new();
+    for c in columns {
+        let (expr, dtype) = derived(step, c, &schema)?;
+        out.push((expr, schema.clone()));
+        set_field(&mut schema, &c.name, dtype);
+    }
+    Ok(out)
 }
 
 /// Output columns of an append: the first input's columns, then columns
@@ -338,6 +418,44 @@ pub fn output_schema(step: &Step, inputs: &[Schema]) -> Result<Option<Schema>, E
             }
             Ok(Some(input.clone()))
         }
+        StepKind::Derive { columns } => {
+            if columns.is_empty() {
+                return Err(Error::Validation(format!("step `{id}`: add a calculated column")));
+            }
+            let mut schema = input.clone();
+            for c in columns {
+                let (_, dtype) = derived(step, c, &schema)?;
+                set_field(&mut schema, &c.name, dtype);
+            }
+            Ok(Some(schema))
+        }
+        StepKind::Select { columns } => {
+            if columns.is_empty() {
+                return Err(Error::Validation(format!("step `{id}`: choose at least one column to keep")));
+            }
+            let mut fields: Vec<Field> = Vec::new();
+            for c in columns {
+                let f = require(input, &c.column, id)?;
+                let name = c.rename.clone().unwrap_or_else(|| c.column.clone());
+                if name.trim().is_empty() {
+                    return Err(Error::Validation(format!("step `{id}`: the new name for `{}` is empty", c.column)));
+                }
+                if fields.iter().any(|g| g.name == name) {
+                    return Err(Error::Validation(format!("step `{id}`: two columns would be called `{name}`")));
+                }
+                fields.push(Field { name, dtype: f.dtype });
+            }
+            Ok(Some(Schema { fields }))
+        }
+        StepKind::Sort { by, limit } => {
+            if by.is_empty() && limit.is_none() {
+                return Err(Error::Validation(format!("step `{id}`: choose a column to sort by, or a number of rows to keep")));
+            }
+            for k in by {
+                require(input, &k.column, id)?;
+            }
+            Ok(Some(input.clone()))
+        }
         StepKind::Aggregate { group_by, measures } => {
             let mut fields = Vec::new();
             for g in group_by {
@@ -352,7 +470,7 @@ pub fn output_schema(step: &Step, inputs: &[Schema]) -> Result<Option<Schema>, E
                     (_, None) => {
                         return Err(Error::Validation(format!(
                             "step `{id}`: {} needs a column",
-                            m.func.sql()
+                            m.func.token()
                         )))
                     }
                     (func, Some(c)) => {
@@ -361,10 +479,19 @@ pub fn output_schema(step: &Step, inputs: &[Schema]) -> Result<Option<Schema>, E
                             AggFunc::Sum | AggFunc::Avg if !f.dtype.is_numeric() => {
                                 return Err(Error::Validation(format!(
                                     "step `{id}`: {} needs a numeric column, `{c}` is {}",
-                                    func.sql(),
+                                    func.token(),
                                     f.dtype.name()
                                 )))
                             }
+                            f2 if f2.is_statistical() && !f.dtype.is_numeric() => {
+                                return Err(Error::Validation(format!(
+                                    "step `{id}`: {} needs a numeric column, `{c}` is {}",
+                                    func.token(),
+                                    f.dtype.name()
+                                )))
+                            }
+                            AggFunc::CountDistinct => DataType::Int,
+                            f2 if f2.is_statistical() => DataType::Float,
                             AggFunc::Avg => DataType::Float,
                             _ => f.dtype,
                         }
@@ -411,8 +538,8 @@ pub fn pipeline_sql_with(
     let body_of = |s: &Step| -> Result<String, Error> {
         let schemas: Option<Vec<Schema>> = s.inputs.iter().map(|i| schema_of(i)).collect();
         match (&s.kind, schemas) {
-            (StepKind::Join { .. } | StepKind::Append { .. }, None) => Err(Error::Unsupported(format!(
-                "step `{}` combines tables; its SQL is shown once its inputs have run",
+            (StepKind::Join { .. } | StepKind::Append { .. } | StepKind::Derive { .. }, None) => Err(Error::Unsupported(format!(
+                "step `{}`: its SQL is shown once its inputs have run",
                 s.id
             ))),
             (_, schemas) => Ok(step_sql_for(s, &schemas.unwrap_or_default())?.expect("SQL step")),

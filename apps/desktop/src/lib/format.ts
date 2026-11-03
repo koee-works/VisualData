@@ -83,6 +83,24 @@ const opWords: Record<string, string> = {
   "IS NOT NULL": "is present",
 };
 
+/** How an aggregate function is named in the interface. */
+export function funcWords(f: string): string {
+  const fixed: Record<string, string> = {
+    COUNT: "Count",
+    SUM: "Sum",
+    AVG: "Average",
+    MIN: "Minimum",
+    MAX: "Maximum",
+    MEDIAN: "Median",
+    COUNT_DISTINCT: "Distinct count",
+    STDDEV: "Standard deviation",
+  };
+  if (fixed[f]) return fixed[f]!;
+  const p = Number(f.slice(1));
+  const suffix = p % 10 === 1 && p !== 11 ? "st" : p % 10 === 2 && p !== 12 ? "nd" : p % 10 === 3 && p !== 13 ? "rd" : "th";
+  return `${p}${suffix} percentile`;
+}
+
 /** Comparison symbols as people write them. */
 export const symbols: Record<string, string> = { "=": "=", "<>": "≠", "<": "<", "<=": "≤", ">": ">", ">=": "≥" };
 
@@ -98,7 +116,7 @@ export function describe(op: StepOp): string {
           .join(" and ")
       );
     case "aggregate": {
-      const ms = op.measures.map((m) => (m.func === "COUNT" && !m.column ? "count" : `${m.func.toLowerCase()} of ${m.column}`));
+      const ms = op.measures.map((m) => (m.func === "COUNT" && !m.column ? "count" : `${funcWords(m.func).toLowerCase()} of ${m.column}`));
       return `${ms.join(", ") || "Groups"}${op.group_by.length ? ` by ${op.group_by.join(", ")}` : ""}`;
     }
     case "join": {
@@ -107,6 +125,15 @@ export function describe(op: StepOp): string {
         (k.op ?? "=") === "=" && k.left === k.right ? k.left : `${k.left} ${symbols[k.op ?? "="]} ${k.right}`,
       );
       return keys.length ? `${kind} on ${keys.join(", ")}` : kind;
+    }
+    case "derive":
+      return op.columns.length === 1 ? `Calculate ${op.columns[0]!.name || "a column"}` : `Calculate ${op.columns.map((c) => c.name).join(", ")}`;
+    case "select":
+      return `Keep ${op.columns.map((c) => c.as ?? c.column).join(", ")}`;
+    case "sort": {
+      const keys = op.by.map((k) => `${k.column}${k.descending ? " (highest first)" : ""}`).join(", ");
+      const first = op.limit !== null ? `first ${op.limit}` : "";
+      return keys ? `Sort by ${keys}${first ? `, ${first}` : ""}` : `Keep the ${first} rows`;
     }
     case "append":
       return op.distinct ? "Append rows, without repeats" : "Append rows";

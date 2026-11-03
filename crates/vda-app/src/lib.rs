@@ -32,7 +32,10 @@ pub struct AppError {
 
 impl<E: std::fmt::Display> From<E> for AppError {
     fn from(e: E) -> Self {
-        AppError { message: e.to_string() }
+        // The core's category prefix is for logs; people see the reason.
+        let message = e.to_string();
+        let message = message.strip_prefix("invalid analysis: ").map(str::to_string).unwrap_or(message);
+        AppError { message }
     }
 }
 
@@ -631,6 +634,29 @@ impl App {
         }
         self.remember_approvals();
         self.view()
+    }
+
+    /// Export a source or a step's current result to `path`; the format
+    /// follows the extension (.csv, .parquet, .xlsx). Returns rows written.
+    pub fn export(&mut self, id: &str, path: &Path) -> Result<u64> {
+        use vda_core::export::{export, ExportFormat};
+        let Some(format) = ExportFormat::from_path(path) else {
+            return fail("choose a file ending in .csv, .xlsx or .parquet");
+        };
+        let s = self.session()?;
+        let ds = if s.analysis.is_source(id) {
+            s.source_dataset(id)?
+        } else {
+            match (s.output(id).cloned(), s.state(id)?) {
+                (None, _) => return fail(format!("step `{id}` has no result yet; run the analysis first")),
+                (Some(Output::Chart(_)), _) => return fail(format!("step `{id}` is a chart; export the table it reads")),
+                (Some(_), state) if state != StepState::Fresh => {
+                    return fail(format!("the result of `{id}` is outdated; run the analysis first so the file matches the step"))
+                }
+                (Some(Output::Table(ds)), _) => ds,
+            }
+        };
+        Ok(export(&ds, path, format)?)
     }
 
     /// Remove a source no step reads. Its file stays in the project folder.

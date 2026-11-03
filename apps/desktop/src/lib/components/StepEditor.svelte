@@ -10,6 +10,9 @@
   import ChartEditor from "./ChartEditor.svelte";
   import JoinEditor from "./JoinEditor.svelte";
   import AppendEditor from "./AppendEditor.svelte";
+  import DeriveEditor from "./DeriveEditor.svelte";
+  import SelectEditor from "./SelectEditor.svelte";
+  import SortEditor from "./SortEditor.svelte";
 
   let { ws, step }: { ws: Workspace; step: StepView } = $props();
 
@@ -137,6 +140,12 @@
         rightColumns={ws.columnsOf(inputs[1]!)}
         rightId={inputs[1]!}
       />
+    {:else if draft.type === "derive"}
+      <DeriveEditor bind:columns={draft.columns} {inputColumns} />
+    {:else if draft.type === "select"}
+      <SelectEditor bind:columns={draft.columns} {inputColumns} />
+    {:else if draft.type === "sort"}
+      <SortEditor bind:by={draft.by} bind:limit={draft.limit} columns={inputColumns} />
     {:else if draft.type === "append"}
       <AppendEditor {ws} bind:inputs bind:distinct={draft.distinct} bind:origin={draft.origin} choices={readable} />
     {:else if draft.type === "sql" || draft.type === "python"}

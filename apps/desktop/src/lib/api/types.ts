@@ -54,7 +54,17 @@ export interface JoinKey {
   right: string;
 }
 
-export type AggFunc = "COUNT" | "SUM" | "AVG" | "MIN" | "MAX";
+export type AggFunc =
+  | "COUNT"
+  | "SUM"
+  | "AVG"
+  | "MIN"
+  | "MAX"
+  | "MEDIAN"
+  | "COUNT_DISTINCT"
+  | "STDDEV"
+  /** The p-th percentile, P1 to P99. */
+  | `P${number}`;
 export type Mark = "bar" | "line" | "point";
 
 export interface Predicate {
@@ -74,6 +84,9 @@ export type StepOp =
   | { type: "aggregate"; group_by: string[]; measures: Measure[] }
   | { type: "join"; how: JoinHow; on: JoinKey[] }
   | { type: "append"; distinct: boolean; origin: string | null }
+  | { type: "derive"; columns: { name: string; formula: string }[] }
+  | { type: "select"; columns: { column: string; as: string | null }[] }
+  | { type: "sort"; by: { column: string; descending: boolean }[]; limit: number | null }
   | { type: "sql"; sql: string }
   | { type: "python"; code: string; timeout_ms: number }
   | { type: "chart"; mark: Mark; x: string; y: string; title: string | null };

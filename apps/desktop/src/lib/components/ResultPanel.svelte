@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { Tabs } from "bits-ui";
+  import { DropdownMenu, Tabs } from "bits-ui";
+  import { Download } from "@lucide/svelte";
   import type { Workspace } from "../workspace.svelte";
   import { errorMessage } from "../api/backend";
   import DataGrid from "./DataGrid.svelte";
@@ -79,6 +80,34 @@
           {#if !isSource}<Tabs.Trigger value="columns" class="tab">Columns</Tabs.Trigger>{/if}
         {/if}
         {#if code}<Tabs.Trigger value="code" class="tab">{code.lang}</Tabs.Trigger>{/if}
+        {#if !isChart}
+          <DropdownMenu.Root>
+            <DropdownMenu.Trigger
+              class="btn btn-quiet my-1 ml-auto !min-h-7 !px-2"
+              disabled={stale || ws.running}
+              title={stale ? "Run the analysis first: an export must match the step" : "Save this table as a file"}
+            >
+              <Download size={14} /> Export
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Portal>
+              <DropdownMenu.Content
+                class="z-50 min-w-48 rounded-md border border-rule-strong bg-panel p-1 shadow-[0_6px_24px_rgba(29,42,63,0.14)]"
+                align="end"
+                sideOffset={4}
+              >
+                {#each [["csv", "CSV", "Opens anywhere"], ["xlsx", "Excel workbook", "Up to 1,048,575 rows"], ["parquet", "Parquet", "Exact types, any size"]] as [ext, name, hint] (ext)}
+                  <DropdownMenu.Item
+                    class="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 outline-none data-[highlighted]:bg-select"
+                    onSelect={() => ws.exportResult(ws.selected, ext as "csv" | "xlsx" | "parquet")}
+                  >
+                    <span class="flex-1">{name}</span>
+                    <span class="text-xs text-ink-faint">{hint}</span>
+                  </DropdownMenu.Item>
+                {/each}
+              </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Root>
+        {/if}
       </Tabs.List>
       {#if !isChart}
         <Tabs.Content value="data" class="min-h-0 flex-1">

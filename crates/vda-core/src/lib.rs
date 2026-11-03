@@ -11,6 +11,8 @@ pub mod demo;
 pub mod duck;
 pub mod engine;
 pub mod excel;
+pub mod export;
+pub mod formula;
 pub mod hash;
 pub mod json;
 pub mod model;
