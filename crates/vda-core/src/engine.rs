@@ -20,7 +20,8 @@ use crate::table::{ColumnProfile, Table};
 use crate::Error;
 use std::path::Path;
 
-pub trait Engine {
+/// `Send` so a session can run on a worker thread while the UI stays responsive.
+pub trait Engine: Send {
     /// Engine name and version. Part of every cache key, so upgrading the
     /// engine marks results stale instead of silently reusing them.
     fn fingerprint(&self) -> String;

@@ -1,0 +1,10 @@
+[package]
+name = "vda-app"
+version = "0.1.0"
+edition = "2021"
+description = "Command layer between the desktop UI and vda-core: serde types and commands, no Tauri dependency"
+
+[dependencies]
+vda-core = { path = "../vda-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

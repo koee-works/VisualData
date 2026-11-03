@@ -106,7 +106,8 @@ pub fn step_kind_to_json(kind: &StepKind) -> Json {
     }
 }
 
-fn step_kind_from_json(j: &Json) -> Result<StepKind, Error> {
+/// Inverse of [`step_kind_to_json`]; also the IPC format for steps.
+pub fn step_kind_from_json(j: &Json) -> Result<StepKind, Error> {
     let opt_str = |k: &str| j.get(k).and_then(Json::as_str).map(str::to_string);
     Ok(match j.req_str("type")? {
         "filter" => StepKind::Filter {

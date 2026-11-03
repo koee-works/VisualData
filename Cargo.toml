@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/vda-core"]
+members = ["crates/vda-core", "crates/vda-app"]
 
 # Dependencies (DuckDB above all) are built without debug info. With it, the
 # debug DuckDB build alone was 4-5 GB on disk, which also overflows CI cache

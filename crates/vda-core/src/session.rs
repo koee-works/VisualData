@@ -428,6 +428,12 @@ impl Session {
         self.results.get(step_id).map(|r| &r.output)
     }
 
+    /// A page of the source, as converted to Parquet.
+    pub fn source_preview(&mut self, offset: u64, limit: u64) -> Result<Table, Error> {
+        let ds = self.source_dataset()?;
+        self.engine.preview(&ds, offset, limit)
+    }
+
     /// A page of a step's held result (fresh or stale; check [`Self::state`]).
     pub fn preview(&mut self, step_id: &str, offset: u64, limit: u64) -> Result<Table, Error> {
         let ds = self
@@ -465,6 +471,11 @@ impl Session {
     /// Run every step in dependency order, reusing results whose key is
     /// unchanged. Step failures are recorded, not returned as errors.
     pub fn run_all(&mut self) -> Result<RunRecord, Error> {
+        self.run_all_with(&mut |_| {})
+    }
+
+    /// [`Self::run_all`], calling `on_step` as each step finishes (for progress).
+    pub fn run_all_with(&mut self, on_step: &mut dyn FnMut(&StepRun)) -> Result<RunRecord, Error> {
         self.cancel.store(false, Ordering::SeqCst);
         let plan = self.plan()?;
         let source_hash = self.source_hash()?;
@@ -524,6 +535,7 @@ impl Session {
                 status,
                 duration_ms: t0.elapsed().as_millis() as u64,
             });
+            on_step(record.steps.last().unwrap());
         }
         self.last_run = Some(record.clone());
         Ok(record)
