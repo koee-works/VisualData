@@ -4608,6 +4608,7 @@ dependencies = [
  "duckdb",
  "rusqlite",
  "rust_xlsxwriter",
+ "serde_json",
 ]
 
 [[package]]

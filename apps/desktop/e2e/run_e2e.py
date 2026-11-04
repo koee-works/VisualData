@@ -112,6 +112,15 @@ class Session:
         )
         call("POST", f"/session/{self.id}/execute/sync", {"script": script, "args": [ref, value]})
 
+    def set_code(self, xpath, value):
+        """Replace the text of a code editor (CodeMirror) found by its label."""
+        ref = {"element-6066-11e4-a52e-4f735466cecf": self.find(xpath)}
+        script = (
+            "const el = arguments[0]; el.scrollIntoView({block: 'center'});"
+            "el.closest('.code-area').dispatchEvent(new CustomEvent('vda-set-code', {detail: arguments[1]}))"
+        )
+        call("POST", f"/session/{self.id}/execute/sync", {"script": script, "args": [ref, value]})
+
     def count(self, xpath):
         return len(call("POST", f"/session/{self.id}/elements", {"using": "xpath", "value": xpath}))
 
@@ -268,7 +277,7 @@ def received_project(s, shots):
 
         step(9, "Python step shows its code and contract")
         s.click(node("Revenue share"))
-        s.find("//textarea[@aria-label='Python code']")
+        s.find("//*[@role='textbox' and @aria-label='Python code']")
         s.screenshot(f"{shots}/7-python.png")
 
 
@@ -339,14 +348,14 @@ def joins(s, shots):
     s.click(node("Progress against target"))
     s.click("//button[@role='tab' and normalize-space()='Data']")
     s.wait_text(table, "share_of_target")
-    formula = "(//textarea[@aria-label='Formula'])[2]"
-    s.clear_and_type(formula, 'if(share_of_target >= 1, "met", 0)')
+    formula = "(//*[@role='textbox' and @aria-label='Formula'])[2]"
+    s.set_code(formula, 'if(share_of_target >= 1, "met", 0)')
     # Checked while typing, before anything is saved.
     s.find("//section[@aria-label='Step editor']//p[@role='alert' and contains(., 'mixes text and a whole number')]")
     s.click("//button[normalize-space()='Save step']")
     s.wait_text("//*[@role='alert']", "mixes text and a whole number")
     s.screenshot(f"{shots}/11-formula-error.png")
-    s.clear_and_type(formula, 'if(share_of_target >= 1, "met", "below " & format(share_of_target * 100, 0) & "%")')
+    s.set_code(formula, 'if(share_of_target >= 1, "met", "below " & format(share_of_target * 100, 0) & "%")')
     s.click("//button[normalize-space()='Save step']")
     s.wait_text(STATUS, "need a run")
     s.click("//button[normalize-space()='Run analysis']")
@@ -401,7 +410,7 @@ def joins(s, shots):
     s.find("//input[@aria-label='Value of goal']")
     s.set_input("//input[@aria-label='Value of goal']", "1")
     s.click(node("Progress against target"))
-    s.clear_and_type("(//textarea[@aria-label='Formula'])[2]", 'if(share_of_target >= @goal, "met", "below")')
+    s.set_code("(//*[@role='textbox' and @aria-label='Formula'])[2]", 'if(share_of_target >= @goal, "met", "below")')
     s.click("//button[normalize-space()='Save step']")
     s.click("//button[normalize-space()='Run analysis']")
     s.wait_text(STATUS, "All results current")
@@ -418,7 +427,7 @@ def joins(s, shots):
     s.wait_text("//body", "Typical values")
     s.click("//button[@aria-label='Add a step']")
     s.click("//div[@role='menuitem' and contains(., 'Check data quality')]")
-    s.set_input("//input[@aria-label='Rule formula']", "region is not missing")
+    s.set_code("//*[@role='textbox' and @aria-label='Rule formula']", "region is not missing")
     s.click("//button[normalize-space()='Save step']")
     s.click("//button[normalize-space()='Run analysis']")
     s.wait_text(STATUS, "All results current")
@@ -478,7 +487,7 @@ def slice4(s, shots):
     s.click(node("shop.sqlite"))
     s.wait_text("//section[@aria-label='Source']", "SQLite database. 5 rows")
     s.driver_select("//select[@aria-label='What to read']", "__query")
-    s.set_input("//textarea[@id='source-query']", "SELECT region, target FROM targets WHERE since < '2026-06-01' ORDER BY target DESC")
+    s.set_code("//*[@role='textbox' and @aria-label='Query on the database']", "SELECT region, target FROM targets WHERE since < '2026-06-01' ORDER BY target DESC")
     s.click("//button[normalize-space()='Read with this query']")
     s.wait_text("//section[@aria-label='Source']", "SQLite database. 4 rows")
     s.screenshot(f"{shots}/19-database.png")

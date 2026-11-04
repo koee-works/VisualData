@@ -2,6 +2,7 @@
   import type { Workspace } from "../workspace.svelte";
   import { Trash2 } from "@lucide/svelte";
   import type { ColumnDetail, SourceView } from "../api/types";
+  import CodeArea from "./CodeArea.svelte";
   import { formatCount } from "../format";
   import ProfileTable from "./ProfileTable.svelte";
   import Comments from "./Comments.svelte";
@@ -115,10 +116,10 @@
           ws.setSourceRead(source.id, null, query);
         }}
       >
-        <label for="source-query" class="mb-1 block text-sm text-ink-soft">
+        <p class="mb-1 block text-sm text-ink-soft">
           A query on the database. It can only read: it cannot change the database or open other files.
-        </label>
-        <textarea id="source-query" class="field code w-full" rows="4" spellcheck="false" bind:value={query}></textarea>
+        </p>
+        <CodeArea bind:value={query} lang="sql" label="Query on the database" minLines={4} onrun={() => query.trim() && query !== source.query && !ws.running && ws.setSourceRead(source.id, null, query)} />
         <div class="mt-1.5 flex gap-2">
           <button class="btn" disabled={ws.running || !query.trim() || query === source.query}>Read with this query</button>
           {#if source.query}<span class="self-center text-xs text-ink-faint">The rows below come from this query.</span>{/if}

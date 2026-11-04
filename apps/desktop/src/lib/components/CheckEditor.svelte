@@ -1,18 +1,22 @@
 <script lang="ts">
+  import { editorParameters } from "../editor/complete";
   import { CircleCheck, CircleX, Plus, X } from "@lucide/svelte";
-  import type { CheckReport, Column, Problem, Rule } from "../api/types";
+  import type { CheckReport, Column, Parameter, Problem, Rule } from "../api/types";
+  import CodeArea from "./CodeArea.svelte";
   import ColumnChips from "./ColumnChips.svelte";
 
   let {
     rules = $bindable(),
     stop = $bindable(),
     columns,
+    parameters = [],
     problems,
     report,
   }: {
     rules: Rule[];
     stop: boolean;
     columns: Column[] | null;
+    parameters?: Parameter[];
     problems: Record<string, Problem[]>;
     /** The last run's results, when they match these rules. */
     report: CheckReport | null;
@@ -46,7 +50,15 @@
           </select>
           {#if r.rule === "expect"}
             <div class="min-w-64 flex-1">
-              <input class="field code w-full" aria-label="Rule formula" placeholder="units > 0 and region is not missing" bind:value={r.formula} />
+              <CodeArea
+                bind:value={r.formula}
+                lang="formula"
+                label="Rule formula"
+                placeholder="units > 0 and region is not missing"
+                singleLine
+                context={{ inputs: [{ id: "input", name: "the input", columns }], parameters: editorParameters(parameters) }}
+                problems={(problems[`rules.${i}`] ?? []).filter((p) => p.code !== "check-failed")}
+              />
               <p class="mt-0.5 text-xs text-ink-faint">A formula that is true for a good row. A missing result counts as not met.</p>
             </div>
           {:else if r.rule === "unique"}

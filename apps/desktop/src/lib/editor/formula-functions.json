@@ -1,0 +1,172 @@
+[
+{
+"name": "if",
+"min": 3,
+"max": 3
+},
+{
+"name": "coalesce",
+"min": 2,
+"max": 16
+},
+{
+"name": "round",
+"min": 1,
+"max": 2
+},
+{
+"name": "floor",
+"min": 1,
+"max": 1
+},
+{
+"name": "ceil",
+"min": 1,
+"max": 1
+},
+{
+"name": "abs",
+"min": 1,
+"max": 1
+},
+{
+"name": "bucket",
+"min": 2,
+"max": 2
+},
+{
+"name": "sqrt",
+"min": 1,
+"max": 1
+},
+{
+"name": "power",
+"min": 2,
+"max": 2
+},
+{
+"name": "upper",
+"min": 1,
+"max": 1
+},
+{
+"name": "lower",
+"min": 1,
+"max": 1
+},
+{
+"name": "trim",
+"min": 1,
+"max": 1
+},
+{
+"name": "length",
+"min": 1,
+"max": 1
+},
+{
+"name": "contains",
+"min": 2,
+"max": 2
+},
+{
+"name": "starts_with",
+"min": 2,
+"max": 2
+},
+{
+"name": "ends_with",
+"min": 2,
+"max": 2
+},
+{
+"name": "replace",
+"min": 3,
+"max": 3
+},
+{
+"name": "substr",
+"min": 3,
+"max": 3
+},
+{
+"name": "concat",
+"min": 1,
+"max": 16
+},
+{
+"name": "text",
+"min": 1,
+"max": 1
+},
+{
+"name": "format",
+"min": 2,
+"max": 2
+},
+{
+"name": "number",
+"min": 1,
+"max": 1
+},
+{
+"name": "integer",
+"min": 1,
+"max": 1
+},
+{
+"name": "date",
+"min": 1,
+"max": 1
+},
+{
+"name": "year",
+"min": 1,
+"max": 1
+},
+{
+"name": "quarter",
+"min": 1,
+"max": 1
+},
+{
+"name": "month",
+"min": 1,
+"max": 1
+},
+{
+"name": "day",
+"min": 1,
+"max": 1
+},
+{
+"name": "weekday",
+"min": 1,
+"max": 1
+},
+{
+"name": "hour",
+"min": 1,
+"max": 1
+},
+{
+"name": "minute",
+"min": 1,
+"max": 1
+},
+{
+"name": "date_trunc",
+"min": 2,
+"max": 2
+},
+{
+"name": "days_between",
+"min": 2,
+"max": 2
+},
+{
+"name": "add_days",
+"min": 2,
+"max": 2
+}
+]

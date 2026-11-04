@@ -119,6 +119,13 @@
     saving = false;
   }
 
+  let codeInputs = $derived(inputs.map((id) => ({ id, name: ws.nameOf(id), columns: ws.columnsOf(id) })));
+
+  // Ctrl+Enter or Shift+Enter in code: save, which runs the step.
+  function runFromEditor() {
+    if (dirty && !invalid && !saving) save();
+  }
+
   function onkeydown(e: KeyboardEvent) {
     if ((e.metaKey || e.ctrlKey) && e.key === "s") {
       e.preventDefault();
@@ -209,7 +216,7 @@
         rightId={inputs[1]!}
       />
     {:else if draft.type === "derive"}
-      <DeriveEditor bind:columns={draft.columns} {inputColumns} problems={byField} />
+      <DeriveEditor bind:columns={draft.columns} {inputColumns} parameters={ws.view?.parameters ?? []} problems={byField} />
     {:else if draft.type === "select"}
       <SelectEditor bind:columns={draft.columns} {inputColumns} />
     {:else if draft.type === "sort"}
@@ -225,14 +232,14 @@
     {:else if draft.type === "test"}
       <TestEditor bind:test={draft.test} bind:a={draft.a} bind:b={draft.b} columns={inputColumns} />
     {:else if draft.type === "check"}
-      <CheckEditor bind:rules={draft.rules} bind:stop={draft.stop} columns={inputColumns} problems={byField} report={dirty ? null : report} />
+      <CheckEditor bind:rules={draft.rules} bind:stop={draft.stop} columns={inputColumns} parameters={ws.view?.parameters ?? []} problems={byField} report={dirty ? null : report} />
     {:else if draft.type === "append"}
       <AppendEditor {ws} bind:inputs bind:distinct={draft.distinct} bind:origin={draft.origin} choices={readable} />
     {:else if draft.type === "sql" || draft.type === "python"}
       {#if draft.type === "sql"}
-        <CodeEditor bind:code={draft.sql} language="sql" inputs={inputs.map((id) => ({ id, name: ws.nameOf(id) }))} problems={byField["sql"] ?? []} />
+        <CodeEditor bind:code={draft.sql} language="sql" inputs={codeInputs} parameters={ws.view?.parameters ?? []} problems={byField["sql"] ?? []} onrun={runFromEditor} />
       {:else}
-        <CodeEditor bind:code={draft.code} language="python" inputs={inputs.map((id) => ({ id, name: ws.nameOf(id) }))} problems={byField["code"] ?? []} />
+        <CodeEditor bind:code={draft.code} language="python" inputs={codeInputs} parameters={ws.view?.parameters ?? []} problems={byField["code"] ?? []} onrun={runFromEditor} />
       {/if}
       <div class="mt-3 flex flex-wrap items-center gap-2 text-sm" aria-label="More inputs">
         <span class="text-ink-soft">Also reads</span>

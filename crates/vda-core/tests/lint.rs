@@ -186,3 +186,22 @@ fn failures_unused_steps_and_drafts() {
     let d = linter.check_draft(&mut s, &step("lonely", &["source"], derive("x", "units $ 2")));
     assert_eq!(d[0].column, Some(7), "{:?}", d[0]);
 }
+
+#[test]
+fn a_run_error_points_at_its_line_and_name() {
+    let dir = project("place");
+    let mut s = session(
+        &dir,
+        vec![
+            step("py", &["source"], python("total = df['revenue'].sum()\nresult = df.assign(share=df['revenue'] / totl)\n")),
+            step("q", &["source"], sql("SELECT region,\n       sum(revnue) AS revenue\nFROM input GROUP BY region")),
+        ],
+    );
+    let _ = s.run_all();
+    let ds = Linter::new().unwrap().lint(&mut s);
+    let py = find(&ds, "failed", "py");
+    assert!(py.message.contains("totl"), "{py:?}");
+    assert_eq!((py.field.as_deref(), py.line, py.column), (Some("code"), Some(2), Some(42)), "{py:?}");
+    let q = find(&ds, "failed", "q");
+    assert_eq!((q.field.as_deref(), q.line, q.column), (Some("sql"), Some(2), Some(12)), "{q:?}");
+}

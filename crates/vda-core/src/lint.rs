@@ -161,7 +161,11 @@ impl Linter {
             let state = s.state(id).ok();
             match &state {
                 Some(StepState::Failed(e)) => {
-                    out.push(Diagnostic::new(Severity::Error, "failed", Some(id), format!("failed on the last run: {e}")).last_run())
+                    let d = Diagnostic::new(Severity::Error, "failed", Some(id), format!("failed on the last run: {e}")).last_run();
+                    out.push(match error_place(&step.kind, e) {
+                        Some((field, line, column)) => d.at(field, Some(line), column),
+                        None => d,
+                    })
                 }
                 Some(StepState::Stale) => outdated += 1,
                 _ => {}
@@ -626,4 +630,108 @@ fn parse_python(interpreter: &std::path::Path, code: &str) -> Option<PythonFacts
             _ => vec![],
         },
     })
+}
+
+/// Where in a code step's text a run error points: Python's "line N" from
+/// its traceback, then the name an error quotes (`name 'x' is not defined`,
+/// `column "x" not found`) found on that line or anywhere in the code.
+pub(crate) fn error_place(kind: &StepKind, message: &str) -> Option<(&'static str, usize, Option<usize>)> {
+    let (field, code) = match kind {
+        StepKind::Python { code, .. } => ("code", code.as_str()),
+        StepKind::Sql { sql } => ("sql", sql.as_str()),
+        _ => return None,
+    };
+    let lines: Vec<&str> = code.lines().collect();
+    // DuckDB shortens long lines in its message; only trust a caret under the line as written.
+    if let Some((l, shown, c)) = duckdb_place(message) {
+        if l >= 1 && l <= lines.len() && lines[l - 1].starts_with(shown.trim_end()) {
+            return Some((field, l, Some(c)));
+        }
+    }
+    let line = traceback_line(message).filter(|n| *n >= 1 && *n <= lines.len());
+    // Names quoted in what the engine said, not in our own prefix ("step `q`").
+    let said = message.rfind("failed: ").map(|i| &message[i + 8..]).unwrap_or(message);
+    let name = quoted_name(said);
+    let column_in = |l: usize| name.as_deref().and_then(|n| word_at(lines[l - 1], n)).map(|c| c + 1);
+    match (line, &name) {
+        (Some(l), _) => Some((field, l, column_in(l))),
+        (None, Some(_)) => (1..=lines.len()).find_map(|l| column_in(l).map(|c| (field, l, Some(c)))),
+        (None, None) => None,
+    }
+}
+
+/// DuckDB's `LINE 2: <text>` with `^` under the place, as (line, text shown, 1-based column).
+fn duckdb_place(message: &str) -> Option<(usize, String, usize)> {
+    let lines: Vec<&str> = message.lines().collect();
+    let i = lines.iter().position(|l| l.starts_with("LINE "))?;
+    let head = lines[i];
+    let colon = head.find(": ")?;
+    let n: usize = head[5..colon].trim().parse().ok()?;
+    let caret = lines.get(i + 1)?.find('^')?;
+    Some((n, head[colon + 2..].to_string(), caret.checked_sub(colon + 2)? + 1))
+}
+
+/// `(line 3, in <module>)` as summarized from a Python traceback.
+fn traceback_line(message: &str) -> Option<usize> {
+    let i = message.rfind("line ")?;
+    let digits: String = message[i + 5..].chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
+}
+
+/// The first quoted identifier in an error: 'x', "x" or `x`.
+fn quoted_name(message: &str) -> Option<String> {
+    let chars: Vec<char> = message.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let q = chars[i];
+        if q == '\'' || q == '"' || q == '`' {
+            let rest: String = chars[i + 1..].iter().take_while(|c| **c != q).collect();
+            if !rest.is_empty() && rest.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.') && i + 1 + rest.chars().count() < chars.len() {
+                return Some(rest);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// 0-based character offset of `name` as a whole word in `line`.
+fn word_at(line: &str, name: &str) -> Option<usize> {
+    let ident = |c: char| c.is_alphanumeric() || c == '_';
+    let mut from = 0;
+    while let Some(i) = line[from..].find(name) {
+        let start = from + i;
+        let end = start + name.len();
+        let before = line[..start].chars().next_back();
+        let after = line[end..].chars().next();
+        if !before.is_some_and(ident) && !after.is_some_and(ident) {
+            return Some(line[..start].chars().count());
+        }
+        from = end;
+    }
+    None
+}
+
+#[cfg(test)]
+mod place_tests {
+    use super::*;
+
+    fn py(code: &str) -> StepKind {
+        StepKind::Python { code: code.into(), timeout_ms: 1 }
+    }
+
+    #[test]
+    fn places_from_messages() {
+        let sql = StepKind::Sql { sql: "SELECT a,\n  b FROM input".into() };
+        let m = "query failed: Binder Error: Referenced column \"b\" not found\n\nLINE 2:   b FROM input\n          ^";
+        assert_eq!(error_place(&sql, m), Some(("sql", 2, Some(3))));
+        // A shortened line in the message: fall back to the quoted name.
+        let m = "query failed: Binder Error: column \"b\" not found\n\nLINE 2: ...b FROM input\n           ^";
+        assert_eq!(error_place(&sql, m), Some(("sql", 2, Some(3))));
+        let code = py("x = 1\ny = x + zz\n");
+        assert_eq!(error_place(&code, "step `p` failed: NameError: name 'zz' is not defined (line 2, in <module>)"), Some(("code", 2, Some(9))));
+        assert_eq!(error_place(&code, "KeyError: 'nope' (line 1, in <module>)"), Some(("code", 1, None)));
+        assert_eq!(error_place(&code, "ran out of memory (limit reached)"), None);
+        assert_eq!(error_place(&StepKind::Sort { by: vec![], limit: None }, "x"), None);
+    }
 }

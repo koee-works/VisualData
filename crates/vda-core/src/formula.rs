@@ -1241,4 +1241,17 @@ mod tests {
         assert_eq!(ty("date_trunc(\"month\", day)"), Date);
         assert_eq!(ty("year(day)"), Int);
     }
+
+    #[test]
+    fn the_editor_offers_exactly_these_functions() {
+        // apps/desktop/src/lib/editor/formula-functions.json drives completion.
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../apps/desktop/src/lib/editor/formula-functions.json");
+        let listed: Vec<serde_json::Value> = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let listed: Vec<(String, usize, usize)> = listed
+            .iter()
+            .map(|f| (f["name"].as_str().unwrap().to_string(), f["min"].as_u64().unwrap() as usize, f["max"].as_u64().unwrap() as usize))
+            .collect();
+        let ours: Vec<(String, usize, usize)> = FUNCTIONS.iter().map(|(n, a, b)| (n.to_string(), *a, *b)).collect();
+        assert_eq!(listed, ours, "update formula-functions.json to match FUNCTIONS");
+    }
 }

@@ -1,14 +1,18 @@
 <script lang="ts">
+  import { editorParameters } from "../editor/complete";
   import { Plus, X } from "@lucide/svelte";
-  import type { Column } from "../api/types";
+  import type { Column, Parameter } from "../api/types";
+  import CodeArea from "./CodeArea.svelte";
 
   let {
     columns = $bindable(),
     inputColumns,
+    parameters = [],
     problems = {},
   }: {
     columns: { name: string; formula: string }[];
     inputColumns: Column[] | null;
+    parameters?: Parameter[];
     /** Problems by field (`columns.0.formula`), from checking as you type. */
     problems?: Record<string, import("../api/types").Problem[]>;
   } = $props();
@@ -66,6 +70,14 @@
     return `${from > 0 ? "…" : ""}${f.slice(from, i)}⟶${f.slice(i, i + 24)}${i + 24 < f.length ? "…" : ""}`;
   }
 
+  function formulaContext(i: number) {
+    const known = new Map((inputColumns ?? []).map((c) => [c.name, c.type as string]));
+    return {
+      inputs: [{ id: "input", name: "the input", columns: names(i).map((n) => ({ name: n, type: known.get(n) ?? "calculated" })) }],
+      parameters: editorParameters(parameters),
+    };
+  }
+
   function names(i: number) {
     // Columns a formula can use: the input's, then earlier ones here.
     const seen = (inputColumns ?? []).map((c) => c.name);
@@ -96,14 +108,15 @@
         </div>
         <label class="mt-2 block">
           <span class="sr-only">Formula</span>
-          <textarea
-            class="field code h-16 w-full resize-y"
-            spellcheck="false"
-            aria-label="Formula"
-            placeholder="units * unit_price"
+          <CodeArea
             bind:value={c.formula}
-            aria-invalid={(problems[`columns.${i}.formula`] ?? []).some((p) => p.severity === "error")}
-          ></textarea>
+            lang="formula"
+            label="Formula"
+            placeholder="units * unit_price"
+            singleLine
+            context={formulaContext(i)}
+            problems={problems[`columns.${i}.formula`] ?? []}
+          />
         </label>
         {#each [...(problems[`columns.${i}.name`] ?? []), ...(problems[`columns.${i}.formula`] ?? [])] as p, k (k)}
           <p class="mt-1 text-sm {p.severity === 'error' ? 'text-failed' : 'text-stale'}" role={p.severity === "error" ? "alert" : undefined}>
