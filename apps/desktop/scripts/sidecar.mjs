@@ -26,11 +26,13 @@ function build(target) {
 
 mkdirSync(out, { recursive: true });
 if (triple === "universal-apple-darwin") {
-  // One file for Intel and Apple silicon Macs.
-  const parts = ["aarch64-apple-darwin", "x86_64-apple-darwin"].map(build);
-  const dest = join(out, `vda-run-${triple}`);
-  execFileSync("lipo", ["-create", "-output", dest, ...parts], { stdio: "inherit" });
-  console.log(`sidecar: ${dest}`);
+  // Tauri builds each Mac chip type on its own and looks for vda-run per type.
+  for (const arch of ["aarch64-apple-darwin", "x86_64-apple-darwin"]) {
+    const dest = join(out, `vda-run-${arch}`);
+    copyFileSync(build(arch), dest);
+    chmodSync(dest, 0o755);
+    console.log(`sidecar: ${dest}`);
+  }
 } else {
   const src = build(triple);
   const dest = join(out, `vda-run-${triple}${triple.includes("windows") ? ".exe" : ""}`);

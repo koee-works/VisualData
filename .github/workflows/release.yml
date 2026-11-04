@@ -142,4 +142,9 @@ jobs:
         # Artifacts keep their folders (deb/, dmg/, ...); attach the files.
         # A new tag is created at the commit that was built.
         run: |
-          find installers -type f -print0 | xargs -0 gh release create "$TAG" --repo "${{ github.repository }}" --target "$GITHUB_SHA" --draft --title "VDA $TAG" --notes "Unsigned unless stated. See docs/packaging.md for how to install."
+          # Adds to the draft when it already exists (a later run can add a platform).
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            find installers -type f -print0 | xargs -0 gh release upload "$TAG" --repo "${{ github.repository }}" --clobber
+          else
+            find installers -type f -print0 | xargs -0 gh release create "$TAG" --repo "${{ github.repository }}" --target "$GITHUB_SHA" --draft --title "VDA $TAG" --notes "Unsigned unless stated. See docs/packaging.md for how to install."
+          fi
