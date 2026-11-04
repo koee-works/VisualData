@@ -184,6 +184,25 @@
     white-space: nowrap;
   }
 
+  /* Panel buttons: filled while the panel is shown. */
+  .pane-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.75rem;
+    height: 1.75rem;
+    border-radius: 4px;
+    color: var(--color-ink-faint);
+  }
+  .pane-toggle:hover {
+    background: var(--color-paper);
+    color: var(--color-ink);
+  }
+  .pane-toggle[aria-pressed="true"] {
+    background: var(--color-select);
+    color: var(--color-ink);
+  }
+
   /* Dividers between panes: a hairline with a grip that shows they move. */
   .divider {
     position: relative;

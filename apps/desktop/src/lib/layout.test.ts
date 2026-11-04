@@ -37,3 +37,29 @@ describe("how the window is shared", () => {
     expect(savedSidebar()).toBe(320);
   });
 });
+
+describe("panels shown", () => {
+  beforeEach(() => localStorage.clear());
+
+  it("shows everything at first, and remembers what was hidden", async () => {
+    const { loadPanes, savePanes, toggled, ALL_PANES } = await import("./layout");
+    expect(loadPanes()).toEqual(ALL_PANES);
+    const p = toggled(ALL_PANES, "pipeline");
+    expect(p.pipeline).toBe(false);
+    savePanes(p);
+    expect(loadPanes().pipeline).toBe(false);
+  });
+
+  it("never hides both the editor and the result", async () => {
+    const { toggled, ALL_PANES, loadPanes } = await import("./layout");
+    const noResult = toggled(ALL_PANES, "result");
+    expect([noResult.editor, noResult.result]).toEqual([true, false]);
+    // Hiding the editor too brings the result back.
+    const swap = toggled(noResult, "editor");
+    expect([swap.editor, swap.result]).toEqual([false, true]);
+    localStorage.setItem("vda.panes", JSON.stringify({ editor: false, result: false }));
+    expect(loadPanes().result).toBe(true);
+    localStorage.setItem("vda.panes", "{not json");
+    expect(loadPanes()).toEqual(ALL_PANES);
+  });
+});

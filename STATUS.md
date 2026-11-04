@@ -16,7 +16,7 @@ From the "Shared team acceptance" section of the v0.2.0 briefs. Tests: `crates/v
 | 6 | Change an upstream step; downstream stale until rerun | Done | `step6_…`, `undoing_an_edit_reuses_the_earlier_saved_results` |
 | 7 | Controlled failure: diagnose, cancel or correct, recover | Done | `step7_…` (2 tests), `unreadable_saved_result_is_recomputed` |
 
-All 186 Rust tests pass (`cargo test --workspace`; R tests skip when `Rscript` is missing), plus 101 frontend unit tests and the desktop end-to-end scenario (below). The demo writes a complete project folder: `cargo run -p vda-core --example slice -- <dir>`.
+All 186 Rust tests pass (`cargo test --workspace`; R tests skip when `Rscript` is missing), plus 103 frontend unit tests and the desktop end-to-end scenario (below). The demo writes a complete project folder: `cargo run -p vda-core --example slice -- <dir>`.
 
 ## What exists
 
@@ -113,6 +113,7 @@ Before this change, results were in-memory tables. The regional-revenue sample w
 | Review dialog | The note on its own line; Not now, Trust all and Approve on one row, Approve on the right. | e2e step 1 |
 | Noise | Messages hide after 5–15 s; leftover-step notes grouped, with one dismiss; undo/redo runs folded in History; unnamed steps described the same way in the app and in history (shared examples, checked in TypeScript and Rust); the bottom panel is "Activity". | `describe.test.ts`, `describe.rs`; e2e steps 18, 27 |
 | Display | The kind of step beside its name, the name reads as a heading; decimals line up per column with thousands separators; chart axes in words and shares as percentages; comments fold away. | `format.test.ts`, `chart.rs`; e2e step 28 |
+| Panels | Toolbar buttons show or hide the pipeline, step editor, code console, result and Activity panel (Ctrl+B, Ctrl+J, Ctrl+\`); never both editor and result hidden; remembered. | `layout.test.ts` (`panels shown`); e2e step 31 |
 | Start-up | The code editor loads with the first editor shown, Vim keys only when chosen: the start-up script went from 993 KB to 381 KB (117 KB compressed). | build output |
 
 Fixed while doing this: a filter on a parameter was described without the parameter ("revenue above ").

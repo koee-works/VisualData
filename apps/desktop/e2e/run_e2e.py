@@ -605,6 +605,20 @@ def slice4(s, shots, project):
     s.click("//button[normalize-space()='Done']")
     s.wait_gone("//*[@role='dialog']")
 
+    # Panels: hide what is not needed; the result fills the centre; all back.
+    panels = "//div[@role='group' and @aria-label='Panels']"
+    for name in ["Pipeline", "Step editor", "Activity"]:
+        s.click(f"{panels}//button[@aria-label='{name}']")
+    s.wait_gone("//nav[@aria-label='Pipeline']")
+    s.wait_gone("//section[@aria-label='Step editor']")
+    s.find("//section[@aria-label='Result']")
+    assert s.count("//section[@aria-label='Activity']") == 0
+    s.screenshot(f"{shots}/27-panels.png")
+    for name in ["Pipeline", "Step editor", "Activity"]:
+        s.click(f"{panels}//button[@aria-label='{name}']")
+    s.find("//nav[@aria-label='Pipeline']")
+    s.find("//section[@aria-label='Step editor']")
+
 
 def refresh_without_the_app(app, project, approvals):
     step(32, "vda-run refreshes the project without the app, and the run log says so")

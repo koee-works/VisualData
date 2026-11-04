@@ -1,6 +1,7 @@
 // Workspace state shared by the components (Svelte 5 runes).
 // The backend is the source of truth; every edit returns a fresh view.
 
+import { ALL_PANES, loadPanes, savePanes, toggled, type PaneName, type Panes } from "./layout";
 import { errorMessage, type Backend } from "./api/backend";
 import type { AnalysisView, Column, Comment, NotebookCell, Problem, Problems, SourceView, StepEvent, StepOp, StepView, Parameter } from "./api/types";
 import { SOURCE_ID } from "./api/types";
@@ -44,6 +45,20 @@ export class Workspace {
   /** What the linter found, refreshed after every change and run. */
   problems = $state<Problems>({ items: [], dismissed: 0 });
   consoleOpen = $state(false);
+  /** Panels shown, chosen with the toolbar's panel buttons (remembered). */
+  panes = $state<Panes>(loadPanes());
+
+  togglePane(name: PaneName) {
+    this.panes = toggled(this.panes, name);
+    if (name === "activity") this.consoleOpen = this.panes.activity;
+    savePanes($state.snapshot(this.panes));
+  }
+
+  /** Show everything again. */
+  showAllPanes() {
+    this.panes = { ...ALL_PANES };
+    savePanes($state.snapshot(this.panes));
+  }
   consoleTab = $state<"problems" | "output" | "log" | "history">("problems");
   /** Comments on steps, sources and the analysis (kept with the project). */
   comments = $state<Comment[]>([]);

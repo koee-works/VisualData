@@ -33,6 +33,12 @@
   }
 
   let sidebar = $state(savedSidebar() ?? 272);
+
+  // Opening History from the menu (or anything that opens the Activity
+  // panel) shows the panel even if it was hidden.
+  $effect(() => {
+    if (ws.consoleOpen && !ws.panes.activity) ws.togglePane("activity");
+  });
   let dragging = $state<"split" | "sidebar" | null>(null);
   let centre: HTMLElement | undefined = $state();
 
@@ -75,17 +81,19 @@
 
 <div class="grid h-full grid-rows-[auto_1fr]">
   <TopBar {ws} />
-  <div class="grid min-h-0" class:select-none={dragging !== null} style:grid-template-columns="{sidebar}px 6px minmax(0,1fr)">
-    <aside class="min-h-0 bg-panel">
-      <Pipeline {ws} />
-    </aside>
-    <button
-      class="divider divider-v"
-      class:active={dragging === "sidebar"}
-      aria-label="Resize the pipeline (arrow keys)"
-      onpointerdown={() => (dragging = "sidebar")}
-      onkeydown={sidebarKeys}
-    ></button>
+  <div class="grid min-h-0" class:select-none={dragging !== null} style:grid-template-columns={ws.panes.pipeline ? `${sidebar}px 6px minmax(0,1fr)` : "minmax(0,1fr)"}>
+    {#if ws.panes.pipeline}
+      <aside class="min-h-0 bg-panel">
+        <Pipeline {ws} />
+      </aside>
+      <button
+        class="divider divider-v"
+        class:active={dragging === "sidebar"}
+        aria-label="Resize the pipeline (arrow keys)"
+        onpointerdown={() => (dragging = "sidebar")}
+        onkeydown={sidebarKeys}
+      ></button>
+    {/if}
 
     <Tabs.Root bind:value={ws.centerTab} class="flex min-h-0 min-w-0 flex-col">
       <Tabs.List class="flex border-b border-rule bg-panel px-3">
@@ -109,7 +117,8 @@
       <Tabs.Content value="step" class="min-h-0 min-w-0 flex-1">
         <!-- min-w-0 on every grid item: a wide result scrolls inside its panel
              instead of widening the window. -->
-        <div bind:this={centre} class="grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)]" style:grid-template-rows={rows}>
+        <div bind:this={centre} class="grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)]" style:grid-template-rows={ws.panes.editor && ws.panes.result ? rows : "minmax(0,1fr)"}>
+          {#if ws.panes.editor}
           <div class="min-h-0 min-w-0 overflow-hidden bg-panel">
             {#if ws.selectedStep}
               <StepEditor {ws} step={ws.selectedStep} />
@@ -117,6 +126,8 @@
               {#if ws.selectedSource}<SourceOverview {ws} source={ws.selectedSource} />{/if}
             {/if}
           </div>
+          {/if}
+          {#if ws.panes.editor && ws.panes.result}
           <button
             class="divider divider-h"
             class:active={dragging === "split"}
@@ -126,15 +137,18 @@
             ondblclick={() => setSplit(null)}
             onkeydown={splitKeys}
           ></button>
+          {/if}
+          {#if ws.panes.result}
           <div class="min-h-0 min-w-0 overflow-hidden">
             <ResultPanel {ws} />
           </div>
+          {/if}
         </div>
       </Tabs.Content>
       <Tabs.Content value="notebook" class="min-h-0 flex-1 overflow-y-auto">
         <Notebook {ws} />
       </Tabs.Content>
-      <Console {ws} />
+      {#if ws.panes.activity || ws.consoleOpen}<Console {ws} />{/if}
     </Tabs.Root>
   </div>
 </div>

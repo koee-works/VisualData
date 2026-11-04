@@ -64,3 +64,47 @@ export const savedSidebar = () => read("vda.sidebar");
 export const saveSidebar = (v: number) => write("vda.sidebar", v);
 
 export const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+
+/** Which panels are shown. The editor and the result can each be hidden,
+ *  but not both: hiding one when the other is hidden shows the other. */
+export interface Panes {
+  pipeline: boolean;
+  editor: boolean;
+  result: boolean;
+  activity: boolean;
+  /** The console beside Python and R steps. */
+  console: boolean;
+}
+
+export type PaneName = keyof Panes;
+
+export const ALL_PANES: Panes = { pipeline: true, editor: true, result: true, activity: true, console: true };
+
+export function loadPanes(): Panes {
+  try {
+    const v = JSON.parse(localStorage.getItem("vda.panes") ?? "null");
+    if (v && typeof v === "object") return withOneOf({ ...ALL_PANES, ...v });
+  } catch {
+    // Fall through to everything shown.
+  }
+  return { ...ALL_PANES };
+}
+
+export function savePanes(p: Panes) {
+  try {
+    localStorage.setItem("vda.panes", JSON.stringify(p));
+  } catch {
+    // A convenience only.
+  }
+}
+
+function withOneOf(p: Panes): Panes {
+  return !p.editor && !p.result ? { ...p, result: true } : p;
+}
+
+/** Show or hide one panel. */
+export function toggled(p: Panes, name: PaneName): Panes {
+  const next = { ...p, [name]: !p[name] };
+  if (!next.editor && !next.result) next[name === "editor" ? "result" : "editor"] = true;
+  return next;
+}

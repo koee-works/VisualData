@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { untrack } from "svelte";
+  import { tick, untrack } from "svelte";
   import { ExternalLink, Trash2, X } from "@lucide/svelte";
   import type { Workspace } from "../workspace.svelte";
   import type { Column, Problem, StepOp, StepView } from "../api/types";
@@ -130,8 +130,14 @@
   // Shift+Enter (and SQL's Ctrl+Enter): save and run the step. In Python and
   // R, Ctrl+Enter runs the line or selection in the console instead.
   async function runFromEditor(r: RunRequest) {
-    if (console_ && r.what !== "step") {
-      await console_.run(r.code, r.fromLine);
+    const code = draft.type === "python" || draft.type === "r";
+    if (code && r.what !== "step") {
+      // The console was hidden: show it, then run there.
+      if (!ws.panes.console) {
+        ws.togglePane("console");
+        await tick();
+      }
+      await console_?.run(r.code, r.fromLine);
       return;
     }
     if (saving || invalid) return;
@@ -251,7 +257,7 @@
     {:else if draft.type === "append"}
       <AppendEditor {ws} bind:inputs bind:distinct={draft.distinct} bind:origin={draft.origin} choices={readable} />
     {:else if draft.type === "sql" || draft.type === "python" || draft.type === "r"}
-      <div class="code-layout" class:with-console={draft.type !== "sql"}>
+      <div class="code-layout" class:with-console={draft.type !== "sql" && ws.panes.console}>
         <div class="min-w-0">
         {#if draft.type === "sql"}
           <CodeEditor bind:code={draft.sql} language="sql" inputs={codeInputs} parameters={ws.view?.parameters ?? []} problems={byField["sql"] ?? []} onrun={runFromEditor} />
@@ -313,7 +319,7 @@
 
         {/if}
         </div>
-        {#if draft.type === "python" || draft.type === "r"}
+        {#if (draft.type === "python" || draft.type === "r") && ws.panes.console}
           <div class="min-w-0">
             <CodeConsole
               bind:this={console_}

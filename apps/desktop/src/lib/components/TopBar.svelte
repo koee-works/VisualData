@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { CalendarClock, Ellipsis, Play, Redo2, ShieldAlert, ShieldOff, Square, Terminal, Undo2 } from "@lucide/svelte";
+  import { CalendarClock, Ellipsis, PanelBottom, PanelLeft, PanelTop, Play, Redo2, ShieldAlert, ShieldOff, Square, SquareTerminal, Table2, Terminal, Undo2 } from "@lucide/svelte";
+  import type { PaneName } from "../layout";
   import { DropdownMenu } from "bits-ui";
   import type { Workspace } from "../workspace.svelte";
   import { formatCount } from "../format";
@@ -16,15 +17,33 @@
   let done = $derived(Object.keys(ws.progress).length);
   let lastFailed = $derived(Object.values(ws.progress).filter((e) => e.status === "failed").length);
 
-  let review = $derived(ws.pendingReview.length);
-
   const mac = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
   const key = mac ? "⌘" : "Ctrl+";
+
+  let review = $derived(ws.pendingReview.length);
+
+  let codeStep = $derived(ws.centerTab === "step" && (ws.selectedStep?.op.type === "python" || ws.selectedStep?.op.type === "r"));
+  // The panel buttons, left to right as the panels sit on screen.
+  let paneButtons = $derived([
+    { name: "pipeline" as const, icon: PanelLeft, label: "Pipeline", keys: `${key}B` },
+    { name: "editor" as const, icon: PanelTop, label: ws.selectedSource ? "Source details" : "Step editor", keys: "" },
+    { name: "console" as const, icon: SquareTerminal, label: "Code console", keys: `${key}\``, hidden: !codeStep },
+    { name: "result" as const, icon: Table2, label: "Result", keys: "" },
+    { name: "activity" as const, icon: PanelBottom, label: "Activity", keys: `${key}J` },
+  ]);
+
 
   // Undo and redo the analysis, but not while typing: text fields keep
   // their own undo.
   function onkeydown(e: KeyboardEvent) {
     if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+    // Panels, as in VS Code: these work from anywhere, even while typing.
+    const pane: PaneName | null = e.shiftKey ? null : e.code === "KeyB" ? "pipeline" : e.code === "KeyJ" ? "activity" : e.code === "Backquote" ? "console" : null;
+    if (pane && (pane !== "console" || codeStep)) {
+      e.preventDefault();
+      ws.togglePane(pane);
+      return;
+    }
     const t = e.target as HTMLElement | null;
     if (t && (t.closest("input, textarea, select, [contenteditable=true]") || t.isContentEditable)) return;
     const k = e.key.toLowerCase();
@@ -83,6 +102,23 @@
       <ShieldAlert size={14} /> Review {review} Python step{review === 1 ? "" : "s"}
     </button>
   {/if}
+  <div class="flex items-center rounded-md border border-rule p-0.5" role="group" aria-label="Panels">
+    {#each paneButtons as b (b.name)}
+      {#if !b.hidden}
+        {@const Icon = b.icon}
+        {@const shown = ws.panes[b.name]}
+        <button
+          class="pane-toggle"
+          aria-pressed={shown}
+          aria-label={b.label}
+          title="{shown ? 'Hide' : 'Show'} {b.label.toLowerCase()}{b.keys ? ` (${b.keys})` : ''}"
+          onclick={() => ws.togglePane(b.name)}
+        >
+          <Icon size={16} />
+        </button>
+      {/if}
+    {/each}
+  </div>
   <div class="flex items-center">
     <button
       class="btn btn-quiet !px-2"
