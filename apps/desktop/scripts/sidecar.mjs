@@ -26,13 +26,19 @@ function build(target) {
 
 mkdirSync(out, { recursive: true });
 if (triple === "universal-apple-darwin") {
-  // Tauri builds each Mac chip type on its own and looks for vda-run per type.
+  // Tauri builds each Mac chip type on its own and looks for vda-run per type,
+  // and then bundles the combined file for the universal app.
+  const parts = [];
   for (const arch of ["aarch64-apple-darwin", "x86_64-apple-darwin"]) {
     const dest = join(out, `vda-run-${arch}`);
     copyFileSync(build(arch), dest);
     chmodSync(dest, 0o755);
+    parts.push(dest);
     console.log(`sidecar: ${dest}`);
   }
+  const combined = join(out, `vda-run-${triple}`);
+  execFileSync("lipo", ["-create", "-output", combined, ...parts], { stdio: "inherit" });
+  console.log(`sidecar: ${combined}`);
 } else {
   const src = build(triple);
   const dest = join(out, `vda-run-${triple}${triple.includes("windows") ? ".exe" : ""}`);
