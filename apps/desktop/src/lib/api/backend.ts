@@ -14,7 +14,7 @@ import type {
   StepOp,
   CheckReport,
   ColumnDetail,
-  Parameter, Comment, Every, PythonView, RView, ConsoleView, ConsoleReply, ScheduleView, VersionView } from "./types";
+  Parameter, Comment, Every, PythonView, RView, ConsoleView, ConsoleReply, ExternalView, SyncView, ScheduleView, VersionView } from "./types";
 
 export interface RunHandlers {
   onStep: (e: StepEvent) => void;
@@ -94,6 +94,10 @@ export interface Backend {
   setPython(path: string): Promise<PythonView>;
   rEnvironment(): Promise<RView>;
   consoleStart(stepId: string): Promise<ConsoleView>;
+  /** Write a code step as a notebook or .R file and open it in the user's app for it. */
+  editExternally(stepId: string): Promise<ExternalView>;
+  /** Bring edits saved in those files into their steps. */
+  syncExternal(): Promise<SyncView>;
   consoleRun(code: string): Promise<ConsoleReply>;
   consoleInterrupt(): Promise<void>;
   consoleStop(): Promise<void>;

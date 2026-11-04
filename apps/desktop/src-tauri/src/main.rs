@@ -323,6 +323,18 @@ async fn console_compare(s: State<'_, Shared>, step_id: String) -> Res<Option<St
 }
 
 #[tauri::command]
+async fn edit_externally(s: State<'_, Shared>, step_id: String) -> Res<vda_app::ExternalView> {
+    // Tests open nothing: they edit the file themselves.
+    let open = std::env::var_os("VDA_SAVE_DIR").is_none();
+    with(&s, |a| a.edit_externally(&step_id, open))
+}
+
+#[tauri::command]
+async fn sync_external(s: State<'_, Shared>) -> Res<vda_app::SyncView> {
+    with(&s, |a| a.sync_external())
+}
+
+#[tauri::command]
 async fn cancel(s: State<'_, Shared>) -> Res<()> {
     if let Some(flag) = s.cancel.lock().unwrap().as_ref() {
         flag.store(true, Ordering::SeqCst);
@@ -412,6 +424,8 @@ fn main() {
             console_interrupt,
             console_stop,
             console_compare,
+            edit_externally,
+            sync_external,
             set_r,
             schedule,
             run,

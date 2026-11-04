@@ -156,3 +156,18 @@ fn r_interrupt_keeps_the_console() {
         Err(e) => panic!("interrupting R closed the console: {e}"),
     }
 }
+
+#[test]
+fn a_line_answers_quickly_once_the_console_is_up() {
+    // The point of a console: no reload per try. Generous for slow CI.
+    for lang in [Language::Python, Language::R] {
+        let Some(mut c) = start(lang, if lang == Language::R { "fast-r" } else { "fast-py" }) else { continue };
+        c.run("1 + 1", T, &no()).unwrap();
+        let mut worst = Duration::ZERO;
+        for _ in 0..5 {
+            worst = worst.max(c.run(if lang == Language::R { "nrow(df)" } else { "len(df)" }, T, &no()).unwrap().elapsed);
+        }
+        eprintln!("{lang:?}: slowest of 5 runs {worst:?}");
+        assert!(worst < Duration::from_millis(500), "{lang:?} took {worst:?}");
+    }
+}

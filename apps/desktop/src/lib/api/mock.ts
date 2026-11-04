@@ -29,6 +29,8 @@ import type {
   RView,
   ConsoleView,
   ConsoleReply,
+  ExternalView,
+  SyncView,
   ScheduleView,
   SourceFormat,
   VersionView,
@@ -348,6 +350,16 @@ export class MockBackend implements Backend {
   }
 
   async consoleInterrupt() {}
+
+  async editExternally(stepId: string): Promise<ExternalView> {
+    const s = this.steps.find((x) => x.id === stepId);
+    const r = s?.op.type === "r";
+    return { step_id: stepId, path: `/data/project/.work/edit/${stepId}/${stepId}.${r ? "R" : "ipynb"}`, kind: r ? "R script" : "notebook" };
+  }
+
+  async syncExternal(): Promise<SyncView> {
+    return { updated: [], view: null };
+  }
 
   async consoleStop() {
     this.consoleFor = null;

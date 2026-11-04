@@ -32,6 +32,31 @@ export class Workspace {
   comments = $state<Comment[]>([]);
   pythonOpen = $state(false);
   rOpen = $state(false);
+  /** Code steps open as files in other editors: step id → file. */
+  external = $state<Record<string, string>>({});
+  private syncTimer: ReturnType<typeof setInterval> | null = null;
+
+  /** Open a code step in Jupyter or RStudio (the computer's app for the file). */
+  async editExternally(stepId: string) {
+    const x = await this.act("Open in another editor", () => this.backend.editExternally(stepId));
+    if (!x) return;
+    this.external[stepId] = x.path;
+    this.notice = `Opened ${x.path.split(/[\\/]/).pop()} (${x.kind}). Saving it there updates this step; its first ${x.kind === "notebook" ? "cell loads" : "line loads"} the step's inputs.`;
+    if (!this.syncTimer) this.syncTimer = setInterval(() => void this.syncExternal(), 1500);
+  }
+
+  async syncExternal() {
+    if (this.running) return;
+    try {
+      const s = await this.backend.syncExternal();
+      if (s.view) {
+        this.apply(s.view);
+        this.notice = `Updated ${s.updated.map((id) => this.nameOf(id)).join(", ")} from the other editor. Run the analysis to see its result.`;
+      }
+    } catch {
+      // Checked again shortly; a half-saved file is read next time.
+    }
+  }
   scheduleOpen = $state(false);
   /** Bumped when a run finishes, so the run log refetches. */
   runs = $state(0);

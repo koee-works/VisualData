@@ -380,6 +380,17 @@ export interface ConsoleReply {
   elapsed_ms: number;
 }
 
+export interface ExternalView {
+  step_id: string;
+  path: string;
+  kind: "notebook" | "R script";
+}
+
+export interface SyncView {
+  updated: string[];
+  view: AnalysisView | null;
+}
+
 export type Every = "hourly" | "daily" | "weekdays" | "weekly";
 
 export interface ScheduleView {

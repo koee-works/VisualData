@@ -124,3 +124,58 @@ fn a_console_beside_a_step_and_the_check_after_saving() {
         assert!(r.stdout.contains("Min."), "{}", r.stdout);
     }
 }
+
+#[test]
+fn code_steps_round_trip_through_a_notebook_and_an_r_file() {
+    let dir = fresh("external");
+    let mut app = App::default().with_approvals_file(fresh("approvals-x.json")).with_settings_file(fresh("settings-x.json"));
+    app.create_project(&dir, &samples().join("sales.csv"), "Round trip").unwrap();
+    app.set_parameters(&json!([{"name": "min_units", "value": {"int": "2"}}])).unwrap();
+    let v = app.add_step(&["source".into()], Some("Share".into()), &json!({"type": "python", "code": "result = df", "timeout_ms": 60000})).unwrap();
+    let id = v.steps[0].id.clone();
+
+    // A notebook whose code cells run as the step would: inputs and params loaded.
+    let x = app.edit_externally(&id, false).unwrap();
+    assert!(x.path.ends_with(".ipynb"));
+    let nb: serde_json::Value = serde_json::from_str(&fs::read_to_string(&x.path).unwrap()).unwrap();
+    let code: String = nb["cells"].as_array().unwrap().iter().filter(|c| c["cell_type"] == "code").map(|c| c["source"].as_array().unwrap().iter().map(|l| l.as_str().unwrap()).collect::<String>() + "\n").collect();
+    let check = format!("{code}\nassert params['min_units'] == 2\nprint(len(result), sorted(result.columns)[0])");
+    let out = std::process::Command::new(vda_core::python::default_interpreter()).args(["-c", &check]).current_dir(std::env::temp_dir()).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8_lossy(&out.stdout).starts_with("60 "), "{}", String::from_utf8_lossy(&out.stdout));
+
+    // Nothing changed: nothing to do.
+    assert!(app.sync_external().unwrap().updated.is_empty());
+    // Edited and saved in Jupyter (source as a list of lines): the step follows, with no review.
+    let mut nb = nb;
+    nb["cells"][2]["source"] = json!(["big = df[df['units'] >= params['min_units']]\n", "result = big"]);
+    fs::write(&x.path, serde_json::to_string_pretty(&nb).unwrap()).unwrap();
+    let s = app.sync_external().unwrap();
+    assert_eq!(s.updated, [id.clone()]);
+    let v = s.view.unwrap();
+    assert_eq!(v.steps[0].op["code"], "big = df[df['units'] >= params['min_units']]\nresult = big");
+    assert!(v.review.is_empty(), "the user's own edit needs no review");
+    assert_ne!(v.steps[0].state, "fresh", "it needs a run");
+    // Edited in the app: the notebook is rewritten to match.
+    app.update_step(&id, Some("Share".into()), &json!({"type": "python", "code": "result = df.head(5)", "timeout_ms": 60000}), None).unwrap();
+    assert!(app.sync_external().unwrap().updated.is_empty());
+    assert!(fs::read_to_string(&x.path).unwrap().contains("result = df.head(5)"));
+
+    if r_available() {
+        let v = app.add_step(&["source".into()], None, &json!({"type": "r", "code": "result <- df[df$units >= params$min_units, ]", "timeout_ms": 60000})).unwrap();
+        let rid = v.steps.iter().find(|s| s.mode == "r").unwrap().id.clone();
+        let x = app.edit_externally(&rid, false).unwrap();
+        assert!(x.path.ends_with(".R"));
+        // Run as RStudio would: from anywhere, the file loads its inputs and runs.
+        let script = format!("source({:?}); cat(nrow(result), '\\n')", x.path);
+        let out = std::process::Command::new("Rscript").args(["-e", &script]).current_dir(std::env::temp_dir()).output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let rows: usize = String::from_utf8_lossy(&out.stdout).trim().parse().unwrap();
+        assert!(rows > 0 && rows < 60, "{rows}");
+        let text = fs::read_to_string(&x.path).unwrap().replace("result <- df[df$units >= params$min_units, ]", "result <- head(df, 3)");
+        fs::write(&x.path, text).unwrap();
+        let s = app.sync_external().unwrap();
+        assert_eq!(s.updated, [rid.clone()]);
+        assert_eq!(s.view.unwrap().steps.iter().find(|s| s.id == rid).unwrap().op["code"], "result <- head(df, 3)");
+    }
+}

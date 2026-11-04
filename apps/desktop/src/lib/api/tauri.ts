@@ -14,7 +14,7 @@ import type {
   StepEvent,
   StepOp,
   CheckReport,
-  ColumnDetail, Comment, PythonView, RView, ConsoleView, ConsoleReply, ScheduleView, VersionView } from "./types";
+  ColumnDetail, Comment, PythonView, RView, ConsoleView, ConsoleReply, ExternalView, SyncView, ScheduleView, VersionView } from "./types";
 
 /** Commands registered in apps/desktop/src-tauri/src/main.rs. */
 export const tauriBackend: Backend = {
@@ -99,6 +99,8 @@ export const tauriBackend: Backend = {
   pythonEnvironment: () => invoke<PythonView>("python_environment"),
   setPython: (path) => invoke<PythonView>("set_python", { path }),
   rEnvironment: () => invoke<RView>("r_environment"),
+  editExternally: (stepId) => invoke<ExternalView>("edit_externally", { stepId }),
+  syncExternal: () => invoke<SyncView>("sync_external"),
   consoleStart: (stepId) => invoke<ConsoleView>("console_start", { stepId }),
   consoleRun: (code) => invoke<ConsoleReply>("console_run", { code }),
   consoleInterrupt: () => invoke<void>("console_interrupt"),

@@ -161,6 +161,11 @@ const R_MAIN: &str = r#"
   finish(if (saved) 0 else 3)
 "#;
 
+/// The R functions that read a step's inputs and write its result.
+pub fn r_io() -> &'static str {
+    R_IO
+}
+
 /// The script that runs an R step (also embedded in exported notebooks).
 pub(crate) fn wrapper() -> String {
     format!("local({{\n{R_IO}\n{R_MAIN}\n}})\n")
@@ -388,7 +393,7 @@ pub(crate) fn read_r_table(csv: &Path, output: &Path) -> Result<(), Error> {
     crate::duck::csv_to_parquet(csv, &header.into_iter().zip(types).collect::<Vec<_>>(), output)
 }
 
-pub(crate) fn type_word(t: DataType) -> &'static str {
+pub fn type_word(t: DataType) -> &'static str {
     match t {
         DataType::Bool => "BOOLEAN",
         DataType::Int => "BIGINT",
@@ -448,7 +453,7 @@ fn read_header(csv: &Path) -> Result<Vec<String>, Error> {
 }
 
 /// An R string literal.
-pub(crate) fn r_string(s: &str) -> String {
+pub fn r_string(s: &str) -> String {
     let mut out = String::from("\"");
     for c in s.chars() {
         match c {

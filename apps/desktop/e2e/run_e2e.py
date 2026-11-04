@@ -210,7 +210,7 @@ def main():
     if join_project:
         with_app(app, join_project, shots, approvals, lambda s: joins(s, shots))
     if slice4_project:
-        with_app(app, slice4_project, shots, approvals, lambda s: slice4(s, shots))
+        with_app(app, slice4_project, shots, approvals, lambda s: slice4(s, shots, slice4_project))
         refresh_without_the_app(app, slice4_project, approvals)
     print("PASS: end-to-end scenario")
 
@@ -485,7 +485,7 @@ def joins(s, shots):
     assert notebook["nbformat"] == 4 and any("read_csv" in "".join(c["source"]) for c in notebook["cells"]), notebook["cells"][:2]
 
 
-def slice4(s, shots):
+def slice4(s, shots, project):
     table = "//div[@role='table']"
     editor = "//section[@aria-label='Step editor']"
     s.wait_text(STATUS, "results need a run")
@@ -591,6 +591,16 @@ def slice4(s, shots):
     s.key("\ue007")
     s.find("//section[@aria-label='R console']//img[contains(@alt, 'Plot 1')]")
     s.screenshot(f"{shots}/25b-r-console.png")
+    # Open in RStudio: the step as an .R file; saving it there updates the step.
+    s.click("//button[contains(normalize-space(), 'Open in RStudio')]")
+    s.wait_text("//div[@role='status']", "Saving it there updates this step")
+    name = s.text("//section[@aria-label='Step editor']//code[contains(., '.R')]").strip()
+    rfile = next(os.path.join(dp, f) for dp, _, fs in os.walk(os.path.join(project, ".work", "edit")) for f in fs if f == name)
+    text = open(rfile).read()
+    open(rfile, "w").write(text[: text.index("# ---- the step's code")] + "# ---- the step's code (below this line) ----\nresult <- head(df, 2)\n")
+    s.wait_text("//div[@role='status']", "from the other editor")
+    s.wait_text("//*[@role='textbox' and @aria-label='R code']", "head(df, 2)")
+    s.screenshot(f"{shots}/25c-r-external.png")
     s.click("//button[@aria-label='More']")
     s.click("//div[@role='menuitem' and contains(., 'R installation')]")
     s.wait_text("//table[@aria-label='R packages']", "dplyr")

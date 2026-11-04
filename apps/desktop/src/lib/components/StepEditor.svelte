@@ -1,6 +1,6 @@
 <script lang="ts">
   import { untrack } from "svelte";
-  import { Trash2, X } from "@lucide/svelte";
+  import { ExternalLink, Trash2, X } from "@lucide/svelte";
   import type { Workspace } from "../workspace.svelte";
   import type { Column, Problem, StepOp, StepView } from "../api/types";
   import { CircleX, TriangleAlert, Info } from "@lucide/svelte";
@@ -299,6 +299,14 @@
         </label>
       {/if}
       {#if draft.type === "python" || draft.type === "r"}
+        <div class="mt-3 flex flex-wrap items-center gap-2 text-sm">
+          <button class="btn !min-h-7" disabled={dirty} title={dirty ? "Save first: the file starts from the saved code" : undefined} onclick={() => ws.editExternally(step.id)}>
+            <ExternalLink size={14} /> {draft.type === "r" ? "Open in RStudio" : "Open in Jupyter"}
+          </button>
+          <span class="text-xs text-ink-faint">
+            {#if ws.external[step.id]}Open as <code class="code">{ws.external[step.id]?.split(/[\\/]/).pop()}</code>; saving it there updates this step.{:else}Opens {draft.type === "r" ? "an .R file" : "a notebook"} with the step's inputs loaded, in the app your computer uses for it. Saving there updates this step.{/if}
+          </span>
+        </div>
         <CodeConsole
           bind:this={console_}
           {ws}

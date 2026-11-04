@@ -9,6 +9,8 @@
 
 mod comments;
 mod console;
+mod external;
+pub use external::{ExternalView, SyncView};
 pub use console::{ConsoleReply, ConsoleView, ObjectView, TablePreview};
 mod history;
 pub mod refresh;
@@ -349,6 +351,8 @@ pub struct App {
     /// The console open beside a code step: its step, the process, and the
     /// flag that interrupts its current run.
     console: Option<(String, vda_core::console::Console, std::sync::Arc<std::sync::atomic::AtomicBool>)>,
+    /// Code steps open as files in other editors, by step id.
+    external: std::collections::HashMap<String, external::External>,
 }
 
 impl Default for App {
@@ -378,6 +382,7 @@ impl App {
             rscript: vda_core::rlang::default_rscript(),
             r_chosen_by: "default",
             console: None,
+            external: Default::default(),
         }
     }
 
@@ -415,6 +420,9 @@ impl App {
     fn start(&mut self, analysis: Option<Analysis>, dir: &Path) -> Result<()> {
         // A console belongs to the project it was started in.
         self.console = None;
+        if self.session.as_ref().map(|s| s.project_dir() != dir).unwrap_or(true) {
+            self.external.clear();
+        }
         let sources = match &analysis {
             Some(a) => a.sources.clone(),
             None => persist::load_analysis(dir)?.sources,
