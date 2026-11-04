@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { CircleX, Info, PanelBottom, PanelLeft, PanelRight, PanelTop, Table2, TriangleAlert } from "@lucide/svelte";
+  import { CircleX, Database, Info, ScrollText, SlidersHorizontal, Sheet, SquareTerminal, TriangleAlert, Workflow } from "@lucide/svelte";
   import type { Workspace } from "../workspace.svelte";
   import type { PaneName } from "../layout";
   import ThemePicker from "./ThemePicker.svelte";
@@ -25,20 +25,21 @@
   let codeStep = $derived(ws.centerTab === "step" && (ws.selectedStep?.op.type === "python" || ws.selectedStep?.op.type === "r"));
   let onStep = $derived(ws.centerTab === "step");
 
-  function title(shown: boolean, what: string, keys = "") {
-    return `${shown ? "Hide" : "Show"} ${what}${keys ? ` (${keys})` : ""}`;
+  // The icons say what a dock holds; the tooltip says where it opens.
+  function title(shown: boolean, what: string, where: string, keys = "") {
+    return `${shown ? "Hide" : "Show"} ${what}, ${where}${keys ? ` (${keys})` : ""}`;
   }
 </script>
 
-{#snippet toggle(name: PaneName, label: string, Icon: typeof PanelLeft, keys = "", disabled = false)}
-  <button class="pane-toggle" aria-pressed={ws.panes[name]} aria-label={label} title={title(ws.panes[name], label.toLowerCase(), keys)} {disabled} onclick={() => ws.togglePane(name)}>
+{#snippet toggle(name: PaneName, label: string, where: string, Icon: typeof Workflow, keys = "", disabled = false)}
+  <button class="pane-toggle" aria-pressed={ws.panes[name]} aria-label={label} title={title(ws.panes[name], label.toLowerCase(), where, keys)} {disabled} onclick={() => ws.togglePane(name)}>
     <Icon size={15} />
   </button>
 {/snippet}
 
 <footer class="status-bar" aria-label="Status bar">
   <div class="flex items-center gap-0.5">
-    {@render toggle("pipeline", "Pipeline", PanelLeft, `${key}B`)}
+    {@render toggle("pipeline", "Pipeline", "on the left", Workflow, `${key}B`)}
   </div>
   <button
     class="status-item"
@@ -66,10 +67,10 @@
   <div class="ml-auto flex items-center gap-0.5">
     <ThemePicker onedit={() => ws.openSettings("appearance")} />
     <span class="mx-1 h-4 border-l border-rule" aria-hidden="true"></span>
-    {@render toggle("editor", ws.selectedSource ? "Source details" : "Step editor", PanelTop, "", !onStep)}
-    {@render toggle("result", "Result", Table2, "", !onStep)}
-    {@render toggle("activity", "Activity", PanelBottom, `${key}J`)}
-    {@render toggle("console", "Code console", PanelRight, `${key}\``, !codeStep)}
+    {@render toggle("editor", ws.selectedSource ? "Source details" : "Step editor", "in the middle, above the result", ws.selectedSource ? Database : SlidersHorizontal, "", !onStep)}
+    {@render toggle("result", "Result", "in the middle, below the editor", Sheet, "", !onStep)}
+    {@render toggle("activity", "Activity", "along the bottom: problems, output, run log, history", ScrollText, `${key}J`)}
+    {@render toggle("console", "Code console", "on the right", SquareTerminal, `${key}\``, !codeStep)}
   </div>
 </footer>
 
