@@ -121,6 +121,13 @@ class Session:
         )
         call("POST", f"/session/{self.id}/execute/sync", {"script": script, "args": [ref, value]})
 
+    def call_js(self, script):
+        call("POST", f"/session/{self.id}/execute/sync", {"script": script, "args": []})
+
+    def key(self, keys):
+        """Type keys into the focused element (WebDriver key codes, e.g. Enter)."""
+        call("POST", f"/session/{self.id}/actions", {"actions": [{"type": "key", "id": "kb", "actions": [a for k in keys for a in ({"type": "keyDown", "value": k}, {"type": "keyUp", "value": k})]}]})
+
     def count(self, xpath):
         return len(call("POST", f"/session/{self.id}/elements", {"using": "xpath", "value": xpath}))
 
@@ -572,6 +579,18 @@ def slice4(s, shots):
     s.wait_text(STATUS, "All results current")
     s.wait_text(table, "orders")
     s.screenshot(f"{shots}/25-r.png")
+    # The console beside the step: a line runs against the loaded inputs.
+    s.set_code("//*[@role='textbox' and @aria-label='R console input']", "by_region <- aggregate(units ~ region, data = df, FUN = sum)")
+    s.click("//section[@aria-label='R console']//button[normalize-space()='Start']")
+    s.wait_text("//section[@aria-label='R console']//*[@aria-label='Environment']", "df")
+    s.call_js("document.querySelector('[aria-label=\"R console input\"]').focus()")
+    s.key("\ue007")
+    s.wait_text("//section[@aria-label='R console']//*[@aria-label='Environment']", "by_region")
+    s.set_code("//*[@role='textbox' and @aria-label='R console input']", "plot(by_region$units)")
+    s.call_js("document.querySelector('[aria-label=\"R console input\"]').focus()")
+    s.key("\ue007")
+    s.find("//section[@aria-label='R console']//img[contains(@alt, 'Plot 1')]")
+    s.screenshot(f"{shots}/25b-r-console.png")
     s.click("//button[@aria-label='More']")
     s.click("//div[@role='menuitem' and contains(., 'R installation')]")
     s.wait_text("//table[@aria-label='R packages']", "dplyr")

@@ -8,6 +8,8 @@
 //! - Table data travels a page at a time as typed [`Cell`]s.
 
 mod comments;
+mod console;
+pub use console::{ConsoleReply, ConsoleView, ObjectView, TablePreview};
 mod history;
 pub mod refresh;
 mod settings;
@@ -284,7 +286,7 @@ fn write_file(path: &Path, text: &str) -> Result<()> {
     })
 }
 
-fn to_serde(j: &Json) -> J {
+pub(crate) fn to_serde(j: &Json) -> J {
     serde_json::from_str(&j.to_string_compact()).expect("core JSON is valid JSON")
 }
 
@@ -344,6 +346,9 @@ pub struct App {
     /// `Rscript` for R steps, and why it was chosen (as for Python).
     rscript: PathBuf,
     r_chosen_by: &'static str,
+    /// The console open beside a code step: its step, the process, and the
+    /// flag that interrupts its current run.
+    console: Option<(String, vda_core::console::Console, std::sync::Arc<std::sync::atomic::AtomicBool>)>,
 }
 
 impl Default for App {
@@ -372,6 +377,7 @@ impl App {
             python_chosen_by: "default",
             rscript: vda_core::rlang::default_rscript(),
             r_chosen_by: "default",
+            console: None,
         }
     }
 
@@ -407,6 +413,8 @@ impl App {
     }
 
     fn start(&mut self, analysis: Option<Analysis>, dir: &Path) -> Result<()> {
+        // A console belongs to the project it was started in.
+        self.console = None;
         let sources = match &analysis {
             Some(a) => a.sources.clone(),
             None => persist::load_analysis(dir)?.sources,

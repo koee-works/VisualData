@@ -27,16 +27,14 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-pub(crate) const WRAPPER: &str = r#"
-local({
+/// Reading the step's inputs and writing its result, shared by the step
+/// runner and the console (see `scratch.rs`).
+pub(crate) const R_IO: &str = r#"
   finish <- function(code, msg = NULL) {
     if (!is.null(msg)) cat(msg, "\n", sep = "", file = stderr())
     flush(stdout()); flush(stderr())
     quit(save = "no", status = code, runLast = FALSE)
   }
-  args <- commandArgs(trailingOnly = TRUE)
-  out <- args[1]; code_path <- args[2]; ids <- args[-(1:2)]
-
   read_input <- function(id) {
     types <- readLines(paste0("in-", id, ".types"), encoding = "UTF-8")
     # Everything is read as text, then converted: quoted numbers are fine.
@@ -61,7 +59,7 @@ local({
     d
   }
 
-  write_output <- function(d) {
+  write_output <- function(d, out) {
     d <- as.data.frame(d, stringsAsFactors = FALSE, optional = TRUE)
     n <- ncol(d)
     types <- character(n)
@@ -102,6 +100,12 @@ local({
                        row.names = FALSE, col.names = names(d), fileEncoding = "UTF-8")
     writeLines(types, paste0(out, ".types"))
   }
+
+"#;
+
+const R_MAIN: &str = r#"
+  args <- commandArgs(trailingOnly = TRUE)
+  out <- args[1]; code_path <- args[2]; ids <- args[-(1:2)]
 
   setup <- tryCatch({
     dfs <- lapply(ids, read_input)
@@ -150,13 +154,17 @@ local({
     got <- if (is.null(result)) "nothing" else class(result)[1]
     finish(3, sprintf("VDA_CONTRACT: the step must assign a data frame to `result` (got %s)", got))
   }
-  saved <- tryCatch({ write_output(result); TRUE }, error = function(e) {
+  saved <- tryCatch({ write_output(result, out); TRUE }, error = function(e) {
     cat("VDA_CONTRACT: `result` could not be saved as a table: ", conditionMessage(e), "\n", sep = "", file = stderr())
     FALSE
   })
   finish(if (saved) 0 else 3)
-})
 "#;
+
+/// The script that runs an R step (also embedded in exported notebooks).
+pub(crate) fn wrapper() -> String {
+    format!("local({{\n{R_IO}\n{R_MAIN}\n}})\n")
+}
 
 /// `Rscript` to use when nothing else is chosen: `$VDA_R`, or `Rscript`.
 pub fn default_rscript() -> PathBuf {
@@ -246,6 +254,14 @@ impl RRunner {
         env
     }
 
+    /// The package libraries R steps see (found once).
+    pub fn libraries(&mut self) -> Vec<String> {
+        if self.libraries.is_none() {
+            self.environment();
+        }
+        self.libraries.clone().unwrap_or_default()
+    }
+
     /// R's version and the versions of the reported packages; part of every
     /// R step's cache key. `None` when R cannot run.
     pub fn fingerprint(&mut self) -> Option<String> {
@@ -303,7 +319,7 @@ impl RRunner {
         let code_path = dir.join("step.R");
         fs::write(&code_path, code)?;
         let wrapper = dir.join("wrapper.R");
-        fs::write(&wrapper, WRAPPER)?;
+        fs::write(&wrapper, self::wrapper())?;
         let out_csv = dir.join("result.csv");
         let (err_path, out_path) = (dir.join("stderr.txt"), dir.join("stdout.txt"));
 
@@ -355,17 +371,24 @@ impl RRunner {
         if !status.success() {
             return Err(Error::R(summarize(&stderr, status.code())));
         }
-        let words = fs::read_to_string(out_csv.with_file_name("result.csv.types")).unwrap_or_default();
-        let header = read_header(&out_csv)?;
-        let types: Vec<DataType> = words.lines().map(parse_type).collect::<Option<_>>().ok_or_else(|| Error::R("the result's types could not be read".into()))?;
-        if types.len() != header.len() {
-            return Err(Error::R("the result's columns could not be read".into()));
-        }
-        crate::duck::csv_to_parquet(&out_csv, &header.into_iter().zip(types).collect::<Vec<_>>(), output)
+        read_r_table(&out_csv, output)
     }
 }
 
-fn type_word(t: DataType) -> &'static str {
+/// A table R wrote (CSV beside a `.types` file) as Parquet.
+pub(crate) fn read_r_table(csv: &Path, output: &Path) -> Result<(), Error> {
+    let mut types_path = csv.as_os_str().to_owned();
+    types_path.push(".types");
+    let words = fs::read_to_string(PathBuf::from(types_path)).unwrap_or_default();
+    let header = read_header(csv)?;
+    let types: Vec<DataType> = words.lines().map(parse_type).collect::<Option<_>>().ok_or_else(|| Error::R("the result's types could not be read".into()))?;
+    if types.len() != header.len() {
+        return Err(Error::R("the result's columns could not be read".into()));
+    }
+    crate::duck::csv_to_parquet(csv, &header.into_iter().zip(types).collect::<Vec<_>>(), output)
+}
+
+pub(crate) fn type_word(t: DataType) -> &'static str {
     match t {
         DataType::Bool => "BOOLEAN",
         DataType::Int => "BIGINT",
@@ -425,7 +448,7 @@ fn read_header(csv: &Path) -> Result<Vec<String>, Error> {
 }
 
 /// An R string literal.
-fn r_string(s: &str) -> String {
+pub(crate) fn r_string(s: &str) -> String {
     let mut out = String::from("\"");
     for c in s.chars() {
         match c {

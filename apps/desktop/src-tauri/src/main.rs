@@ -18,6 +18,8 @@ use vda_app::{AnalysisView, App, AppError, Page, ProfileRow, RunSummary};
 struct Shared {
     app: Arc<Mutex<App>>,
     cancel: Mutex<Option<Arc<AtomicBool>>>,
+    /// Interrupts the code running in the console.
+    console_cancel: Mutex<Option<Arc<AtomicBool>>>,
     startup: Option<String>,
 }
 
@@ -280,6 +282,47 @@ async fn run(window: tauri::Window, s: State<'_, Shared>) -> Res<RunSummary> {
 }
 
 #[tauri::command]
+async fn console_start(s: State<'_, Shared>, step_id: String) -> Res<vda_app::ConsoleView> {
+    let app = s.app.clone();
+    tauri::async_runtime::spawn_blocking(move || app.lock().map_err(|_| AppError::from("the app state is unavailable"))?.console_start(&step_id))
+        .await
+        .map_err(|e| AppError::from(format!("the console stopped unexpectedly: {e}")))?
+}
+
+#[tauri::command]
+async fn console_run(s: State<'_, Shared>, code: String) -> Res<vda_app::ConsoleReply> {
+    let flag = with(&s, |a| Ok(a.console_interrupt_handle()))?;
+    *s.console_cancel.lock().unwrap() = flag;
+    let app = s.app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || app.lock().map_err(|_| AppError::from("the app state is unavailable"))?.console_run(&code))
+        .await
+        .map_err(|e| AppError::from(format!("the console stopped unexpectedly: {e}")))?;
+    *s.console_cancel.lock().unwrap() = None;
+    result
+}
+
+#[tauri::command]
+async fn console_interrupt(s: State<'_, Shared>) -> Res<()> {
+    if let Some(flag) = s.console_cancel.lock().unwrap().as_ref() {
+        flag.store(true, Ordering::SeqCst);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn console_stop(s: State<'_, Shared>) -> Res<()> {
+    with(&s, |a| {
+        a.console_stop();
+        Ok(())
+    })
+}
+
+#[tauri::command]
+async fn console_compare(s: State<'_, Shared>, step_id: String) -> Res<Option<String>> {
+    with(&s, |a| a.console_compare(&step_id))
+}
+
+#[tauri::command]
 async fn cancel(s: State<'_, Shared>) -> Res<()> {
     if let Some(flag) = s.cancel.lock().unwrap().as_ref() {
         flag.store(true, Ordering::SeqCst);
@@ -316,6 +359,7 @@ fn main() {
         .manage(Shared {
             app: Arc::new(Mutex::new(App::default())),
             cancel: Mutex::new(None),
+            console_cancel: Mutex::new(None),
             startup: startup_project_arg(),
         })
         .invoke_handler(tauri::generate_handler![
@@ -363,6 +407,11 @@ fn main() {
             python_environment,
             set_python,
             r_environment,
+            console_start,
+            console_run,
+            console_interrupt,
+            console_stop,
+            console_compare,
             set_r,
             schedule,
             run,

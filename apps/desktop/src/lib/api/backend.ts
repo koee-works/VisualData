@@ -14,7 +14,7 @@ import type {
   StepOp,
   CheckReport,
   ColumnDetail,
-  Parameter, Comment, Every, PythonView, RView, ScheduleView, VersionView } from "./types";
+  Parameter, Comment, Every, PythonView, RView, ConsoleView, ConsoleReply, ScheduleView, VersionView } from "./types";
 
 export interface RunHandlers {
   onStep: (e: StepEvent) => void;
@@ -93,6 +93,12 @@ export interface Backend {
   pythonEnvironment(): Promise<PythonView>;
   setPython(path: string): Promise<PythonView>;
   rEnvironment(): Promise<RView>;
+  consoleStart(stepId: string): Promise<ConsoleView>;
+  consoleRun(code: string): Promise<ConsoleReply>;
+  consoleInterrupt(): Promise<void>;
+  consoleStop(): Promise<void>;
+  /** After the step ran: how its result differs from `result` in its console, if it does. */
+  consoleCompare(stepId: string): Promise<string | null>;
   setR(path: string): Promise<RView>;
   /** The scheduler entry that refreshes the project with vda-run. */
   schedule(every: Every, hour: number, minute: number, exports: [string, string][]): Promise<ScheduleView>;

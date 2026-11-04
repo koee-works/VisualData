@@ -8,6 +8,9 @@
   import FilterEditor from "./FilterEditor.svelte";
   import AggregateEditor from "./AggregateEditor.svelte";
   import CodeEditor from "./CodeEditor.svelte";
+  import CodeConsole from "./CodeConsole.svelte";
+  import type { RunRequest } from "../editor/setup";
+  import { editorParameters } from "../editor/complete";
   import ChartEditor from "./ChartEditor.svelte";
   import JoinEditor from "./JoinEditor.svelte";
   import AppendEditor from "./AppendEditor.svelte";
@@ -121,9 +124,20 @@
 
   let codeInputs = $derived(inputs.map((id) => ({ id, name: ws.nameOf(id), columns: ws.columnsOf(id) })));
 
-  // Ctrl+Enter or Shift+Enter in code: save, which runs the step.
-  function runFromEditor() {
-    if (dirty && !invalid && !saving) save();
+  let codeEditor: CodeEditor | undefined = $state();
+  let console_: CodeConsole | undefined = $state();
+
+  // Shift+Enter (and SQL's Ctrl+Enter): save and run the step. In Python and
+  // R, Ctrl+Enter runs the line or selection in the console instead.
+  async function runFromEditor(r: RunRequest) {
+    if (console_ && r.what !== "step") {
+      await console_.run(r.code, r.fromLine);
+      return;
+    }
+    if (saving || invalid) return;
+    if (dirty) await save();
+    await ws.run();
+    await console_?.compare();
   }
 
   function onkeydown(e: KeyboardEvent) {
@@ -239,7 +253,7 @@
       {#if draft.type === "sql"}
         <CodeEditor bind:code={draft.sql} language="sql" inputs={codeInputs} parameters={ws.view?.parameters ?? []} problems={byField["sql"] ?? []} onrun={runFromEditor} />
       {:else}
-        <CodeEditor bind:code={draft.code} language={draft.type} inputs={codeInputs} parameters={ws.view?.parameters ?? []} problems={byField["code"] ?? []} onrun={runFromEditor} />
+        <CodeEditor bind:this={codeEditor} bind:code={draft.code} language={draft.type} inputs={codeInputs} parameters={ws.view?.parameters ?? []} problems={byField["code"] ?? []} onrun={runFromEditor} />
       {/if}
       <div class="mt-3 flex flex-wrap items-center gap-2 text-sm" aria-label="More inputs">
         <span class="text-ink-soft">Also reads</span>
@@ -283,6 +297,16 @@
           />
           seconds
         </label>
+      {/if}
+      {#if draft.type === "python" || draft.type === "r"}
+        <CodeConsole
+          bind:this={console_}
+          {ws}
+          stepId={step.id}
+          language={draft.type}
+          context={{ inputs: codeInputs.map((i) => ({ ...i, columns: i.columns ?? null })), parameters: editorParameters(ws.view?.parameters ?? []) }}
+          ongoto={(n) => codeEditor?.focusLine(n)}
+        />
       {/if}
     {:else if draft.type === "chart"}
       <ChartEditor

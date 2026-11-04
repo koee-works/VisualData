@@ -348,6 +348,38 @@ export interface RView {
   candidates: string[];
 }
 
+/** An object held in a step's console, for its Environment pane. */
+export interface ConsoleObject {
+  name: string;
+  kind: string;
+  summary: string;
+}
+
+export interface ConsoleView {
+  step_id: string;
+  language: "python" | "r";
+  version: string;
+  objects: ConsoleObject[];
+  /** Inputs whose results are from before a change upstream. */
+  outdated: string[];
+}
+
+export interface ConsoleReply {
+  ok: boolean;
+  stdout: string;
+  stderr: string;
+  /** The last value, when it is a table: [name, type] columns and the first rows. */
+  table: { columns: [string, string][]; rows: unknown[][]; total: number } | null;
+  text: string | null;
+  error: string | null;
+  /** Line of the error in the code that was run. */
+  line: number | null;
+  /** Plots as data: URLs. */
+  images: string[];
+  objects: ConsoleObject[];
+  elapsed_ms: number;
+}
+
 export type Every = "hourly" | "daily" | "weekdays" | "weekly";
 
 export interface ScheduleView {

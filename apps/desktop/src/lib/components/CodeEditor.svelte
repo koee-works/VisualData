@@ -28,6 +28,10 @@
   });
   const LABEL = { sql: "SQL query", python: "Python code", r: "R code" };
   let mac = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
+  let area: CodeArea | undefined = $state();
+  export function focusLine(n: number) {
+    area?.focusLine(n);
+  }
 </script>
 
 <div class="space-y-2">
@@ -49,10 +53,16 @@
     {/if}
     Custom code is not converted back into visual controls.
   </p>
-  <CodeArea bind:value={code} lang={language} label={LABEL[language]} {context} {problems} {onrun} minLines={12} />
+  <CodeArea bind:this={area} bind:value={code} lang={language} label={LABEL[language]} {context} {problems} {onrun} minLines={12} />
   <p class="text-xs text-ink-faint">
-    {mac ? "⌘" : "Ctrl"}+Enter or Shift+Enter saves and runs. Ctrl+Space suggests names{#if language === "r"};
-      Alt+− types <code class="code">&lt;-</code>, {mac ? "⌘" : "Ctrl"}+Shift+M types <code class="code">|&gt;</code>{/if}.
+    {#if language === "sql"}
+      {mac ? "⌘" : "Ctrl"}+Enter or Shift+Enter saves and runs the step.
+    {:else}
+      {mac ? "⌘" : "Ctrl"}+Enter runs the line or selection in the console, {mac ? "⌘" : "Ctrl"}+Shift+Enter all of it; Shift+Enter
+      saves and runs the step.
+    {/if}
+    Ctrl+Space suggests names{#if language === "r"}; Alt+− types <code class="code">&lt;-</code>, {mac ? "⌘" : "Ctrl"}+Shift+M types
+      <code class="code">|&gt;</code>{/if}.
   </p>
   {#each problems.filter((p) => p.line === null && p.column === null) as p, i (i)}
     <p class="text-sm {p.severity === 'error' ? 'text-failed' : 'text-stale'}" role={p.severity === "error" ? "alert" : undefined}>{p.message}</p>

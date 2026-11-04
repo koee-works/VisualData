@@ -2,7 +2,7 @@
 // from what the step reads, problems as underlines, and the keys people bring
 // from RStudio and Jupyter.
 
-import { Compartment, EditorSelection, EditorState, type Extension } from "@codemirror/state";
+import { Compartment, EditorSelection, EditorState, Prec, type Extension } from "@codemirror/state";
 import {
   EditorView,
   keymap,
@@ -32,11 +32,13 @@ import { schemaFor, suggest, type EditorContext, type Lang } from "./complete";
 export type Keys = "standard" | "vim";
 
 export interface RunRequest {
-  /** The selected text, or the current line when nothing is selected
-   *  (RStudio's Ctrl+Enter); null to run everything. */
-  code: string | null;
-  /** Shift+Enter in Jupyter: run, then move on. */
-  advance: boolean;
+  /** What to run: the selection or the current line (Ctrl+Enter, as in
+   *  RStudio), all the code (Ctrl+Shift+Enter), or save and run the step
+   *  itself (Shift+Enter, as a Jupyter cell). */
+  what: "selection" | "all" | "step";
+  code: string;
+  /** Line in the editor where `code` starts, to place errors. */
+  fromLine: number;
 }
 
 const highlight = HighlightStyle.define([
@@ -119,11 +121,15 @@ function language(lang: Lang, ctx: () => EditorContext): Extension {
   }
 }
 
-/** The line under the cursor, or the selection. */
-function selectedCode(view: EditorView): string | null {
+/** The selection, or the line under the cursor; with no selection the
+ *  cursor then moves to the next line, as in RStudio. */
+function takeSelection(view: EditorView): { code: string; fromLine: number } {
   const sel = view.state.selection.main;
-  if (!sel.empty) return view.state.sliceDoc(sel.from, sel.to);
-  return view.state.doc.lineAt(sel.head).text;
+  const doc = view.state.doc;
+  if (!sel.empty) return { code: view.state.sliceDoc(sel.from, sel.to), fromLine: doc.lineAt(sel.from).number };
+  const line = doc.lineAt(sel.head);
+  if (line.number < doc.lines) view.dispatch({ selection: { anchor: doc.line(line.number + 1).from }, scrollIntoView: true });
+  return { code: line.text, fromLine: line.number };
 }
 
 function insert(text: string) {
@@ -136,12 +142,11 @@ function insert(text: string) {
 export function runKeys(lang: Lang, onrun: ((r: RunRequest) => void) | undefined, singleLine: boolean): Extension {
   const keys = [];
   if (onrun) {
+    const all = (v: EditorView): RunRequest => ({ what: "all", code: v.state.doc.toString(), fromLine: 1 });
     keys.push(
-      // RStudio: run the line or selection. Jupyter: Ctrl+Enter runs the cell.
-      { key: "Mod-Enter", run: (v: EditorView) => (onrun({ code: lang === "r" ? selectedCode(v) : null, advance: false }), true) },
-      // Jupyter: run and move on. RStudio: run everything is Ctrl+Shift+Enter.
-      { key: "Shift-Enter", run: () => (onrun({ code: null, advance: true }), true) },
-      { key: "Mod-Shift-Enter", run: () => (onrun({ code: null, advance: false }), true) },
+      { key: "Mod-Enter", run: (v: EditorView) => (onrun({ what: "selection", ...takeSelection(v) }), true) },
+      { key: "Mod-Shift-Enter", run: (v: EditorView) => (onrun(all(v)), true) },
+      { key: "Shift-Enter", run: (v: EditorView) => (onrun({ ...all(v), what: "step" }), true) },
     );
   }
   if (lang === "r") {
@@ -153,6 +158,26 @@ export function runKeys(lang: Lang, onrun: ((r: RunRequest) => void) | undefined
   return keymap.of(keys);
 }
 
+function consoleKeys(o: { onenter?: () => void; onhistory?: (step: -1 | 1) => string | null }): Extension {
+  const keys = [];
+  if (o.onenter) keys.push({ key: "Enter", run: () => (o.onenter!(), true) });
+  if (o.onhistory) {
+    for (const [key, step] of [["ArrowUp", -1], ["ArrowDown", 1]] as const) {
+      keys.push({
+        key,
+        run: (v: EditorView) => {
+          const text = o.onhistory!(step);
+          if (text === null) return false;
+          v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: text }, selection: { anchor: text.length } });
+          return true;
+        },
+      });
+    }
+  }
+  // Below completion (highest), so Enter still accepts a suggestion.
+  return Prec.high(keymap.of(keys));
+}
+
 export interface Options {
   lang: Lang;
   context: () => EditorContext;
@@ -161,6 +186,10 @@ export interface Options {
   singleLine?: boolean;
   onrun?: (r: RunRequest) => void;
   onchange: (code: string) => void;
+  /** A console's input line: Enter runs it. */
+  onenter?: () => void;
+  /** A console's input line: Up and Down recall earlier entries. */
+  onhistory?: (step: -1 | 1) => string | null;
   keys: Keys;
   keysCompartment: Compartment;
   languageCompartment: Compartment;
@@ -174,6 +203,7 @@ export function extensions(o: Options): Extension[] {
   return [
     o.keysCompartment.of(keysExtension(o.keys)),
     runKeys(o.lang, o.onrun, !!o.singleLine),
+    consoleKeys(o),
     multi ? [lineNumbers(), highlightActiveLineGutter(), highlightActiveLine(), lintGutter()] : [],
     highlightSpecialChars(),
     history(),

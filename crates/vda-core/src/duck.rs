@@ -538,3 +538,25 @@ pub fn csv_to_parquet(csv: &Path, columns: &[(String, DataType)], out: &Path) ->
     ))
     .map_err(|e| Error::Data(format!("the result could not be read back: {}", csv_error(&e.to_string()))))
 }
+
+/// Whether two Parquet files hold the same columns (names and types) and the
+/// same rows, in any order. `None` when they match; otherwise what differs.
+pub fn compare_tables(a: &Path, b: &Path) -> Result<Option<String>, Error> {
+    let conn = open(&EngineOptions::default())?;
+    let (ra, rb) = (format!("read_parquet({})", lit(a)), format!("read_parquet({})", lit(b)));
+    let cols = |rel: &str| -> Result<Vec<(String, DataType)>, Error> {
+        Ok(describe(&conn, &format!("SELECT * FROM {rel}"))?.into_iter().map(|(n, t)| (n, normalize(&t).0)).collect())
+    };
+    let (ca, cb) = (cols(&ra)?, cols(&rb)?);
+    if ca != cb {
+        let words = |c: &[(String, DataType)]| c.iter().map(|(n, t)| format!("{n} ({})", t.name())).collect::<Vec<_>>().join(", ");
+        return Ok(Some(format!("the columns differ: {} against {}", words(&ca), words(&cb))));
+    }
+    let count = |sql: String| -> Result<i64, Error> { conn.query_row(&sql, [], |r| r.get::<_, i64>(0)).map_err(db_err("cannot compare")) };
+    let only_a = count(format!("SELECT count(*) FROM (SELECT * FROM {ra} EXCEPT ALL SELECT * FROM {rb})"))?;
+    let only_b = count(format!("SELECT count(*) FROM (SELECT * FROM {rb} EXCEPT ALL SELECT * FROM {ra})"))?;
+    Ok(match (only_a, only_b) {
+        (0, 0) => None,
+        (x, y) => Some(format!("{x} row{} only in the first and {y} only in the second", if x == 1 { "" } else { "s" })),
+    })
+}

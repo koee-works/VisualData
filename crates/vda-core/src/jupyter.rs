@@ -338,7 +338,7 @@ pub fn notebook(session: &mut Session) -> Result<Json, Error> {
     if a.steps.iter().any(|s| matches!(s.kind, StepKind::R { .. })) {
         setup.push_str(&format!(
             "\n# R steps run with Rscript exactly as in the app: the same wrapper, data passed as CSV with its types.\nR_WRAPPER = {}\nR_PARAMS = {}\n{R_HELPER}",
-            py(crate::rlang::WRAPPER),
+            py(&crate::rlang::wrapper()),
             py(&crate::rlang::params_r(&a.parameters))
         ));
     }

@@ -17,6 +17,8 @@
     singleLine = false,
     minLines = 10,
     onrun,
+    onenter,
+    onhistory,
     keys = loadKeys(),
   }: {
     value: string;
@@ -28,6 +30,8 @@
     singleLine?: boolean;
     minLines?: number;
     onrun?: (r: RunRequest) => void;
+    onenter?: () => void;
+    onhistory?: (step: -1 | 1) => string | null;
     keys?: Keys;
   } = $props();
 
@@ -51,6 +55,8 @@
           languageCompartment: langC,
           context: () => context,
           onrun: onrun ? (r) => onrun?.(r) : undefined,
+          onenter: onenter ? () => onenter?.() : undefined,
+          onhistory: onhistory ? (s) => onhistory?.(s) ?? null : undefined,
           onchange: (code) => {
             if (code !== value) value = code;
           },
@@ -98,6 +104,18 @@
   });
 
   let invalid = $derived(problems.some((p) => p.severity === "error"));
+
+  /** Put the cursor at the start of a line and show it. */
+  export function focusLine(n: number) {
+    if (!view) return;
+    const line = view.state.doc.line(Math.min(Math.max(n, 1), view.state.doc.lines));
+    view.dispatch({ selection: { anchor: line.from, head: line.to }, scrollIntoView: true });
+    view.focus();
+  }
+
+  export function focus() {
+    view?.focus();
+  }
 </script>
 
 <div

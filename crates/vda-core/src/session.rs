@@ -270,6 +270,9 @@ impl StepState {
     }
 }
 
+/// A step's input files by input id, and the inputs that are outdated.
+pub type InputFiles = (Vec<(String, PathBuf)>, Vec<String>);
+
 pub struct Session {
     pub analysis: Analysis,
     project_dir: PathBuf,
@@ -603,6 +606,36 @@ impl Session {
     pub fn check_report(&self, step_id: &str) -> Option<crate::check::CheckReport> {
         let key = self.plan().ok()?.keys.get(step_id)?.clone();
         crate::check::CheckReport::from_json(&self.artifacts.load_check(&key)?).ok()
+    }
+
+    /// The files a step reads, by input id, for a console beside it, and the
+    /// inputs whose results are outdated (from before a change upstream).
+    pub fn input_files(&mut self, step_id: &str) -> Result<InputFiles, Error> {
+        let step = self.analysis.step(step_id).ok_or_else(|| Error::Validation(format!("unknown step `{step_id}`")))?.clone();
+        let mut files = Vec::new();
+        let mut outdated = Vec::new();
+        for id in &step.inputs {
+            if self.analysis.is_source(id) {
+                files.push((id.clone(), self.source_dataset(id)?.path));
+                continue;
+            }
+            let ds = self.output(id).and_then(Output::as_dataset).cloned().ok_or_else(|| {
+                Error::Validation(format!("`{id}` has no result yet; run the analysis first"))
+            })?;
+            if self.state(id)? != StepState::Fresh {
+                outdated.push(id.clone());
+            }
+            files.push((id.clone(), ds.path));
+        }
+        Ok((files, outdated))
+    }
+
+    pub fn r_runner_libraries(&self) -> Vec<String> {
+        self.r.borrow_mut().as_mut().map(|r| r.libraries()).unwrap_or_default()
+    }
+
+    pub fn r_program(&self) -> Option<PathBuf> {
+        self.r.borrow().as_ref().map(|r| r.rscript.clone())
     }
 
     pub fn output(&self, step_id: &str) -> Option<&Output> {

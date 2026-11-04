@@ -27,6 +27,8 @@ import type {
   Every,
   PythonView,
   RView,
+  ConsoleView,
+  ConsoleReply,
   ScheduleView,
   SourceFormat,
   VersionView,
@@ -304,6 +306,57 @@ export class MockBackend implements Backend {
 
   async pythonEnvironment(): Promise<PythonView> {
     return structuredClone(this.python);
+  }
+
+  private consoleFor: { step: string; vars: Set<string> } | null = null;
+
+  async consoleStart(stepId: string): Promise<ConsoleView> {
+    const s = this.steps.find((x) => x.id === stepId);
+    if (!s || (s.op.type !== "python" && s.op.type !== "r")) throw { message: "only Python and R steps have a console" };
+    this.consoleFor = { step: stepId, vars: new Set(["df", "params"]) };
+    const lang = s.op.type;
+    return { step_id: stepId, language: lang, version: lang === "r" ? "4.4.1" : "3.12.4", objects: this.consoleObjects(), outdated: [] };
+  }
+
+  private consoleObjects() {
+    return [...(this.consoleFor?.vars ?? [])].sort().map((name) =>
+      name === "df" ? { name, kind: "data frame", summary: "240 rows × 5 columns" } : { name, kind: name === "params" ? "dict" : "value", summary: "" },
+    );
+  }
+
+  // A pretend console: assignments are remembered by name, `df` shows a
+  // table, `stop`/`raise` fail on their line, `plot` draws.
+  async consoleRun(code: string): Promise<ConsoleReply> {
+    if (!this.consoleFor) throw { message: "start the console first" };
+    const lines = code.split("\n");
+    const base: ConsoleReply = { ok: true, stdout: "", stderr: "", table: null, text: null, error: null, line: null, images: [], objects: [], elapsed_ms: 3 };
+    const bad = lines.findIndex((l) => /\b(stop|raise)\b/.test(l));
+    for (const l of lines.slice(0, bad < 0 ? lines.length : bad)) {
+      const m = l.match(/^\s*([A-Za-z_][\w.]*)\s*(<-|=)(?!=)/);
+      if (m) this.consoleFor.vars.add(m[1]!);
+    }
+    if (bad >= 0) return { ...base, ok: false, error: "Error: raised by the code", line: bad + 1, objects: this.consoleObjects() };
+    const last = lines.filter((l) => l.trim()).at(-1)?.trim() ?? "";
+    const table = /^(df|head\(df\)|df\.head\(\))$/.test(last)
+      ? { columns: [["region", "string"], ["revenue", "float64"]] as [string, string][], rows: [["East", 120.5], ["West", null]], total: 240 }
+      : null;
+    const printed = lines.filter((l) => /^(print|cat)\(/.test(l.trim())).map((l) => l.trim().replace(/^(print|cat)\((.*)\)$/, "$2")).join("\n");
+    const images = lines.some((l) => /\b(plot|plt\.|ggplot)/.test(l))
+      ? ["data:image/svg+xml;base64," + btoa('<svg xmlns="http://www.w3.org/2000/svg" width="320" height="160"><rect width="320" height="160" fill="#fff"/><rect x="30" y="40" width="50" height="100" fill="#4652c8"/><rect x="110" y="70" width="50" height="70" fill="#4652c8"/><rect x="190" y="20" width="50" height="120" fill="#4652c8"/></svg>')]
+      : [];
+    return { ...base, stdout: printed, table, images, objects: this.consoleObjects() };
+  }
+
+  async consoleInterrupt() {}
+
+  async consoleStop() {
+    this.consoleFor = null;
+  }
+
+  async consoleCompare(stepId: string): Promise<string | null> {
+    // The pretend console cannot tell; the real comparison is tested in Rust.
+    void stepId;
+    return null;
   }
 
   async rEnvironment(): Promise<RView> {

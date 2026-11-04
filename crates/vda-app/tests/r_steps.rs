@@ -85,3 +85,42 @@ fn the_r_installation_is_described_and_can_be_chosen() {
     let saved: serde_json::Value = serde_json::from_str(&fs::read_to_string(&settings).unwrap()).unwrap();
     assert_eq!(saved["r"], rscript.to_string_lossy().as_ref());
 }
+
+#[test]
+fn a_console_beside_a_step_and_the_check_after_saving() {
+    let dir = fresh("console");
+    let mut app = App::default().with_approvals_file(fresh("approvals-c.json")).with_settings_file(fresh("settings-c.json"));
+    app.create_project(&dir, &samples().join("sales.csv"), "Console").unwrap();
+    let v = app.add_step(&["source".into()], None, &json!({"type": "python", "code": "result = df", "timeout_ms": 60000})).unwrap();
+    let id = v.steps[0].id.clone();
+    // Inputs are sources here, so the console starts without a run.
+    let c = app.console_start(&id).unwrap();
+    assert_eq!(c.language, "python");
+    assert!(c.objects.iter().any(|o| o.name == "df"));
+    let r = app.console_run("result = df[df['units'] > 2]\nresult.head(3)").unwrap();
+    assert!(r.ok, "{r:?}");
+    let t = r.table.unwrap();
+    assert_eq!(t.rows.len(), 3);
+
+    // The step saved with the code that made the console's result: they match.
+    app.update_step(&id, None, &json!({"type": "python", "code": "result = df[df['units'] > 2]", "timeout_ms": 60000}), None).unwrap();
+    app.run(&mut |_| {}).unwrap();
+    assert_eq!(app.console_compare(&id).unwrap(), None);
+    // The console changes `result` with a line the step does not have.
+    app.console_run("result = result.head(1)").unwrap();
+    let warning = app.console_compare(&id).unwrap().expect("a difference");
+    assert!(warning.contains("only in the step"), "{warning}");
+
+    app.console_stop();
+    assert!(app.console_run("1").unwrap_err().message.contains("start the console first"));
+
+    if r_available() {
+        let v = app.add_step(&["source".into()], None, &json!({"type": "r", "code": "result <- df", "timeout_ms": 60000})).unwrap();
+        let rid = v.steps.iter().find(|s| s.mode == "r").unwrap().id.clone();
+        let c = app.console_start(&rid).unwrap();
+        assert_eq!(c.language, "r");
+        let r = app.console_run("plot(df$units, df$revenue)\nsummary(df$units)").unwrap();
+        assert!(r.ok && r.images.len() == 1 && r.images[0].starts_with("data:image/png;base64,iVBOR"), "{r:?}");
+        assert!(r.stdout.contains("Min."), "{}", r.stdout);
+    }
+}
