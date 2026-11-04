@@ -87,8 +87,15 @@ jobs:
           find "$out" -maxdepth 2 -print | head -50 || true
           case "${{ runner.os }}" in
             Linux)
-              dpkg-deb -c "$out"/deb/*.deb | grep -q 'usr/bin/vda-run$'
-              rpm -qlp "$out"/rpm/*.rpm 2>/dev/null | grep -q '/usr/bin/vda-run$' || echo "rpm not checked (no rpm tool)"
+              # Listings go to files first: grep -q closing a pipe early would fail the step under pipefail.
+              dpkg-deb -c "$out"/deb/*.deb > "$RUNNER_TEMP/deb.txt"
+              grep -q 'usr/bin/vda-run$' "$RUNNER_TEMP/deb.txt"
+              if command -v rpm >/dev/null; then
+                rpm -qlp "$out"/rpm/*.rpm > "$RUNNER_TEMP/rpm.txt"
+                grep -q '/usr/bin/vda-run$' "$RUNNER_TEMP/rpm.txt"
+              else
+                echo "rpm not checked (no rpm tool)"
+              fi
               chmod +x "$out"/appimage/*.AppImage
               (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/$out"/appimage/*.AppImage --appimage-extract >/dev/null)
               test -x "$RUNNER_TEMP/squashfs-root/usr/bin/vda-run"
