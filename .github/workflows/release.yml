@@ -59,16 +59,25 @@ jobs:
           cache: npm
           cache-dependency-path: apps/desktop/package-lock.json
 
-      - name: Build the installers
-        working-directory: apps/desktop
+      # macOS signing and notarization settings, passed on only when the
+      # secrets are set: an empty value would make Tauri try to sign anyway.
+      - name: Signing settings (only when set)
+        if: runner.os == 'macOS'
         env:
-          # macOS signing and notarization, used when set (docs/packaging.md).
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        shell: bash
+        run: |
+          for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [ -n "${!v}" ]; then echo "$v=${!v}" >> "$GITHUB_ENV"; echo "$v is set"; fi
+          done
+
+      - name: Build the installers
+        working-directory: apps/desktop
         shell: bash
         run: |
           npm ci
