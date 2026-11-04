@@ -84,7 +84,7 @@ jobs:
         run: |
           set -e
           out="${{ matrix.out }}"
-          ls -R "$out" | head -50
+          find "$out" -maxdepth 2 -print | head -50 || true
           case "${{ runner.os }}" in
             Linux)
               dpkg-deb -c "$out"/deb/*.deb | grep -q 'usr/bin/vda-run$'
