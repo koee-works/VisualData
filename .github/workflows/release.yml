@@ -140,8 +140,9 @@ jobs:
           merge-multiple: true
       - name: Require the Linux installers
         run: |
-          test -n "$(ls installers/*.deb 2>/dev/null)" && test -n "$(ls installers/*.AppImage 2>/dev/null)" || { echo "Linux installers are missing"; exit 1; }
-          ls -la installers
+          # Artifacts keep their folders (deb/, appimage/, ...), so search the whole tree.
+          find installers -type f | head -50
+          test -n "$(find installers -name '*.deb' -print -quit)" && test -n "$(find installers -name '*.AppImage' -print -quit)" || { echo "Linux installers are missing"; exit 1; }
       - name: Make a draft release with the installers
         env:
           GH_TOKEN: ${{ github.token }}
