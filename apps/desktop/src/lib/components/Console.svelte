@@ -61,13 +61,54 @@
     return new Date(ms).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
   }
 
+  // Notes of the same kind about several steps read as one line (with each
+  // step a link), so a finished analysis does not show a column of them.
+  type Item = (typeof ws.problems.items)[number];
+  type Row = { one: Item } | { group: Item[] };
+  let rows = $derived.by(() => {
+    const out: Row[] = [];
+    const items = ws.problems.items;
+    const groupable = (p: Item) => p.severity === "info" && p.step !== null && p.code === "unused";
+    const many = items.filter(groupable);
+    let placed = false;
+    for (const p of items) {
+      if (many.length > 1 && groupable(p)) {
+        if (!placed) out.push({ group: many });
+        placed = true;
+      } else out.push({ one: p });
+    }
+    return out;
+  });
+
+  // Runs of undo and redo fold into one row: they are steps back and forth,
+  // not changes of their own.
+  type V = (typeof versions)[number];
+  let historyRows = $derived.by(() => {
+    const out: ({ v: V } | { fold: V[] })[] = [];
+    let run: V[] = [];
+    const flush = () => {
+      if (run.length > 1) out.push({ fold: run });
+      else if (run.length) out.push({ v: run[0]! });
+      run = [];
+    };
+    for (const v of versions) {
+      if (!v.current && /^(Undid|Redid): /.test(v.what)) run.push(v);
+      else {
+        flush();
+        out.push({ v });
+      }
+    }
+    flush();
+    return out;
+  });
+
   function open(tab: (typeof tabs)[number]["id"]) {
     ws.consoleTab = tab;
     ws.consoleOpen = true;
   }
 </script>
 
-<section class="flex min-h-0 flex-col border-t border-rule-strong bg-panel" aria-label="Console" class:h-56={ws.consoleOpen}>
+<section class="flex min-h-0 flex-col border-t border-rule-strong bg-panel" aria-label="Activity" class:h-56={ws.consoleOpen}>
   <div class="flex items-center gap-1 px-2">
     {#each tabs as t (t.id)}
       <button
@@ -87,7 +128,7 @@
     <span class="ml-auto truncate px-2 text-xs text-ink-faint" aria-live="polite">{summary(ws.counts)}</span>
     <button
       class="btn btn-quiet !min-h-7 !px-1.5"
-      aria-label={ws.consoleOpen ? "Close the console" : "Open the console"}
+      aria-label={ws.consoleOpen ? "Close the activity panel" : "Open the activity panel"}
       onclick={() => (ws.consoleOpen = !ws.consoleOpen)}
     >
       {#if ws.consoleOpen}<ChevronDown size={15} />{:else}<ChevronUp size={15} />{/if}
@@ -103,7 +144,29 @@
           </p>
         {:else}
           <ul class="divide-y divide-rule text-sm" aria-label="Problems">
-            {#each ws.problems.items as p, i (i)}
+            {#each rows as row, i (i)}
+              {#if "group" in row}
+                {@const Icon = icon.info}
+                <li class="group flex items-start gap-2 px-3 py-1.5">
+                  <Icon size={15} class="mt-0.5 shrink-0 text-ink-faint" aria-label="info" />
+                  <p class="min-w-0 flex-1">
+                    {row.group.length} steps are not read by another step or shown in the notebook:
+                    {#each row.group as g, k (k)}{#if k > 0}{", "}{/if}<button class="font-semibold underline decoration-rule-strong underline-offset-2 hover:text-ink" onclick={() => ws.reveal(g)}>{ws.nameOf(g.step!)}</button>{/each}.
+                    <span class="text-ink-faint">Fine for final results; otherwise they may be left over.</span>
+                  </p>
+                  <button
+                    class="btn btn-quiet !min-h-6 !min-w-6 justify-center !px-1.5"
+                    title="Dismiss these notes; saved with the project"
+                    aria-label="Dismiss"
+                    onclick={async () => {
+                      for (const g of row.group) await ws.dismiss(g);
+                    }}
+                  >
+                    <EyeOff size={14} />
+                  </button>
+                </li>
+              {:else}
+              {@const p = row.one}
               {@const Icon = icon[p.severity]}
               <li class="group flex items-start gap-2 px-3 py-1.5">
                 <Icon
@@ -133,6 +196,7 @@
                   </button>
                 {/if}
               </li>
+              {/if}
             {/each}
           </ul>
         {/if}
@@ -162,7 +226,7 @@
           <p class="px-4 py-3 text-sm text-ink-soft">No saved versions yet. Every change you save is kept here, and earlier versions can be restored.</p>
         {:else}
           <ol class="text-sm" aria-label="Saved versions">
-            {#each versions as v (v.version)}
+            {#snippet version(v: V)}
               <li class="flex items-center gap-3 border-b border-rule px-3 py-1.5">
                 <span class="w-40 shrink-0 text-ink-soft">{when(v.time_unix_ms)}</span>
                 <span class="min-w-0 flex-1 truncate" title={v.what}>{v.what}</span>
@@ -172,6 +236,22 @@
                   <button class="btn btn-quiet !min-h-6 !px-2 text-xs" disabled={ws.running} onclick={() => ws.restoreVersion(v.version)}>Restore</button>
                 {/if}
               </li>
+            {/snippet}
+            {#each historyRows as row, i (i)}
+              {#if "fold" in row}
+                <li class="border-b border-rule">
+                  <details>
+                    <summary class="cursor-pointer px-3 py-1.5 text-ink-soft hover:bg-paper">
+                      {row.fold.length} undo and redo steps, {when(row.fold.at(-1)!.time_unix_ms)} to {when(row.fold[0]!.time_unix_ms)}
+                    </summary>
+                    <ol class="border-t border-rule bg-paper/50 pl-4">
+                      {#each row.fold as v (v.version)}{@render version(v)}{/each}
+                    </ol>
+                  </details>
+                </li>
+              {:else}
+                {@render version(row.v)}
+              {/if}
             {/each}
           </ol>
           <p class="px-4 py-2 text-xs text-ink-faint">Kept in the project's history folder, so they travel with it. Restoring keeps results that still match, and can be undone.</p>

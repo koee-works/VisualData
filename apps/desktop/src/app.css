@@ -18,16 +18,16 @@
 
   --color-ink: #1d2a3f;
   --color-ink-soft: #4a5872;
-  --color-ink-faint: #7c879a;
+  --color-ink-faint: #5c687c;
   --color-paper: #eef2f5;
   --color-panel: #ffffff;
   --color-rule: #d5dce4;
-  --color-rule-strong: #b6c1cd;
+  --color-rule-strong: #8592a3;
   --color-select: #dfe7f7;
 
-  --color-fresh: #1f7a6c;
+  --color-fresh: #1b6f62;
   --color-fresh-wash: #e3f2ef;
-  --color-stale: #a86a12;
+  --color-stale: #8a560c;
   --color-stale-wash: #fbf1df;
   --color-failed: #a8322d;
   --color-failed-wash: #f9e5e3;
@@ -167,6 +167,60 @@
     color: var(--color-ink);
     border-bottom-color: var(--color-ink);
     font-weight: 600;
+  }
+
+  /* A name that reads as the heading until you point at it or edit it. */
+  .title-field:not(:focus):not(:hover) {
+    border-color: transparent;
+    background: transparent;
+  }
+  .kind-tag {
+    border: 1px solid var(--color-rule-strong);
+    border-radius: 4px;
+    padding: 0.05rem 0.45rem;
+    font-size: var(--text-xs);
+    font-weight: 600;
+    color: var(--color-ink-soft);
+    white-space: nowrap;
+  }
+
+  /* Dividers between panes: a hairline with a grip that shows they move. */
+  .divider {
+    position: relative;
+    background: var(--color-paper);
+    touch-action: none;
+  }
+  .divider-h {
+    cursor: row-resize;
+    border-block: 1px solid var(--color-rule);
+  }
+  .divider-v {
+    cursor: col-resize;
+    border-inline: 1px solid var(--color-rule);
+  }
+  .divider::after {
+    content: "";
+    position: absolute;
+    inset: 50% auto auto 50%;
+    translate: -50% -50%;
+    border-radius: 2px;
+    background: var(--color-rule-strong);
+  }
+  .divider-h::after {
+    width: 2.5rem;
+    height: 3px;
+  }
+  .divider-v::after {
+    width: 3px;
+    height: 2.5rem;
+  }
+  .divider:hover,
+  .divider.active {
+    background: var(--color-select);
+  }
+  .divider:hover::after,
+  .divider.active::after {
+    background: var(--color-running);
   }
 
   .code {

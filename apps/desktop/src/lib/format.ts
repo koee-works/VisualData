@@ -5,8 +5,33 @@ export function exactCell(c: Cell): string {
   return c.t === "float" ? String(c.v) : formatCell(c);
 }
 
-/** Display a cell the way the core does (whole floats keep one decimal). */
-export function formatCell(c: Cell): string {
+/** How many decimals a column's decimal values need on screen, so they line
+ *  up: as many as the most precise visible value, at least one, at most four
+ *  (six for columns of small fractions). The exact value is in each cell's title. */
+export function columnDecimals(cells: Cell[]): number {
+  let need = 1;
+  let big = 0;
+  for (const c of cells) {
+    if (c.t !== "float" || !Number.isFinite(c.v)) continue;
+    big = Math.max(big, Math.abs(c.v));
+    const text = String(Number(c.v.toFixed(6)));
+    const dot = text.indexOf(".");
+    if (dot >= 0 && !text.includes("e")) need = Math.max(need, text.length - dot - 1);
+  }
+  return Math.min(need, big > 0 && big < 1 ? 6 : 4);
+}
+
+/** A decimal with a fixed number of decimals and thousands separators. */
+export function formatDecimal(v: number, decimals: number): string {
+  if (!Number.isFinite(v)) return String(v);
+  if (Math.abs(v) >= 1e15 || (v !== 0 && Math.abs(v) < 1e-6)) return String(v);
+  return v.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+}
+
+/** Display a cell the way the core does (whole floats keep one decimal).
+ *  With `decimals`, a decimal is shown with that many, for a column. */
+export function formatCell(c: Cell, decimals?: number): string {
+  if (c.t === "float" && decimals !== undefined) return formatDecimal(c.v, decimals);
   switch (c.t) {
     case "null":
       return "";
@@ -117,6 +142,27 @@ export const windowWords: Record<WindowFunc, string> = {
 /** Comparison symbols as people write them. */
 export const symbols: Record<string, string> = { "=": "=", "<>": "≠", "<": "<", "<=": "≤", ">": ">", ">=": "≥" };
 
+/** The kind of step, in a word or two, for the editor's header. */
+export const kindWords: Record<StepOp["type"], string> = {
+  filter: "Filter",
+  derive: "Calculate",
+  select: "Columns",
+  sort: "Sort",
+  aggregate: "Summarize",
+  window: "Across rows",
+  dedupe: "Duplicates",
+  pivot: "Pivot",
+  unpivot: "Unpivot",
+  join: "Join",
+  append: "Append",
+  check: "Check",
+  test: "Test",
+  chart: "Chart",
+  sql: "SQL",
+  python: "Python",
+  r: "R",
+};
+
 /** One-line description of what a step does, for the pipeline. */
 export function describe(op: StepOp): string {
   switch (op.type) {
@@ -125,7 +171,7 @@ export function describe(op: StepOp): string {
       return (
         "Keep rows where " +
         op.predicates
-          .map((p) => `${p.column} ${opWords[p.op]}${p.op.startsWith("IS") ? "" : ` ${literalText(p.value)}`}`)
+          .map((p) => `${p.column} ${opWords[p.op]}${p.op.startsWith("IS") ? "" : ` ${p.param ? `@${p.param}` : literalText(p.value)}`}`)
           .join(" and ")
       );
     case "aggregate": {

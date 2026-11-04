@@ -290,7 +290,7 @@ pub fn vega_lite(kind: &StepKind, d: &ChartData) -> Result<Json, Error> {
                                 ("field", Json::str("start")),
                                 ("type", Json::str("quantitative")),
                                 ("bin", Json::obj(vec![("binned", Json::Bool(true)), ("step", Json::Num(w))])),
-                                ("title", Json::str(c.x)),
+                                ("title", Json::str(words(c.x))),
                             ]),
                         ),
                         ("x2", Json::obj(vec![("field", Json::str("end"))])),
@@ -300,9 +300,9 @@ pub fn vega_lite(kind: &StepKind, d: &ChartData) -> Result<Json, Error> {
             ])
         }
         Mark::Boxplot => {
-            let x = if c.x.is_empty() { None } else { Some(enc(c.x, c.x, if dtype(c.x).is_temporal() { "temporal" } else { "nominal" })) };
+            let x = if c.x.is_empty() { None } else { Some(enc(c.x, &words(c.x), if dtype(c.x).is_temporal() { "temporal" } else { "nominal" })) };
             let layer = |m: Json, from: &str, to: Option<&str>| {
-                let mut e = vec![("y", enc(from, c.y, "quantitative"))];
+                let mut e = vec![("y", enc(from, &words(c.y), "quantitative"))];
                 if let Some(to) = to {
                     e.push(("y2", Json::obj(vec![("field", Json::str(to))])));
                 }
@@ -335,9 +335,15 @@ pub fn vega_lite(kind: &StepKind, d: &ChartData) -> Result<Json, Error> {
             let x_ty = encoding_type(dtype(c.x));
             // Bars of a temporal or numeric x read as categories unless summarized over time.
             let x_ty = if m == Mark::Bar && x_ty == "quantitative" { "ordinal" } else { x_ty };
-            let mut e = vec![("x", enc(c.x, c.x, x_ty)), ("y", enc(&y, &y, encoding_type(dtype(&y))))];
+            let mut y_enc = enc(&y, &words(&y), encoding_type(dtype(&y)));
+            if looks_like_share(&y, t) {
+                if let Json::Obj(m) = &mut y_enc {
+                    m.insert("axis".into(), Json::obj(vec![("format", Json::str(".0%"))]));
+                }
+            }
+            let mut e = vec![("x", enc(c.x, &words(c.x), x_ty)), ("y", y_enc)];
             if let Some(col) = c.color {
-                e.push(("color", enc(col, col, if dtype(col).is_numeric() { "quantitative" } else { "nominal" })));
+                e.push(("color", enc(col, &words(col), if dtype(col).is_numeric() { "quantitative" } else { "nominal" })));
             }
             let mark = match m {
                 Mark::Area => Json::obj(vec![("type", Json::str("area")), ("tooltip", Json::Bool(true)), ("opacity", Json::Num(0.85))]),
@@ -349,6 +355,30 @@ pub fn vega_lite(kind: &StepKind, d: &ChartData) -> Result<Json, Error> {
     })
 }
 
+/// A column name as an axis title: `revenue_share` reads "revenue share".
+fn words(name: &str) -> String {
+    name.replace('_', " ")
+}
+
+/// A fraction named like a share, rate or percentage, with every value
+/// between 0 and 1: its axis shows percentages.
+fn looks_like_share(name: &str, t: &crate::table::Table) -> bool {
+    let n = name.to_lowercase();
+    if !["share", "percent", "pct", "rate", "ratio", "proportion", "fraction"].iter().any(|w| n.contains(w)) {
+        return false;
+    }
+    let Some(i) = t.schema.index_of(name) else { return false };
+    let mut any = false;
+    for r in &t.rows {
+        match r[i].as_f64() {
+            Some(v) if (0.0..=1.0).contains(&v) => any = true,
+            Some(_) => return false,
+            None => {}
+        }
+    }
+    any
+}
+
 fn capitalize(s: &str) -> String {
     let mut cs = s.chars();
     cs.next().map(|f| f.to_uppercase().collect::<String>() + cs.as_str()).unwrap_or_default()
@@ -357,6 +387,18 @@ fn capitalize(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shares_show_as_percentages_only_when_they_are_fractions() {
+        let t = |vals: &[f64]| crate::table::Table {
+            schema: crate::table::Schema::new(vec![("revenue_share", DataType::Float)]),
+            rows: vals.iter().map(|v| vec![crate::table::Value::Float(*v)]).collect(),
+        };
+        assert!(looks_like_share("revenue_share", &t(&[0.1, 0.9])));
+        assert!(!looks_like_share("revenue_share", &t(&[0.1, 12.0])), "not a fraction");
+        assert!(!looks_like_share("revenue", &t(&[0.1, 0.9])), "not named like one");
+        assert_eq!(words("revenue_share"), "revenue share");
+    }
 
     #[test]
     fn bin_widths_are_round() {

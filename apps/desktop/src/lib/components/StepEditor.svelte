@@ -4,12 +4,12 @@
   import type { Workspace } from "../workspace.svelte";
   import type { Column, Problem, StepOp, StepView } from "../api/types";
   import { CircleX, TriangleAlert, Info } from "@lucide/svelte";
-  import { describe, stepTitle } from "../format";
+  import { describe, kindWords, stepTitle } from "../format";
   import FilterEditor from "./FilterEditor.svelte";
   import AggregateEditor from "./AggregateEditor.svelte";
   import CodeEditor from "./CodeEditor.svelte";
   import CodeConsole from "./CodeConsole.svelte";
-  import type { RunRequest } from "../editor/setup";
+  import type { RunRequest } from "../editor/prefs";
   import { editorParameters } from "../editor/complete";
   import ChartEditor from "./ChartEditor.svelte";
   import JoinEditor from "./JoinEditor.svelte";
@@ -152,8 +152,9 @@
 
 <section class="flex h-full flex-col" aria-label="Step editor">
   <header class="flex flex-wrap items-center gap-3 border-b border-rule px-5 py-3">
+    <span class="kind-tag" title="Kind of step">{kindWords[draft.type]}</span>
     <input
-      class="field min-w-0 flex-1 text-lg font-semibold"
+      class="field title-field min-w-0 flex-1 text-lg font-semibold"
       aria-label="Step name"
       placeholder={describe(draft)}
       bind:value={label}
@@ -172,7 +173,7 @@
     </button>
   </header>
 
-  <div class="flex-1 overflow-y-auto px-5 py-4">
+  <div class="@container flex-1 overflow-y-auto px-5 py-4">
     <p class="mb-4 text-sm text-ink-soft">
       Reads
       {#each inputs as id, i (id)}{#if i > 0}{i === inputs.length - 1 ? " and " : ", "}{/if}<button
@@ -250,72 +251,81 @@
     {:else if draft.type === "append"}
       <AppendEditor {ws} bind:inputs bind:distinct={draft.distinct} bind:origin={draft.origin} choices={readable} />
     {:else if draft.type === "sql" || draft.type === "python" || draft.type === "r"}
-      {#if draft.type === "sql"}
-        <CodeEditor bind:code={draft.sql} language="sql" inputs={codeInputs} parameters={ws.view?.parameters ?? []} problems={byField["sql"] ?? []} onrun={runFromEditor} />
-      {:else}
-        <CodeEditor bind:this={codeEditor} bind:code={draft.code} language={draft.type} inputs={codeInputs} parameters={ws.view?.parameters ?? []} problems={byField["code"] ?? []} onrun={runFromEditor} />
-      {/if}
-      <div class="mt-3 flex flex-wrap items-center gap-2 text-sm" aria-label="More inputs">
-        <span class="text-ink-soft">Also reads</span>
-        {#each inputs.slice(1) as id (id)}
-          <span class="inline-flex items-center gap-1 rounded border border-rule-strong py-0.5 pr-0.5 pl-2">
-            <code class="code">{id}</code>
-            <button class="btn btn-quiet !min-h-5 !px-0.5" aria-label="Stop reading {ws.nameOf(id)}" onclick={() => (inputs = inputs.filter((x) => x !== id))}>
-              <X size={12} />
-            </button>
-          </span>
+      <div class="code-layout" class:with-console={draft.type !== "sql"}>
+        <div class="min-w-0">
+        {#if draft.type === "sql"}
+          <CodeEditor bind:code={draft.sql} language="sql" inputs={codeInputs} parameters={ws.view?.parameters ?? []} problems={byField["sql"] ?? []} onrun={runFromEditor} />
         {:else}
-          <span class="text-ink-faint">nothing else</span>
-        {/each}
-        {#if extraChoices.length}
-          <select
-            class="field"
-            aria-label="Add an input"
-            value=""
-            onchange={(e) => {
-              const v = e.currentTarget.value;
-              if (v) inputs = [...inputs, v];
-              e.currentTarget.value = "";
-            }}
-          >
-            <option value="">Add an input…</option>
-            {#each extraChoices as o (o.id)}<option value={o.id}>{o.name}</option>{/each}
-          </select>
+          <CodeEditor bind:this={codeEditor} bind:code={draft.code} language={draft.type} inputs={codeInputs} parameters={ws.view?.parameters ?? []} problems={byField["code"] ?? []} onrun={runFromEditor} />
+        {/if}
+        <div class="mt-3 flex flex-wrap items-center gap-2 text-sm" aria-label="More inputs">
+          <span class="text-ink-soft">Also reads</span>
+          {#each inputs.slice(1) as id (id)}
+            <span class="inline-flex items-center gap-1 rounded border border-rule-strong py-0.5 pr-0.5 pl-2">
+              <code class="code">{id}</code>
+              <button class="btn btn-quiet !min-h-6 !min-w-6 justify-center !px-1" aria-label="Stop reading {ws.nameOf(id)}" onclick={() => (inputs = inputs.filter((x) => x !== id))}>
+                <X size={12} />
+              </button>
+            </span>
+          {:else}
+            <span class="text-ink-faint">nothing else</span>
+          {/each}
+          {#if extraChoices.length}
+            <select
+              class="field"
+              aria-label="Add an input"
+              value=""
+              onchange={(e) => {
+                const v = e.currentTarget.value;
+                if (v) inputs = [...inputs, v];
+                e.currentTarget.value = "";
+              }}
+            >
+              <option value="">Add an input…</option>
+              {#each extraChoices as o (o.id)}<option value={o.id}>{o.name}</option>{/each}
+            </select>
+          {/if}
+        </div>
+        {#if draft.type === "python" || draft.type === "r"}
+          <label class="mt-3 flex items-center gap-2 text-sm text-ink-soft">
+            Stop after
+            <input
+              class="field w-20"
+              type="number"
+              min="1"
+              value={Math.round(draft.timeout_ms / 1000)}
+              oninput={(e) => {
+                if (draft.type === "python" || draft.type === "r") draft.timeout_ms = Math.max(1, Number(e.currentTarget.value) || 60) * 1000;
+              }}
+            />
+            seconds
+          </label>
+        {/if}
+        {#if draft.type === "python" || draft.type === "r"}
+          <div class="mt-3 flex flex-wrap items-center gap-2 text-sm">
+            <button class="btn !min-h-7" disabled={dirty} title={dirty ? "Save first: the file starts from the saved code" : undefined} onclick={() => ws.editExternally(step.id)}>
+              <ExternalLink size={14} /> {draft.type === "r" ? "Open in RStudio" : "Open in Jupyter"}
+            </button>
+            <span class="text-xs text-ink-faint">
+              {#if ws.external[step.id]}Open as <code class="code">{ws.external[step.id]?.split(/[\\/]/).pop()}</code>; saving it there updates this step.{:else}Opens {draft.type === "r" ? "an .R file" : "a notebook"} with the step's inputs loaded, in the app your computer uses for it. Saving there updates this step.{/if}
+            </span>
+          </div>
+
+        {/if}
+        </div>
+        {#if draft.type === "python" || draft.type === "r"}
+          <div class="min-w-0">
+            <CodeConsole
+              bind:this={console_}
+              {ws}
+              stepId={step.id}
+              language={draft.type}
+              context={{ inputs: codeInputs.map((i) => ({ ...i, columns: i.columns ?? null })), parameters: editorParameters(ws.view?.parameters ?? []) }}
+              ongoto={(n) => codeEditor?.focusLine(n)}
+            />
+          </div>
         {/if}
       </div>
-      {#if draft.type === "python" || draft.type === "r"}
-        <label class="mt-3 flex items-center gap-2 text-sm text-ink-soft">
-          Stop after
-          <input
-            class="field w-20"
-            type="number"
-            min="1"
-            value={Math.round(draft.timeout_ms / 1000)}
-            oninput={(e) => {
-              if (draft.type === "python" || draft.type === "r") draft.timeout_ms = Math.max(1, Number(e.currentTarget.value) || 60) * 1000;
-            }}
-          />
-          seconds
-        </label>
-      {/if}
-      {#if draft.type === "python" || draft.type === "r"}
-        <div class="mt-3 flex flex-wrap items-center gap-2 text-sm">
-          <button class="btn !min-h-7" disabled={dirty} title={dirty ? "Save first: the file starts from the saved code" : undefined} onclick={() => ws.editExternally(step.id)}>
-            <ExternalLink size={14} /> {draft.type === "r" ? "Open in RStudio" : "Open in Jupyter"}
-          </button>
-          <span class="text-xs text-ink-faint">
-            {#if ws.external[step.id]}Open as <code class="code">{ws.external[step.id]?.split(/[\\/]/).pop()}</code>; saving it there updates this step.{:else}Opens {draft.type === "r" ? "an .R file" : "a notebook"} with the step's inputs loaded, in the app your computer uses for it. Saving there updates this step.{/if}
-          </span>
-        </div>
-        <CodeConsole
-          bind:this={console_}
-          {ws}
-          stepId={step.id}
-          language={draft.type}
-          context={{ inputs: codeInputs.map((i) => ({ ...i, columns: i.columns ?? null })), parameters: editorParameters(ws.view?.parameters ?? []) }}
-          ongoto={(n) => codeEditor?.focusLine(n)}
-        />
-      {/if}
     {:else if draft.type === "chart"}
       <ChartEditor
         bind:mark={draft.mark}
@@ -335,3 +345,21 @@
     <Comments {ws} target="step:{step.id}" />
   </div>
 </section>
+
+<style>
+  /* Python and R: the code and its console side by side when there is room,
+     as in RStudio's source pane and console. */
+  @container (min-width: 68rem) {
+    .code-layout.with-console {
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+      gap: 1.25rem;
+      align-items: start;
+    }
+    .code-layout.with-console > :nth-child(2) :global(section[aria-label$="console"]) {
+      margin-top: 0;
+      position: sticky;
+      top: 0;
+    }
+  }
+</style>

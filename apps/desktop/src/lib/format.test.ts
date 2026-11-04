@@ -2,6 +2,22 @@ import { describe, expect, it } from "vitest";
 import { describe as describeStep, formatCell, parseLiteral } from "./format";
 import { renderMarkdown } from "./markdown";
 
+describe("numbers in a column line up", () => {
+  const f = (v: number) => ({ t: "float" as const, v });
+  it("uses the decimals the most precise value needs, capped", async () => {
+    const { columnDecimals, formatCell } = await import("./format");
+    const col = [f(1615), f(30.6), f(27.605263157)];
+    const d = columnDecimals(col);
+    expect(d).toBe(4);
+    expect(col.map((c) => formatCell(c, d))).toEqual(["1,615.0000", "30.6000", "27.6053"]);
+    expect(columnDecimals([f(11656), f(11003.5)])).toBe(1);
+    expect(formatCell(f(11656), 1)).toBe("11,656.0");
+    expect(columnDecimals([f(0.0012345), f(0.5)])).toBe(6);
+    expect(columnDecimals([{ t: "null" }, { t: "int", v: "3" }])).toBe(1);
+    expect(formatCell(f(1e-9), 4)).toBe("1e-9");
+  });
+});
+
 describe("formatCell", () => {
   it("matches the core's display rules", () => {
     expect(formatCell({ t: "float", v: 12 })).toBe("12.0");

@@ -78,10 +78,12 @@
         {/each}
       </ol>
 
-      <footer class="flex flex-wrap items-center gap-3 border-t border-rule px-5 py-3">
-        <p class="mr-auto max-w-[44ch] text-xs text-ink-faint">
-          SQL and visual steps don't need approval. They can only read data inside the project folder.
-        </p>
+      <!-- The note on its own line, so the actions stay on one row with
+           the main one on the right. -->
+      <p class="border-t border-rule px-5 pt-3 text-xs text-ink-faint">
+        SQL and visual steps don't need approval. They can only read data inside the project folder.
+      </p>
+      <footer class="flex flex-wrap items-center justify-end gap-2 px-5 pt-2 pb-3">
         <Dialog.Close class="btn btn-quiet">Not now</Dialog.Close>
         <button
           class="btn"

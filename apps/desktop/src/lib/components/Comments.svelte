@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Check, MessageSquare, RotateCcw, Trash2 } from "@lucide/svelte";
+  import { Check, ChevronRight, MessageSquare, RotateCcw, Trash2 } from "@lucide/svelte";
   import type { Workspace } from "../workspace.svelte";
   import type { Comment } from "../api/types";
 
@@ -11,6 +11,8 @@
   let open = $derived(threads.filter((c) => !c.resolved));
   let resolved = $derived(threads.filter((c) => c.resolved));
   let showResolved = $state(false);
+  // Closed until wanted, so a step's definition keeps the room.
+  let expanded = $state(false);
   let draft = $state("");
   let replying = $state<string | null>(null);
   let reply = $state("");
@@ -37,8 +39,16 @@
   </div>
 {/snippet}
 
-<section class="mt-8 border-t border-rule pt-4 text-sm" aria-label="Comments">
-  <h3 class="mb-2 flex items-center gap-1.5 font-semibold"><MessageSquare size={15} aria-hidden="true" /> Comments</h3>
+<section class="mt-8 border-t border-rule pt-3 text-sm" aria-label="Comments">
+  <h3>
+    <button class="flex items-center gap-1.5 font-semibold hover:text-ink" aria-expanded={expanded} onclick={() => (expanded = !expanded)}>
+      <ChevronRight size={15} class="transition-transform {expanded ? 'rotate-90' : ''}" aria-hidden="true" />
+      <MessageSquare size={15} aria-hidden="true" /> Comments
+      <span class="font-normal text-ink-faint">{open.length ? `${open.length} open` : threads.length ? "all resolved" : "none yet"}</span>
+    </button>
+  </h3>
+  {#if expanded}
+  <div class="mt-2">
   {#if open.length}
     <ul class="mb-3 space-y-3">
       {#each open as c (c.id)}
@@ -107,5 +117,7 @@
         {/each}
       </ul>
     {/if}
+  {/if}
+  </div>
   {/if}
 </section>

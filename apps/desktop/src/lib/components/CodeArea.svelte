@@ -1,11 +1,11 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Compartment, EditorState } from "@codemirror/state";
-  import { EditorView } from "@codemirror/view";
-  import { setDiagnostics } from "@codemirror/lint";
   import type { Problem } from "../api/types";
   import type { EditorContext, Lang } from "../editor/complete";
-  import { diagnostics, extensions, keysExtension, language, loadKeys, type Keys, type RunRequest } from "../editor/setup";
+  import { loadKeys, type Keys, type RunRequest } from "../editor/prefs";
+  // CodeMirror loads with the first editor shown, not with the app.
+  type CM = typeof import("../editor/setup");
+  let cm: CM | undefined = $state();
 
   let {
     value = $bindable(),
@@ -36,11 +36,28 @@
   } = $props();
 
   let host: HTMLDivElement;
-  let view: EditorView | undefined;
-  const keysC = new Compartment();
-  const langC = new Compartment();
+  let view: import("@codemirror/view").EditorView | undefined = $state();
+  let keysC: import("@codemirror/state").Compartment;
+  let langC: import("@codemirror/state").Compartment;
 
   onMount(() => {
+    let gone = false;
+    let cleanup = () => {};
+    import("../editor/setup").then((m) => {
+      if (gone) return;
+      cm = m;
+      cleanup = mountEditor(m);
+    });
+    return () => {
+      gone = true;
+      cleanup();
+    };
+  });
+
+  function mountEditor(m: CM) {
+    const { Compartment, EditorState, EditorView, extensions } = m;
+    keysC = new Compartment();
+    langC = new Compartment();
     view = new EditorView({
       parent: host,
       state: EditorState.create({
@@ -73,7 +90,7 @@
       host.removeEventListener("vda-set-code", set);
       view?.destroy();
     };
-  });
+  }
 
   // Text set from outside (another step selected, undo) replaces the document.
   $effect(() => {
@@ -89,18 +106,20 @@
   $effect(() => {
     const k = contextKey;
     if (!view || k === builtFor) return;
-    if (builtFor) view.dispatch({ effects: langC.reconfigure(language(lang, () => context)) });
+    if (builtFor && cm) view.dispatch({ effects: langC.reconfigure(cm.language(lang, () => context)) });
     builtFor = k;
   });
 
   $effect(() => {
     const k = keys;
-    view?.dispatch({ effects: keysC.reconfigure(keysExtension(k)) });
+    const v = view;
+    if (!v || !cm) return;
+    void cm.keysExtension(k).then((ext) => v.dispatch({ effects: keysC.reconfigure(ext) }));
   });
 
   $effect(() => {
     const p = problems;
-    if (view) view.dispatch(setDiagnostics(view.state, diagnostics(view.state.doc, p)));
+    if (view && cm) view.dispatch(cm.setDiagnostics(view.state, cm.diagnostics(view.state.doc, p)));
   });
 
   let invalid = $derived(problems.some((p) => p.severity === "error"));
@@ -124,9 +143,27 @@
   class:single={singleLine}
   data-invalid={invalid}
   style:--min-lines={minLines}
-></div>
+>
+  {#if !view}
+    <!-- Until the editor loads (a moment, once): the code as it will look. -->
+    <pre class="code-placeholder code" aria-hidden="true">{value || placeholder || ""}</pre>
+  {/if}
+</div>
 
 <style>
+  .code-placeholder {
+    margin: 0;
+    border: 1px solid var(--color-rule-strong);
+    border-radius: 5px;
+    background: var(--color-panel);
+    padding: 6px 8px 6px 3.1rem;
+    white-space: pre-wrap;
+    min-height: calc(var(--min-lines) * 1.55em + 14px);
+  }
+  .code-area.single .code-placeholder {
+    min-height: 0;
+    padding: 4px 6px;
+  }
   .code-area :global(.cm-editor) {
     max-height: 32rem;
   }

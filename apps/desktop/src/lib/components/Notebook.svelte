@@ -3,7 +3,7 @@
   import { DropdownMenu } from "bits-ui";
   import type { Workspace } from "../workspace.svelte";
   import type { NotebookCell, Page } from "../api/types";
-  import { formatCell, formatCount, stepTitle } from "../format";
+  import { columnDecimals, formatCell, formatCount, stepTitle } from "../format";
   import { renderMarkdown } from "../markdown";
   import StateMark from "./StateMark.svelte";
   import ChartView from "./ChartView.svelte";
@@ -89,8 +89,8 @@
   {#each cells as cell, i (i)}
     <div class="group relative mb-2">
       <div class="absolute -left-10 top-1 flex flex-col opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-        <button class="btn btn-quiet !min-h-6 !px-1" aria-label="Move up" disabled={i === 0} onclick={() => move(i, -1)}><ArrowUp size={14} /></button>
-        <button class="btn btn-quiet !min-h-6 !px-1" aria-label="Move down" disabled={i === cells.length - 1} onclick={() => move(i, 1)}><ArrowDown size={14} /></button>
+        <button class="btn btn-quiet !min-h-6 !min-w-6 justify-center !px-1" aria-label="Move up" disabled={i === 0} onclick={() => move(i, -1)}><ArrowUp size={14} /></button>
+        <button class="btn btn-quiet !min-h-6 !min-w-6 justify-center !px-1" aria-label="Move down" disabled={i === cells.length - 1} onclick={() => move(i, 1)}><ArrowDown size={14} /></button>
       </div>
 
       {#if cell.type === "markdown"}
@@ -110,7 +110,7 @@
               {@html renderMarkdown(cell.text)}
             </button>
             <button
-              class="btn btn-quiet !min-h-6 !px-1 opacity-0 group-hover:opacity-100"
+              class="btn btn-quiet !min-h-6 !min-w-6 justify-center !px-1 opacity-0 group-hover:opacity-100"
               aria-label="Remove text"
               onclick={() => update(cells.filter((_, j) => j !== i))}><X size={14} /></button
             >
@@ -147,7 +147,7 @@
                       <tr class="border-t border-rule/60">
                         {#each r as v, vi (vi)}
                           <td class="px-3 py-1" class:text-right={v.t === "int" || v.t === "float"} class:text-ink-faint={v.t === "null"}>
-                            {v.t === "null" ? "missing" : formatCell(v)}
+                            {v.t === "null" ? "missing" : formatCell(v, columnDecimals(p.rows.map((row) => row[vi]!)))}
                           </td>
                         {/each}
                       </tr>

@@ -148,12 +148,12 @@
 </script>
 
 <section class="mt-4 rounded-md border border-rule bg-panel" aria-label="{name} console">
-  <header class="flex flex-wrap items-center gap-2 border-b border-rule px-3 py-1.5">
-    <h3 class="text-sm font-semibold">{name} console</h3>
-    <span class="text-xs text-ink-faint" aria-live="polite">
-      {#if status === "off"}not started: run a line to start it with this step's inputs{:else if status === "starting"}starting with the inputs…{:else}{name} {info?.version}{status === "running" ? ", running…" : ""}{/if}
+  <header class="flex items-center gap-2 border-b border-rule px-3 py-1.5">
+    <h3 class="min-w-0 text-sm font-semibold">{name} console</h3>
+    <span class="min-w-0 flex-1 truncate text-xs text-ink-faint" aria-live="polite">
+      {#if status === "off"}not started{:else if status === "starting"}starting with the inputs…{:else}{name} {info?.version}{status === "running" ? ", running…" : ""}{/if}
     </span>
-    <span class="ml-auto flex gap-1">
+    <span class="flex shrink-0 gap-1">
       {#if status === "running"}
         <button class="btn btn-quiet !min-h-7 !px-2 text-sm" onclick={() => ws.backend.consoleInterrupt()}><CircleStop size={14} /> Interrupt</button>
       {/if}
@@ -226,7 +226,7 @@
       <div class="flex items-start gap-2 border-t border-rule px-3 py-1.5">
         <span class="code mt-1.5 text-ink-faint select-none" aria-hidden="true">{language === "r" ? ">" : "›"}</span>
         <div class="min-w-0 flex-1">
-          <CodeArea bind:value={input} lang={language} label="{name} console input" singleLine {context} placeholder="Type code and press Enter; Up and Down recall earlier lines" onenter={submit} onhistory={back} />
+          <CodeArea bind:value={input} lang={language} label="{name} console input" singleLine {context} placeholder="Code, then Enter (Up for earlier lines)" onenter={submit} onhistory={back} />
         </div>
       </div>
     </div>

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { untrack } from "svelte";
   import type { Cell, Column, Page } from "../api/types";
-  import { exactCell, formatCell, formatCount, isNumericType, typeLabel } from "../format";
+  import { columnDecimals, exactCell, formatCell, formatCount, isNumericType, typeLabel } from "../format";
 
   let {
     fetchPage,
@@ -26,6 +26,7 @@
   // them would loop); `version` tells the view when one arrives.
   let pages = new Map<number, Cell[][]>();
   let version = $state(0);
+  let decimals = $state<number[]>([]);
   let pending = new Set<number>();
   let scrollTop = $state(0);
   let viewportH = $state(320);
@@ -40,6 +41,8 @@
       total = p.total_rows;
       columns = p.columns;
       pages.set(page, p.rows);
+      // Decimals per column from the first page loaded, so they stay put while scrolling.
+      if (!decimals.length) decimals = p.columns.map((_, ci) => columnDecimals(p.rows.map((r) => r[ci]!)));
       version++;
       loaded = true;
       error = null;
@@ -56,6 +59,7 @@
       generation++;
       pages = new Map();
       pending = new Set();
+      decimals = [];
       loaded = false;
       scrollTop = 0;
       load(0, generation);
@@ -134,7 +138,7 @@
                   class:missing={cell.t === "null"}
                   title={cell.t === "null" ? "Missing" : exactCell(cell)}
                 >
-                  {cell.t === "null" ? "missing" : formatCell(cell)}
+                  {cell.t === "null" ? "missing" : formatCell(cell, decimals[ci])}
                 </span>
               {/each}
             {:else}

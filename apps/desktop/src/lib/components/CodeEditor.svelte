@@ -2,7 +2,7 @@
   import { editorParameters } from "../editor/complete";
   import CodeArea from "./CodeArea.svelte";
   import type { Column, Parameter, Problem } from "../api/types";
-  import type { RunRequest } from "../editor/setup";
+  import type { RunRequest } from "../editor/prefs";
 
   let {
     code = $bindable(),

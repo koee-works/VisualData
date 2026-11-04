@@ -154,11 +154,7 @@ class Session:
 
 def node(title):
     """A pipeline node by its visible title."""
-    # Titles are the first truncated line of a node; "with …" lines are not titles.
-    return (
-        "//nav[@aria-label='Pipeline']//button[.//span[contains(@class,'truncate') and "
-        f"not(starts-with(normalize-space(.), 'with ')) and starts-with(normalize-space(.), {json.dumps(title)})]]"
-    )
+    return f"//nav[@aria-label='Pipeline']//button[.//span[contains(@class,'node-title') and starts-with(normalize-space(.), {json.dumps(title)})]]"
 
 
 STATUS = "//header//p[@role='status']"
@@ -373,16 +369,16 @@ def joins(s, shots):
     s.wait_text(node("Closest to target"), "2 rows")
 
     step(18, "The console lists what the linter finds; a note can be dismissed, and the run log shows the runs")
-    s.click("//section[@aria-label='Console']//button[starts-with(normalize-space(), 'Problems')]")
-    problems = "//section[@aria-label='Console']//ul[@aria-label='Problems']"
-    s.wait_text(problems, "no step reads it and the notebook does not show it")
+    s.click("//section[@aria-label='Activity']//button[starts-with(normalize-space(), 'Problems')]")
+    problems = "//section[@aria-label='Activity']//ul[@aria-label='Problems']"
+    s.wait_text(problems, "steps are not read by another step or shown in the notebook")
     s.screenshot(f"{shots}/13-console.png")
     before = s.count(problems + "/li")
-    s.click(f"({problems}/li[contains(., 'no step reads it')]//button[@aria-label='Dismiss'])[1]")
-    s.wait_text("//section[@aria-label='Console']", "dismissed")
+    s.click(f"({problems}/li[contains(., 'not read by another step')]//button[@aria-label='Dismiss'])[1]")
+    s.wait_text("//section[@aria-label='Activity']", "dismissed")
     assert s.count(problems + "/li") == before - 1
-    s.click("//section[@aria-label='Console']//button[normalize-space()='Run log']")
-    s.wait_text("//section[@aria-label='Console']//ul[@aria-label='Runs']", "Succeeded")
+    s.click("//section[@aria-label='Activity']//button[normalize-space()='Run log']")
+    s.wait_text("//section[@aria-label='Activity']//ul[@aria-label='Runs']", "Succeeded")
 
     step(19, "Window and pivot steps: a running total per region, then a calculation added in the editor")
     s.click(node("Running revenue by region"))
@@ -529,6 +525,7 @@ def slice4(s, shots, project):
 
     step(28, "A comment on a step shows in the pipeline")
     s.click(node("Big orders"))
+    s.click("//section[@aria-label='Comments']//button[@aria-expanded='false']")
     s.set_input("//textarea[@aria-label='New comment']", "Why 3 units? Sales used 5 last quarter.")
     s.click("//section[@aria-label='Comments']//button[normalize-space()='Comment']")
     s.wait_text("//section[@aria-label='Comments']", "Why 3 units?")

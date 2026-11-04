@@ -24,28 +24,18 @@ import { lintGutter, type Diagnostic } from "@codemirror/lint";
 import { python, pythonLanguage } from "@codemirror/lang-python";
 import { sql, PostgreSQL } from "@codemirror/lang-sql";
 import { r as rMode } from "@codemirror/legacy-modes/mode/r";
-import { vim } from "@replit/codemirror-vim";
 import { tags as t } from "@lezer/highlight";
 import type { Problem } from "../api/types";
 import { schemaFor, suggest, type EditorContext, type Lang } from "./complete";
 
-export type Keys = "standard" | "vim";
-
-export interface RunRequest {
-  /** What to run: the selection or the current line (Ctrl+Enter, as in
-   *  RStudio), all the code (Ctrl+Shift+Enter), or save and run the step
-   *  itself (Shift+Enter, as a Jupyter cell). */
-  what: "selection" | "all" | "step";
-  code: string;
-  /** Line in the editor where `code` starts, to place errors. */
-  fromLine: number;
-}
+import type { Keys, RunRequest } from "./prefs";
+export type { Keys, RunRequest } from "./prefs";
 
 const highlight = HighlightStyle.define([
   { tag: [t.keyword, t.controlKeyword, t.operatorKeyword, t.definitionKeyword, t.moduleKeyword], color: "#4652c8", fontWeight: "600" },
-  { tag: [t.string, t.special(t.string)], color: "#1f7a6c" },
-  { tag: [t.number, t.bool, t.null, t.atom], color: "#a86a12" },
-  { tag: [t.comment, t.lineComment, t.blockComment], color: "#7c879a", fontStyle: "italic" },
+  { tag: [t.string, t.special(t.string)], color: "#1b6f62" },
+  { tag: [t.number, t.bool, t.null, t.atom], color: "#8a560c" },
+  { tag: [t.comment, t.lineComment, t.blockComment], color: "#5c687c", fontStyle: "italic" },
   { tag: [t.function(t.variableName), t.function(t.propertyName)], color: "#1d2a3f", fontWeight: "600" },
   { tag: [t.definition(t.variableName), t.className], color: "#7b3b8f" },
   { tag: [t.operator, t.punctuation, t.bracket], color: "#4a5872" },
@@ -195,13 +185,18 @@ export interface Options {
   languageCompartment: Compartment;
 }
 
-export const keysExtension = (k: Keys): Extension => (k === "vim" ? vim() : []);
+/** Vim keys are loaded the first time someone turns them on. */
+export async function keysExtension(k: Keys): Promise<Extension> {
+  if (k !== "vim") return [];
+  const { vim } = await import("@replit/codemirror-vim");
+  return vim();
+}
 export { language };
 
 export function extensions(o: Options): Extension[] {
   const multi = !o.singleLine;
   return [
-    o.keysCompartment.of(keysExtension(o.keys)),
+    o.keysCompartment.of([]),
     runKeys(o.lang, o.onrun, !!o.singleLine),
     consoleKeys(o),
     multi ? [lineNumbers(), highlightActiveLineGutter(), highlightActiveLine(), lintGutter()] : [],
@@ -256,18 +251,6 @@ export function diagnostics(doc: EditorState["doc"], problems: Problem[]): Diagn
   });
 }
 
-export function loadKeys(): Keys {
-  try {
-    return localStorage.getItem("vda.editorKeys") === "vim" ? "vim" : "standard";
-  } catch {
-    return "standard";
-  }
-}
-
-export function saveKeys(k: Keys) {
-  try {
-    localStorage.setItem("vda.editorKeys", k);
-  } catch {
-    // A preference only; the editor works without it.
-  }
-}
+export { Compartment, EditorState } from "@codemirror/state";
+export { EditorView } from "@codemirror/view";
+export { setDiagnostics } from "@codemirror/lint";

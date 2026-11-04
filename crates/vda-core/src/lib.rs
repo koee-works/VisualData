@@ -11,6 +11,7 @@ pub mod csv;
 pub mod database;
 pub mod dataset;
 pub mod demo;
+pub mod describe;
 pub mod duck;
 pub mod engine;
 pub mod excel;

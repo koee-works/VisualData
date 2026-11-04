@@ -46,7 +46,7 @@ pub struct VersionView {
 }
 
 fn title(s: &Step) -> String {
-    s.label.clone().filter(|l| !l.trim().is_empty()).unwrap_or_else(|| format!("step `{}`", s.id))
+    vda_core::describe::title(s)
 }
 
 /// What changed between two versions, in a few words.

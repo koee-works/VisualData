@@ -16,19 +16,57 @@
 
   let { ws }: { ws: Workspace } = $props();
 
-  // Share of the centre column given to the editor; the rest is the result.
-  let split = $state(0.45);
-  let dragging = $state(false);
+  import { paneKind, resultHeight, defaultSplit, savedSplit, saveSplit, savedSidebar, saveSidebar, clamp, SPLIT_MIN, SPLIT_MAX, SIDEBAR_MIN, SIDEBAR_MAX } from "../layout";
+
+  // The editor's share of the centre column, per kind of step: what the user
+  // last dragged to, else room for a small result, else a default.
+  let kind = $derived(paneKind(ws.selectedStep, ws.selectedSource));
+  let chosen = $state<Record<string, number | null>>({});
+  let split = $derived(chosen[kind] !== undefined ? chosen[kind] : savedSplit(kind));
+  let auto = $derived(split === null ? resultHeight(kind, ws.selectedStep?.rows ?? null, ws.selectedStep?.state === "stale") : null);
+  let rows = $derived(
+    auto !== null ? `minmax(0,1fr) 8px ${auto}px` : `${split ?? defaultSplit(kind)}fr 8px ${1 - (split ?? defaultSplit(kind))}fr`,
+  );
+  function setSplit(v: number | null) {
+    chosen[kind] = v === null ? null : clamp(v, SPLIT_MIN, SPLIT_MAX);
+    saveSplit(kind, chosen[kind] ?? null);
+  }
+
+  let sidebar = $state(savedSidebar() ?? 272);
+  let dragging = $state<"split" | "sidebar" | null>(null);
   let centre: HTMLElement | undefined = $state();
 
   function drag(e: PointerEvent) {
-    if (!dragging || !centre) return;
-    const r = centre.getBoundingClientRect();
-    split = Math.min(0.8, Math.max(0.15, (e.clientY - r.top) / r.height));
+    if (dragging === "split" && centre) {
+      const r = centre.getBoundingClientRect();
+      setSplit((e.clientY - r.top) / r.height);
+    } else if (dragging === "sidebar") {
+      sidebar = clamp(e.clientX, SIDEBAR_MIN, SIDEBAR_MAX);
+    }
+  }
+  function stop() {
+    if (dragging === "sidebar") saveSidebar(sidebar);
+    dragging = null;
+  }
+  // Keyboard: arrows move the divider; Home puts it back to fit the result.
+  function splitKeys(e: KeyboardEvent) {
+    const now = split ?? (centre && auto !== null ? 1 - (auto + 8) / centre.getBoundingClientRect().height : defaultSplit(kind));
+    if (e.key === "ArrowUp") setSplit(now - 0.05);
+    else if (e.key === "ArrowDown") setSplit(now + 0.05);
+    else if (e.key === "Home") setSplit(null);
+    else return;
+    e.preventDefault();
+  }
+  function sidebarKeys(e: KeyboardEvent) {
+    if (e.key === "ArrowLeft") sidebar = clamp(sidebar - 24, SIDEBAR_MIN, SIDEBAR_MAX);
+    else if (e.key === "ArrowRight") sidebar = clamp(sidebar + 24, SIDEBAR_MIN, SIDEBAR_MAX);
+    else return;
+    e.preventDefault();
+    saveSidebar(sidebar);
   }
 </script>
 
-<svelte:window onpointermove={drag} onpointerup={() => (dragging = false)} />
+<svelte:window onpointermove={drag} onpointerup={stop} />
 
 <ReviewDialog {ws} />
 <PythonDialog {ws} />
@@ -37,10 +75,17 @@
 
 <div class="grid h-full grid-rows-[auto_1fr]">
   <TopBar {ws} />
-  <div class="grid min-h-0 grid-cols-[17rem_1fr]">
-    <aside class="min-h-0 border-r border-rule bg-panel">
+  <div class="grid min-h-0" class:select-none={dragging !== null} style:grid-template-columns="{sidebar}px 6px minmax(0,1fr)">
+    <aside class="min-h-0 bg-panel">
       <Pipeline {ws} />
     </aside>
+    <button
+      class="divider divider-v"
+      class:active={dragging === "sidebar"}
+      aria-label="Resize the pipeline (arrow keys)"
+      onpointerdown={() => (dragging = "sidebar")}
+      onkeydown={sidebarKeys}
+    ></button>
 
     <Tabs.Root bind:value={ws.centerTab} class="flex min-h-0 min-w-0 flex-col">
       <Tabs.List class="flex border-b border-rule bg-panel px-3">
@@ -51,20 +96,20 @@
       {#if ws.notice && !ws.error}
         <div class="flex items-start gap-3 border-b border-fresh/40 bg-fresh-wash px-4 py-2 text-sm" role="status">
           <p class="min-w-0 flex-1 truncate" title={ws.notice}>{ws.notice}</p>
-          <button class="btn btn-quiet !min-h-6 !px-1" aria-label="Dismiss" onclick={() => (ws.notice = null)}><X size={14} /></button>
+          <button class="btn btn-quiet !min-h-6 !min-w-6 justify-center !px-1" aria-label="Dismiss" onclick={() => (ws.notice = null)}><X size={14} /></button>
         </div>
       {/if}
       {#if ws.error}
         <div class="flex items-start gap-3 border-b border-failed/40 bg-failed-wash px-4 py-2 text-sm" role="alert">
           <p class="flex-1"><span class="font-semibold text-failed">{ws.error.action} failed.</span> {ws.error.message}</p>
-          <button class="btn btn-quiet !min-h-6 !px-1" aria-label="Dismiss" onclick={() => (ws.error = null)}><X size={14} /></button>
+          <button class="btn btn-quiet !min-h-6 !min-w-6 justify-center !px-1" aria-label="Dismiss" onclick={() => (ws.error = null)}><X size={14} /></button>
         </div>
       {/if}
 
       <Tabs.Content value="step" class="min-h-0 min-w-0 flex-1">
         <!-- min-w-0 on every grid item: a wide result scrolls inside its panel
              instead of widening the window. -->
-        <div bind:this={centre} class="grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)]" style:grid-template-rows="{split}fr 6px {1 - split}fr">
+        <div bind:this={centre} class="grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)]" style:grid-template-rows={rows}>
           <div class="min-h-0 min-w-0 overflow-hidden bg-panel">
             {#if ws.selectedStep}
               <StepEditor {ws} step={ws.selectedStep} />
@@ -73,14 +118,13 @@
             {/if}
           </div>
           <button
-            class="cursor-row-resize border-y border-rule bg-paper hover:bg-select"
-            class:bg-select={dragging}
-            aria-label="Resize editor and result (arrow keys)"
-            onpointerdown={() => (dragging = true)}
-            onkeydown={(e) => {
-              if (e.key === "ArrowUp") split = Math.max(0.15, split - 0.05);
-              if (e.key === "ArrowDown") split = Math.min(0.8, split + 0.05);
-            }}
+            class="divider divider-h"
+            class:active={dragging === "split"}
+            aria-label="Resize editor and result (arrow keys; Home fits the result, double-click too)"
+            title="Drag to resize; double-click to fit the result"
+            onpointerdown={() => (dragging = "split")}
+            ondblclick={() => setSplit(null)}
+            onkeydown={splitKeys}
           ></button>
           <div class="min-h-0 min-w-0 overflow-hidden">
             <ResultPanel {ws} />

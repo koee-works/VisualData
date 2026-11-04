@@ -48,7 +48,7 @@ npm run check && npm test          # types and unit tests
 
 ### Console and checks
 
-A console under the result has three tabs. **Problems** lists what the linter finds across the analysis: steps that will not work on the columns they will receive, formula, SQL and Python errors, SQL reading tables that are not its inputs, joins that multiplied rows or kept none, columns missing in every row, unreadable charts, unused steps. Each links to the step; warnings can be dismissed. **Output** shows what Python steps printed, and the **Run log** shows recent runs. The step you are editing is checked as you type. See [ADR-0007](docs/adr/0007-linter-and-console.md).
+The **Activity** panel under the result has tabs. **Problems** lists what the linter finds across the analysis: steps that will not work on the columns they will receive, formula, SQL and Python errors, SQL reading tables that are not its inputs, joins that multiplied rows or kept none, columns missing in every row, unreadable charts, unused steps (grouped into one note). Each links to the step; warnings and notes can be dismissed. **Output** shows what Python steps printed, and the **Run log** shows recent runs. The step you are editing is checked as you type. See [ADR-0007](docs/adr/0007-linter-and-console.md).
 
 ![The console listing notes about unused steps](docs/screenshots/13-console.png)
 
@@ -83,6 +83,8 @@ A **Statistical test** step compares two averages (Welch's t-test), averages acr
 `vda-run <project> --export <step>=<file>` re-reads the sources, reruns what changed and writes the file, but only when every step succeeds. Python code runs only if you approved it. **Refresh on a schedule** in the ⋯ menu writes the line for cron, launchd or Task Scheduler. Scheduled runs show in the run log.
 
 ### Sharing the notebook
+
+**Layout.** Drag the divider between a step's editor and its result (or use the arrow keys on it); the app remembers where you put it for each kind of step, and until then gives a small result only the room it needs. Double-click the divider to fit the result again. The pipeline can be widened the same way, and long step names wrap. Python and R steps show their code and console side by side when the window is wide enough.
 
 **Writing code.** SQL, Python and **R** steps are written in a code editor that suggests the columns, inputs and parameters the step can use, with the keys of RStudio and Jupyter: **Ctrl+Enter** runs the line or selection in the step's **console**, where the inputs stay loaded, printed output, tables and plots show at once, and an Environment pane lists what you have made; **Shift+Enter** saves and runs the step, and the app says if the step's result differs from the console's. **Open in Jupyter** or **Open in RStudio** opens a step as a notebook or an `.R` file with its inputs loaded; saving it there updates the step. R steps use the R and packages you use in RStudio (**R installation** in the ⋯ menu; `VDA_R` overrides). See [ADR-0011](docs/adr/0011-code-editing-r-console-round-trip.md).
 

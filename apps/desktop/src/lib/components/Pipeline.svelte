@@ -221,7 +221,7 @@
               <Database size={15} class="mt-0.5 shrink-0 text-ink-soft" />
             {/if}
             <span class="min-w-0 flex-1">
-              <span class="block truncate font-semibold">{t.source.path}</span>
+              <span class="node-title block truncate font-semibold" title={t.source.path}>{t.source.path}</span>
               <span class="block text-xs text-ink-faint">
                 {#if t.source.query}{"query, "}{:else if t.source.sheet}{`${t.source.sheet}, `}{/if}{formatCount(t.source.rows)} {t.source.rows === 1 ? "row" : "rows"}{#if (ws.view?.sources.length ?? 0) > 1}, as <code class="code">{t.source.id}</code>{/if}
               </span>
@@ -237,7 +237,7 @@
               <StateMark state={s.state} running={isRunning(s)} />
               <Icon size={15} class="mt-0.5 shrink-0 text-ink-soft" />
               <span class="min-w-0 flex-1">
-                <span class="block truncate">{stepTitle(s)}</span>
+                <span class="node-title line-clamp-2 break-words" title={stepTitle(s)}>{stepTitle(s)}</span>
                 {#if s.inputs.length > 1}
                   <span class="block truncate text-xs text-ink-soft" title="Also reads {s.inputs.slice(1).map((i) => ws.nameOf(i)).join(', ')}">
                     with {s.inputs.slice(1).map((i) => ws.nameOf(i)).join(", ")}

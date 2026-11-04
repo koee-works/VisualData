@@ -23,7 +23,24 @@ export class Workspace {
   /** Whether the code review dialog is open. */
   reviewOpen = $state(false);
   /** A short confirmation to show (an export finished, say). */
-  notice = $state<string | null>(null);
+  #notice = $state<string | null>(null);
+  #noticeTimer: ReturnType<typeof setTimeout> | null = null;
+  /** A passing message: it hides by itself after long enough to read it
+   *  (errors stay until dismissed). */
+  get notice(): string | null {
+    return this.#notice;
+  }
+  set notice(text: string | null) {
+    this.#notice = text;
+    if (this.#noticeTimer) clearTimeout(this.#noticeTimer);
+    this.#noticeTimer = null;
+    if (text) {
+      const ms = Math.min(15000, 5000 + text.length * 60);
+      this.#noticeTimer = setTimeout(() => {
+        if (this.#notice === text) this.#notice = null;
+      }, ms);
+    }
+  }
   /** What the linter found, refreshed after every change and run. */
   problems = $state<Problems>({ items: [], dismissed: 0 });
   consoleOpen = $state(false);
