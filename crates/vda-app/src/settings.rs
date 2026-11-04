@@ -10,6 +10,8 @@ use vda_core::python::PythonRunner;
 pub struct Settings {
     path: Option<PathBuf>,
     pub python: Option<PathBuf>,
+    /// `Rscript` for R steps.
+    pub r: Option<PathBuf>,
 }
 
 impl Settings {
@@ -19,11 +21,9 @@ impl Settings {
 
     /// Settings in this file; a missing or unreadable file means defaults.
     pub fn load(path: PathBuf) -> Self {
-        let python = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-            .and_then(|j| j["python"].as_str().map(PathBuf::from));
-        Settings { path: Some(path), python }
+        let j = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
+        let get = |k: &str| j.as_ref().and_then(|j| j[k].as_str().map(PathBuf::from));
+        Settings { python: get("python"), r: get("r"), path: Some(path) }
     }
 
     fn save(&self) -> Result<()> {
@@ -31,7 +31,10 @@ impl Settings {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        let j = serde_json::json!({ "python": self.python.as_ref().map(|p| p.to_string_lossy()) });
+        let j = serde_json::json!({
+            "python": self.python.as_ref().map(|p| p.to_string_lossy()),
+            "r": self.r.as_ref().map(|p| p.to_string_lossy()),
+        });
         let tmp = path.with_extension("json.tmp");
         std::fs::write(&tmp, serde_json::to_string_pretty(&j).unwrap())?;
         std::fs::rename(&tmp, path)?;
@@ -55,6 +58,56 @@ pub fn choose_interpreter(settings: &Settings) -> (PathBuf, &'static str) {
         Some(p) => (p.clone(), "chosen"),
         None => (vda_core::python::default_interpreter(), "default"),
     }
+}
+
+pub fn choose_rscript(settings: &Settings) -> (PathBuf, &'static str) {
+    if let Some(p) = std::env::var_os("VDA_R").filter(|p| !p.is_empty()) {
+        return (PathBuf::from(p), "env");
+    }
+    match &settings.r {
+        Some(p) => (p.clone(), "chosen"),
+        None => (PathBuf::from("Rscript"), "default"),
+    }
+}
+
+/// R installations worth offering: `Rscript` on the PATH and where the R
+/// installers and Posit's builds put versions side by side.
+pub fn discover_r() -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    if let Some(path) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path) {
+            found.push(dir.join(if cfg!(windows) { "Rscript.exe" } else { "Rscript" }));
+        }
+    }
+    let mut versions = |root: &str, tail: &[&str]| {
+        if let Ok(entries) = std::fs::read_dir(root) {
+            let mut dirs: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+            dirs.sort();
+            for d in dirs {
+                found.push(tail.iter().fold(d, |p, t| p.join(t)));
+            }
+        }
+    };
+    versions("/opt/R", &["bin", "Rscript"]);
+    versions("/Library/Frameworks/R.framework/Versions", &["Resources", "bin", "Rscript"]);
+    versions("C:\\Program Files\\R", &["bin", "Rscript.exe"]);
+    for p in ["/usr/local/bin/Rscript", "/opt/homebrew/bin/Rscript", "/usr/bin/Rscript"] {
+        found.push(PathBuf::from(p));
+    }
+    let mut seen = std::collections::HashSet::new();
+    found.into_iter().filter(|p| p.is_file()).filter(|p| seen.insert(std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()))).collect()
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct RView {
+    pub rscript: String,
+    pub version: Option<String>,
+    /// Package libraries R steps see (where RStudio installs packages).
+    pub libraries: Vec<String>,
+    pub packages: Vec<PackageView>,
+    pub problem: Option<String>,
+    pub chosen_by: String,
+    pub candidates: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -111,6 +164,46 @@ impl App {
     /// Use another interpreter for Python steps, remembered for this user.
     /// It must have pandas and pyarrow. Python steps whose results came from
     /// another interpreter (or other package versions) become outdated.
+    fn r_view(&self, env: vda_core::rlang::REnvironment) -> RView {
+        let current = std::fs::canonicalize(vda_core::python::resolve(&env.rscript)).ok();
+        RView {
+            rscript: env.rscript.to_string_lossy().into_owned(),
+            version: env.version.clone(),
+            libraries: env.libraries.clone(),
+            packages: env
+                .packages
+                .iter()
+                .map(|(name, purpose, version)| PackageView { name: name.clone(), purpose: purpose.clone(), required: false, version: version.clone() })
+                .collect(),
+            problem: env.problem.clone(),
+            chosen_by: self.r_chosen_by.to_string(),
+            candidates: discover_r().into_iter().filter(|p| std::fs::canonicalize(p).ok() != current).map(|p| p.to_string_lossy().into_owned()).collect(),
+        }
+    }
+
+    pub fn r_environment(&mut self) -> Result<RView> {
+        let env = vda_core::rlang::RRunner::new(self.rscript.clone(), std::env::temp_dir()).environment();
+        Ok(self.r_view(env))
+    }
+
+    pub fn set_r(&mut self, path: &Path) -> Result<RView> {
+        if self.r_chosen_by == "env" {
+            return fail("VDA_R is set, so it decides which R runs; unset it to choose one here");
+        }
+        let env = vda_core::rlang::RRunner::new(path, std::env::temp_dir()).environment();
+        if let Some(problem) = &env.problem {
+            return Err(AppError::from(format!("cannot use {}: {problem}", path.display())));
+        }
+        self.settings.r = Some(path.to_path_buf());
+        self.settings.save()?;
+        self.rscript = path.to_path_buf();
+        self.r_chosen_by = "chosen";
+        if let Some(dir) = self.session.as_ref().map(|s| s.project_dir().to_path_buf()) {
+            self.start(None, &dir)?;
+        }
+        Ok(self.r_view(env))
+    }
+
     pub fn set_python(&mut self, path: &Path) -> Result<PythonView> {
         if self.python_chosen_by == "env" {
             return fail("VDA_PYTHON is set, so it decides the interpreter; unset it to choose one here");

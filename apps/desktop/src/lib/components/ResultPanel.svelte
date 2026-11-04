@@ -58,6 +58,7 @@
   let code = $derived.by(() => {
     if (!step) return null;
     if (step.op.type === "python") return { lang: "Python", text: step.op.code };
+    if (step.op.type === "r") return { lang: "R", text: step.op.code };
     if (step.sql) return { lang: "SQL", text: step.sql };
     return null;
   });

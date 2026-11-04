@@ -28,6 +28,8 @@ pub struct Fingerprints<'a> {
     /// `None` when no Python interpreter is available; Python steps then fail
     /// validation at run time rather than here.
     pub python: Option<&'a str>,
+    /// The R installation, likewise; only computed when an R step exists.
+    pub r: Option<&'a str>,
 }
 
 /// Source ids are referenced unquoted in custom SQL, so they must be plain
@@ -169,8 +171,11 @@ pub fn plan(a: &Analysis, fp: &Fingerprints) -> Result<Plan, Error> {
             h.update(part.as_bytes());
             h.update(b"\n");
         }
-        if let StepKind::Python { .. } = step.kind {
-            h.update(fp.python.unwrap_or("python:unavailable").as_bytes());
+        if let StepKind::Python { .. } | StepKind::R { .. } = step.kind {
+            h.update(match step.kind {
+                StepKind::R { .. } => fp.r.unwrap_or("r:unavailable").as_bytes(),
+                _ => fp.python.unwrap_or("python:unavailable").as_bytes(),
+            });
             // Python can read any parameter. Without parameters the key is
             // unchanged, so older projects keep their saved results.
             if !a.parameters.is_empty() {

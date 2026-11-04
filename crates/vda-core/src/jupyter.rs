@@ -19,6 +19,48 @@ use crate::Error;
 use std::collections::{HashMap, HashSet};
 
 /// A Python string literal holding `s`.
+const R_HELPER: &str = r#"
+import csv, subprocess
+
+def r_type(t):
+    t = t.upper()
+    if t == "BOOLEAN": return "BOOLEAN"
+    if t in ("TINYINT", "SMALLINT", "INTEGER", "BIGINT", "HUGEINT", "UTINYINT", "USMALLINT", "UINTEGER", "UBIGINT"): return "BIGINT"
+    if t in ("FLOAT", "DOUBLE") or t.startswith("DECIMAL"): return "DOUBLE"
+    if t == "DATE": return "DATE"
+    if t.startswith("TIMESTAMP") and "TIME ZONE" not in t: return "TIMESTAMP"
+    return "VARCHAR"
+
+CSV_OUT = "FORMAT csv, HEADER true, NULLSTR '\\N', QUOTE '\"', ESCAPE '\"', FORCE_QUOTE *"
+CSV_IN = "header = true, nullstr = '\\N', allow_quoted_nulls = false, quote = '\"', escape = '\"', timestampformat = '%Y-%m-%d %H:%M:%S.%f', auto_detect = false"
+
+def run_r(name, code, inputs):
+    """Run an R step: the first input is `df`, all are in `dfs`, and `result` becomes table `name`."""
+    d = WORK / f"r-{name}"
+    d.mkdir(exist_ok=True)
+    for n, table in enumerate(inputs):
+        cols = [(c, r_type(t)) for c, t, *_ in con.sql(f'DESCRIBE SELECT * FROM "{table}"').fetchall()]
+        q = lambda c: '"' + c.replace('"', '""') + '"'
+        sel = ", ".join(f"strftime({q(c)}, '%Y-%m-%d %H:%M:%S.%f') AS {q(c)}" if t == "TIMESTAMP" else q(c) for c, t in cols)
+        con.sql(f"COPY (SELECT {sel} FROM {q(table)}) TO {lit(d / f'in-{n}.csv')} ({CSV_OUT})")
+        (d / f"in-{n}.types").write_text("".join(t + "\n" for _, t in cols))
+    names = ", ".join(json.dumps(i) for i in inputs)
+    (d / "params.R").write_text(R_PARAMS + "\ninput_names <- c(" + names + ")\n", encoding="utf-8")
+    (d / "step.R").write_text(code, encoding="utf-8")
+    (d / "wrapper.R").write_text(R_WRAPPER, encoding="utf-8")
+    # Your R profile is read (unlike in the app), so packages installed from RStudio are found.
+    p = subprocess.run(["Rscript", "--no-save", "--no-restore", "wrapper.R", "result.csv", "step.R", *[str(n) for n in range(len(inputs))]],
+                       cwd=d, capture_output=True, text=True)
+    print(p.stdout, end="")
+    if p.returncode != 0:
+        raise RuntimeError(f"R step {name}: " + (p.stderr.strip().splitlines() or ["R failed"])[-1])
+    types = (d / "result.csv.types").read_text().split()
+    with open(d / "result.csv", newline="", encoding="utf-8") as f:
+        header = next(csv.reader(f))
+    spec = ", ".join("'" + h.replace("'", "''") + "': '" + t + "'" for h, t in zip(header, types))
+    con.sql(f"CREATE OR REPLACE TABLE \"{name}\" AS SELECT * FROM read_csv({lit(d / 'result.csv')}, columns = {{{spec}}}, {CSV_IN})")
+"#;
+
 fn py(s: &str) -> String {
     Json::str(s).to_string_compact()
 }
@@ -109,6 +151,10 @@ impl Writer<'_> {
                     code.trim_end(),
                     py(id)
                 )
+            }
+            StepKind::R { code, .. } => {
+                let inputs: Vec<String> = step.inputs.iter().map(|i| py(i)).collect();
+                format!("run_r({}, {}, [{}])\n{show}", py(id), py(code), inputs.join(", "))
             }
             StepKind::Chart { .. } => match self.charts.get(id) {
                 Some(spec) => format!(
@@ -289,6 +335,13 @@ pub fn notebook(session: &mut Session) -> Result<Json, Error> {
         .collect();
     setup.push_str(&ps.join(", "));
     setup.push_str("}\n");
+    if a.steps.iter().any(|s| matches!(s.kind, StepKind::R { .. })) {
+        setup.push_str(&format!(
+            "\n# R steps run with Rscript exactly as in the app: the same wrapper, data passed as CSV with its types.\nR_WRAPPER = {}\nR_PARAMS = {}\n{R_HELPER}",
+            py(crate::rlang::WRAPPER),
+            py(&crate::rlang::params_r(&a.parameters))
+        ));
+    }
 
     let mut sources = String::from("# Sources, read as the app reads them.\n");
     for src in &a.sources {

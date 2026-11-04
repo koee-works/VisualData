@@ -26,11 +26,17 @@ import type {
   Comment,
   Every,
   PythonView,
+  RView,
   ScheduleView,
   SourceFormat,
   VersionView,
 } from "./types";
 import { SOURCE_ID } from "./types";
+
+/** Python and R steps: custom code that needs review. */
+function isCode(op: StepOp): op is Extract<StepOp, { type: "python" | "r" }> {
+  return op.type === "python" || op.type === "r";
+}
 
 type Row = Cell[];
 interface Result {
@@ -165,6 +171,20 @@ export class MockBackend implements Backend {
   versions: (VersionView & { snap: MockSnapshot })[] = [];
   commentList: Comment[] = [];
   author = "you";
+  r: RView = {
+    rscript: "Rscript",
+    version: "4.4.1",
+    libraries: ["/home/analyst/R/x86_64-pc-linux-gnu-library/4.4", "/usr/lib/R/library"],
+    packages: [
+      { name: "dplyr", purpose: "data manipulation", required: false, version: "1.1.4" },
+      { name: "tidyr", purpose: "reshaping", required: false, version: null },
+      { name: "ggplot2", purpose: "plots", required: false, version: "3.5.1" },
+    ],
+    problem: null,
+    chosen_by: "default",
+    candidates: ["/opt/R/4.3.3/bin/Rscript"],
+  };
+
   python: PythonView = {
     interpreter: "python3",
     executable: "/usr/bin/python3",
@@ -286,10 +306,21 @@ export class MockBackend implements Backend {
     return structuredClone(this.python);
   }
 
+  async rEnvironment(): Promise<RView> {
+    return structuredClone(this.r);
+  }
+
+  async setR(path: string): Promise<RView> {
+    if (path.includes("missing")) throw { message: `cannot use ${path}: cannot start it` };
+    this.r = { ...this.r, rscript: path, chosen_by: "chosen", candidates: this.r.candidates.filter((c) => c !== path) };
+    for (const [id, r] of this.results) if (this.steps.find((s) => s.id === id)?.op.type === "r") r.def = "";
+    return this.rEnvironment();
+  }
+
   async setPython(path: string): Promise<PythonView> {
     if (path.includes("missing")) throw { message: `cannot use ${path}: it has no pandas or pyarrow; install with: ${path} -m pip install pandas pyarrow` };
     this.python = { ...this.python, interpreter: path, executable: path, chosen_by: "chosen", candidates: this.python.candidates.filter((c) => c !== path) };
-    for (const [id, r] of this.results) if (this.steps.find((s) => s.id === id)?.op.type === "python") r.def = "";
+    for (const [id, r] of this.results) if (this.steps.find((s) => s.id === id)?.op.type.match(/^(python|r)$/)) r.def = "";
     return this.pythonEnvironment();
   }
 
@@ -315,7 +346,7 @@ export class MockBackend implements Backend {
   private paramsOf(op: StepOp): Parameter[] {
     const text = JSON.stringify(op);
     return this.parameters.filter(
-      (p) => op.type === "python" || new RegExp(`[@$]${p.name}\\b|"param":"${p.name}"`).test(text),
+      (p) => isCode(op) || new RegExp(`[@$]${p.name}\\b|"param":"${p.name}"`).test(text),
     );
   }
 
@@ -337,7 +368,7 @@ export class MockBackend implements Backend {
   }
 
   private needsReview(s: MockStep): boolean {
-    return s.op.type === "python" && !this.trustAll && !this.approved.has(s.op.code);
+    return isCode(s.op) && !this.trustAll && !this.approved.has(s.op.code);
   }
 
   private state(s: MockStep): StepStateLabel {
@@ -360,12 +391,12 @@ export class MockBackend implements Backend {
         op: s.op,
         mode: ["filter", "aggregate", "join", "append", "derive", "select", "sort", "window", "dedupe", "pivot", "unpivot", "check", "test"].includes(s.op.type)
           ? "visual"
-          : (s.op.type as "sql" | "python" | "chart"),
+          : (s.op.type as "sql" | "python" | "r" | "chart"),
         state: this.state(s),
         detail: this.failed.get(s.id) ?? null,
         rows: r ? r.rows.length : null,
         columns: r ? r.columns : null,
-        sql: s.op.type === "sql" ? s.op.sql : s.op.type === "chart" || s.op.type === "python" ? null : `SELECT … FROM input`,
+        sql: s.op.type === "sql" ? s.op.sql : s.op.type === "chart" || isCode(s.op) ? null : `SELECT … FROM input`,
         dependents: this.steps.filter((o) => o.inputs.includes(s.id)).map((o) => o.id),
       };
     });
@@ -387,7 +418,7 @@ export class MockBackend implements Backend {
       python: "python 3.13 | pandas 3.0",
       review: this.steps
         .filter((s) => this.needsReview(s))
-        .map((s) => ({ step_id: s.id, label: s.label, inputs: s.inputs, code: s.op.type === "python" ? s.op.code : "" })),
+        .map((s) => ({ step_id: s.id, label: s.label, inputs: s.inputs, code: isCode(s.op) ? s.op.code : "", language: s.op.type === "r" ? ("r" as const) : ("python" as const) })),
       trust_all: this.trustAll,
       parameters: this.parameters.map((p) => ({ ...p })),
       undo: this.undoStack.at(-1)?.what ?? null,
@@ -412,7 +443,7 @@ export class MockBackend implements Backend {
     p.name = name;
     const python: string[] = [];
     for (const s of this.steps) {
-      if (s.op.type === "python") {
+      if (isCode(s.op)) {
         if (s.op.code.includes(old)) python.push(s.id);
         continue;
       }
@@ -601,7 +632,7 @@ export class MockBackend implements Backend {
   private checkInputs(op: StepOp, inputs: string[]) {
     for (const i of inputs)
       if (!this.sources.some((s) => s.id === i) && !this.steps.some((s) => s.id === i)) throw { message: `unknown step \`${i}\`` };
-    const many = op.type === "sql" || op.type === "python";
+    const many = op.type === "sql" || isCode(op);
     const ok =
       op.type === "join" ? inputs.length === 2 : op.type === "append" ? inputs.length >= 2 : many ? inputs.length >= 1 : inputs.length === 1;
     if (!ok) throw { message: `step \`${op.type}\` cannot read ${inputs.length} input${inputs.length === 1 ? "" : "s"}` };
@@ -611,7 +642,7 @@ export class MockBackend implements Backend {
     this.checkInputs(op, inputs);
     const id = this.nextId(op.type);
     this.steps.push({ id, inputs: [...inputs], label, op });
-    if (op.type === "python") this.approved.add(op.code);
+    if (isCode(op)) this.approved.add(op.code);
     this.cells.push({ type: "step", step: id });
     return this.view();
   }
@@ -623,7 +654,7 @@ export class MockBackend implements Backend {
       this.checkInputs(op, inputs);
       s.inputs = [...inputs];
     }
-    if (op.type === "python" && (s.op.type !== "python" || s.op.code !== op.code)) this.approved.add(op.code);
+    if (isCode(op) && (!isCode(s.op) || s.op.code !== op.code)) this.approved.add(op.code);
     s.op = op;
     s.label = label;
     this.failed.delete(id);
@@ -647,7 +678,7 @@ export class MockBackend implements Backend {
   async approve(stepIds: string[]): Promise<AnalysisView> {
     for (const id of stepIds) {
       const s = this.steps.find((x) => x.id === id);
-      if (s?.op.type === "python") this.approved.add(s.op.code);
+      if (s && isCode(s.op)) this.approved.add(s.op.code);
     }
     return this.view();
   }
@@ -1020,6 +1051,8 @@ export class MockBackend implements Backend {
         if (!c.formula.trim() || /[+\-*/&,(]\s*$/.test(c.formula))
           out.push({ ...base, severity: "error", code: "formula", field: `columns.${i}.formula`, message: "the formula ends too early" });
       });
+    if (st.op.type === "r" && !/\bresult\s*(<-|=[^=])|->\s*result\b/.test(st.op.code))
+      out.push({ ...base, severity: "error", code: "r-result", field: "code", message: "never assigns a data frame to `result`" });
     if (st.op.type === "python") {
       if (!/\bresult\s*=/.test(st.op.code))
         out.push({ ...base, severity: "error", code: "python-result", field: "code", message: "never assigns a DataFrame to `result`" });
@@ -1108,7 +1141,7 @@ export class MockBackend implements Backend {
           this.results.set(s.id, r);
           this.failed.delete(s.id);
           ok.add(s.id);
-          const printed = s.op.type === "python" && s.op.code.includes("print(") ? `(mock) printed by ${s.id}\n` : null;
+          const printed = isCode(s.op) && s.op.code.includes("print(") ? `(mock) printed by ${s.id}\n` : null;
           e = { step_id: s.id, status: "succeeded", cached: false, detail: null, rows: r.rows.length, duration_ms: 3, output: printed };
         } catch (err) {
           this.failed.set(s.id, (err as Error).message);

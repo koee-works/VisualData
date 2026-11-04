@@ -31,6 +31,7 @@ export class Workspace {
   /** Comments on steps, sources and the analysis (kept with the project). */
   comments = $state<Comment[]>([]);
   pythonOpen = $state(false);
+  rOpen = $state(false);
   scheduleOpen = $state(false);
   /** Bumped when a run finishes, so the run log refetches. */
   runs = $state(0);

@@ -14,7 +14,7 @@ import type {
   StepEvent,
   StepOp,
   CheckReport,
-  ColumnDetail, Comment, PythonView, ScheduleView, VersionView } from "./types";
+  ColumnDetail, Comment, PythonView, RView, ScheduleView, VersionView } from "./types";
 
 /** Commands registered in apps/desktop/src-tauri/src/main.rs. */
 export const tauriBackend: Backend = {
@@ -98,6 +98,8 @@ export const tauriBackend: Backend = {
   deleteComment: (id) => invoke<Comment[]>("delete_comment", { id }),
   pythonEnvironment: () => invoke<PythonView>("python_environment"),
   setPython: (path) => invoke<PythonView>("set_python", { path }),
+  rEnvironment: () => invoke<RView>("r_environment"),
+  setR: (path) => invoke<RView>("set_r", { path }),
   schedule: (every, hour, minute, exports) => invoke<ScheduleView>("schedule", { every, hour, minute, exports }),
   async pickDocumentPath(defaultName, kind) {
     const preset = await invoke<string | null>("preset_save_path", { name: defaultName });

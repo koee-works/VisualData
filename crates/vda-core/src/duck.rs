@@ -478,3 +478,63 @@ pub fn read_parquet(path: &Path) -> Result<Table, Error> {
     let conn = open(&EngineOptions::default())?;
     query_table(&conn, &format!("SELECT * FROM read_parquet({})", lit(path)))
 }
+
+/// A Parquet file as CSV for a child process that cannot read Parquet (R
+/// steps without the arrow package). Missing values are `\N`, numbers are
+/// written so they read back exactly, and the column types are returned.
+pub fn parquet_to_csv(src: &Path, csv: &Path) -> Result<Vec<(String, DataType)>, Error> {
+    let conn = open(&EngineOptions::default())?;
+    let rel = format!("read_parquet({})", lit(src));
+    let cols: Vec<(String, DataType)> = describe(&conn, &format!("SELECT * FROM {rel}"))?
+        .into_iter()
+        .map(|(n, t)| (n, normalize(&t).0))
+        .collect();
+    let select: Vec<String> = cols
+        .iter()
+        .map(|(n, t)| {
+            let q = quote_ident(n);
+            match t {
+                // Microseconds always, so the reader needs one format.
+                DataType::Timestamp => format!("strftime({q}, '%Y-%m-%d %H:%M:%S.%f') AS {q}"),
+                _ => q,
+            }
+        })
+        .collect();
+    conn.execute_batch(&format!(
+        "COPY (SELECT {} FROM {rel}) TO {} (FORMAT csv, HEADER true, NULLSTR '\\N', QUOTE '\"', ESCAPE '\"', FORCE_QUOTE *);",
+        if select.is_empty() { "*".to_string() } else { select.join(", ") },
+        lit(csv)
+    ))
+    .map_err(db_err("cannot write the step's input"))?;
+    Ok(cols)
+}
+
+/// The CSV a child wrote, read with its declared column types, as Parquet.
+pub fn csv_to_parquet(csv: &Path, columns: &[(String, DataType)], out: &Path) -> Result<(), Error> {
+    let conn = open(&EngineOptions::default())?;
+    if columns.is_empty() {
+        return Err(Error::Data("the result has no columns".into()));
+    }
+    let spec: Vec<String> = columns
+        .iter()
+        .map(|(n, t)| {
+            let ty = match t {
+                DataType::Bool => "BOOLEAN",
+                DataType::Int => "BIGINT",
+                DataType::Float => "DOUBLE",
+                DataType::Text => "VARCHAR",
+                DataType::Date => "DATE",
+                DataType::Timestamp => "TIMESTAMP",
+            };
+            format!("{}: '{ty}'", quote_literal(&Value::Text(n.clone())))
+        })
+        .collect();
+    conn.execute_batch(&format!(
+        "COPY (SELECT * FROM read_csv({}, header = true, columns = {{{}}}, nullstr = '\\N', allow_quoted_nulls = false, \
+         quote = '\"', escape = '\"', timestampformat = '%Y-%m-%d %H:%M:%S.%f', auto_detect = false)) TO {} (FORMAT parquet);",
+        lit(csv),
+        spec.join(", "),
+        lit(out)
+    ))
+    .map_err(|e| Error::Data(format!("the result could not be read back: {}", csv_error(&e.to_string()))))
+}

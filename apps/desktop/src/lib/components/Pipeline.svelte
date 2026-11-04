@@ -47,6 +47,7 @@
     test: FlaskConical,
     sql: Braces,
     python: Code,
+    r: Code,
     chart: ChartColumn,
   };
 
@@ -119,6 +120,8 @@
         return { type, sql: "SELECT *\nFROM input\nLIMIT 100" };
       case "python":
         return { type, code: "# `df` is the input as a pandas DataFrame.\nresult = df", timeout_ms: 60000 };
+      case "r":
+        return { type, code: "# `df` is the input as a data frame.\nresult <- df", timeout_ms: 60000 };
       case "chart":
         return { type, mark: "bar", x: text, y: numeric, title: null, color: null, summary: "SUM" };
       case "test": {
@@ -160,6 +163,7 @@
     { type: "chart", name: "Chart", hint: "Visual" },
     { type: "sql", name: "SQL", hint: "Code" },
     { type: "python", name: "Python", hint: "Code" },
+    { type: "r", name: "R", hint: "Code" },
   ];
 
   function isRunning(s: StepView) {
@@ -273,8 +277,8 @@
                   <span class="sr-only">open comments</span>
                 </span>
               {/if}
-              {#if s.mode === "sql" || s.mode === "python"}
-                <span class="tag" title="Edited as code, not with visual controls">{s.mode === "sql" ? "SQL" : "Py"}</span>
+              {#if s.mode === "sql" || s.mode === "python" || s.mode === "r"}
+                <span class="tag" title="Edited as code, not with visual controls">{{ sql: "SQL", python: "Py", r: "R" }[s.mode]}</span>
               {/if}
             </button>
           </li>

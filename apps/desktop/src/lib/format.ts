@@ -165,6 +165,8 @@ export function describe(op: StepOp): string {
       return "Custom SQL";
     case "python":
       return "Custom Python";
+    case "r":
+      return "Custom R";
     case "chart": {
       if (op.mark === "histogram") return `Histogram of ${op.x}`;
       if (op.mark === "boxplot") return `Box plot of ${op.y}${op.x ? ` by ${op.x}` : ""}`;

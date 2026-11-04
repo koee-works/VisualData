@@ -109,6 +109,7 @@ pub fn step_sql(kind: &StepKind) -> Option<String> {
         | StepKind::Pivot { .. }
         | StepKind::Unpivot { .. }
         | StepKind::Python { .. }
+        | StepKind::R { .. }
         | StepKind::Test { .. }
         | StepKind::Chart { .. } => None,
     }
@@ -824,7 +825,7 @@ pub fn output_schema(step: &Step, inputs: &[Schema]) -> Result<Option<Schema>, E
             crate::chart::validate(step, input)?;
             Ok(None)
         }
-        StepKind::Sql { .. } | StepKind::Python { .. } => Ok(None),
+        StepKind::Sql { .. } | StepKind::Python { .. } | StepKind::R { .. } => Ok(None),
     }
 }
 
@@ -844,6 +845,7 @@ pub fn pipeline_sql_with(
         StepKind::Python { .. } => {
             return Err(Error::Unsupported(format!("step `{step_id}` is custom Python; it has no SQL form")))
         }
+        StepKind::R { .. } => return Err(Error::Unsupported(format!("step `{step_id}` is custom R; it has no SQL form"))),
         StepKind::Chart { .. } => {
             return Err(Error::Unsupported(format!("step `{step_id}` is a chart; it has no SQL form")))
         }
@@ -918,12 +920,16 @@ pub fn pipeline_sql_with(
             return Ok(());
         }
         let step = a.step(id).ok_or_else(|| Error::Validation(format!("unknown step `{id}`")))?;
-        if let StepKind::Python { .. } | StepKind::Test { .. } = step.kind {
+        if let StepKind::Python { .. } | StepKind::R { .. } | StepKind::Test { .. } = step.kind {
             ctes.push(format!(
                 "{} AS (SELECT * FROM {} /* materialized output of {} step `{id}` */)",
                 quote_ident(id),
                 quote_ident(&format!("{id}_output")),
-                if matches!(step.kind, StepKind::Python { .. }) { "Python" } else { "test" }
+                match step.kind {
+                    StepKind::Python { .. } => "Python",
+                    StepKind::R { .. } => "R",
+                    _ => "test",
+                }
             ));
             return Ok(());
         }

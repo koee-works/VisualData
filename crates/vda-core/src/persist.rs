@@ -267,6 +267,11 @@ pub fn step_kind_to_json(kind: &StepKind) -> Json {
             ("code", Json::str(code.clone())),
             ("timeout_ms", Json::Num(*timeout_ms as f64)),
         ]),
+        StepKind::R { code, timeout_ms } => Json::obj(vec![
+            ("type", Json::str("r")),
+            ("code", Json::str(code.clone())),
+            ("timeout_ms", Json::Num(*timeout_ms as f64)),
+        ]),
         StepKind::Chart { mark, x, y, title, color, summary } => {
             let mut pairs = vec![
                 ("type", Json::str("chart")),
@@ -427,6 +432,10 @@ pub fn step_kind_from_json(j: &Json) -> Result<StepKind, Error> {
         },
         "sql" => StepKind::Sql { sql: j.req_str("sql")?.to_string() },
         "python" => StepKind::Python {
+            code: j.req_str("code")?.to_string(),
+            timeout_ms: j.get("timeout_ms").and_then(Json::as_f64).unwrap_or(30_000.0) as u64,
+        },
+        "r" => StepKind::R {
             code: j.req_str("code")?.to_string(),
             timeout_ms: j.get("timeout_ms").and_then(Json::as_f64).unwrap_or(30_000.0) as u64,
         },

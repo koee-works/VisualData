@@ -14,7 +14,7 @@ import type {
   StepOp,
   CheckReport,
   ColumnDetail,
-  Parameter, Comment, Every, PythonView, ScheduleView, VersionView } from "./types";
+  Parameter, Comment, Every, PythonView, RView, ScheduleView, VersionView } from "./types";
 
 export interface RunHandlers {
   onStep: (e: StepEvent) => void;
@@ -92,6 +92,8 @@ export interface Backend {
   deleteComment(id: string): Promise<Comment[]>;
   pythonEnvironment(): Promise<PythonView>;
   setPython(path: string): Promise<PythonView>;
+  rEnvironment(): Promise<RView>;
+  setR(path: string): Promise<RView>;
   /** The scheduler entry that refreshes the project with vda-run. */
   schedule(every: Every, hour: number, minute: number, exports: [string, string][]): Promise<ScheduleView>;
 }

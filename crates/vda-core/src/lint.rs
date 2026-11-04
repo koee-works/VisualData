@@ -190,7 +190,7 @@ impl Linter {
         for p in &a.parameters {
             let used = a.steps.iter().any(|st| {
                 crate::params::used_by(st).contains(&p.name)
-                    || matches!(&st.kind, StepKind::Python { code, .. } if code.contains(&p.name))
+                    || matches!(&st.kind, StepKind::Python { code, .. } | StepKind::R { code, .. } if code.contains(&p.name))
             });
             if !used {
                 out.push(Diagnostic::new(Severity::Info, "unused-parameter", None, format!("parameter `{}` is not used by any step", p.name)));
@@ -244,7 +244,7 @@ impl Linter {
             let step = bound.step(&id).unwrap();
             let inputs: Option<Vec<Schema>> = step.inputs.iter().map(|i| known.get(i).cloned()).collect();
             match (&step.kind, inputs) {
-                (StepKind::Sql { .. } | StepKind::Python { .. }, _) => {
+                (StepKind::Sql { .. } | StepKind::Python { .. } | StepKind::R { .. }, _) => {
                     // Known only from a current result.
                     if s.state(&id).ok() == Some(StepState::Fresh) {
                         if let Some(Output::Table(ds)) = s.output(&id) {
@@ -400,6 +400,11 @@ impl Linter {
                         .at("code", Some(line), None),
                     );
                 }
+            }
+            StepKind::R { code, .. } if !r_assigns_result(code) => {
+                out.push(
+                    Diagnostic::new(Severity::Error, "r-result", Some(&step.id), "never assigns a data frame to `result`").at("code", None, None),
+                );
             }
             _ => {}
         }
@@ -637,7 +642,7 @@ fn parse_python(interpreter: &std::path::Path, code: &str) -> Option<PythonFacts
 /// `column "x" not found`) found on that line or anywhere in the code.
 pub(crate) fn error_place(kind: &StepKind, message: &str) -> Option<(&'static str, usize, Option<usize>)> {
     let (field, code) = match kind {
-        StepKind::Python { code, .. } => ("code", code.as_str()),
+        StepKind::Python { code, .. } | StepKind::R { code, .. } => ("code", code.as_str()),
         StepKind::Sql { sql } => ("sql", sql.as_str()),
         _ => return None,
     };
@@ -658,6 +663,28 @@ pub(crate) fn error_place(kind: &StepKind, message: &str) -> Option<(&'static st
         (None, Some(_)) => (1..=lines.len()).find_map(|l| column_in(l).map(|c| (field, l, Some(c)))),
         (None, None) => None,
     }
+}
+
+/// Whether R code assigns `result` anywhere (`result <-`, `result =`,
+/// `-> result`, `assign("result", ...)`), outside comments and strings.
+fn r_assigns_result(code: &str) -> bool {
+    code.lines().any(|line| {
+        // Drop a trailing comment (a `#` outside quotes).
+        let mut quote = None;
+        let mut kept = String::new();
+        for c in line.chars() {
+            match (quote, c) {
+                (None, '#') => break,
+                (None, '"' | '\'') => quote = Some(c),
+                (Some(q), c) if c == q => quote = None,
+                _ => {}
+            }
+            kept.push(c);
+        }
+        let t = kept.replace(' ', "");
+        let starts = |s: &str| t.starts_with(s) || t.contains(&format!(";{s}")) || t.contains(&format!("{{{s}"));
+        starts("result<-") || starts("result<<-") || (starts("result=") && !starts("result==")) || t.contains("->result") || t.contains("assign(\"result\"")
+    })
 }
 
 /// DuckDB's `LINE 2: <text>` with `^` under the place, as (line, text shown, 1-based column).
@@ -733,5 +760,20 @@ mod place_tests {
         assert_eq!(error_place(&code, "KeyError: 'nope' (line 1, in <module>)"), Some(("code", 1, None)));
         assert_eq!(error_place(&code, "ran out of memory (limit reached)"), None);
         assert_eq!(error_place(&StepKind::Sort { by: vec![], limit: None }, "x"), None);
+    }
+}
+
+#[cfg(test)]
+mod r_tests {
+    #[test]
+    fn r_result_is_found() {
+        use super::r_assigns_result as a;
+        assert!(a("result <- df"));
+        assert!(a("x <- 1; result = x"));
+        assert!(a("df |>\n  head() -> result"));
+        assert!(a("assign(\"result\", df)"));
+        assert!(!a("# result <- df\nres <- df"));
+        assert!(!a("x <- \"result <- 1\""));
+        assert!(!a("if (result == 1) x"));
     }
 }

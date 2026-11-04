@@ -119,6 +119,16 @@ async fn python_environment(s: State<'_, Shared>) -> Res<vda_app::PythonView> {
 }
 
 #[tauri::command]
+async fn r_environment(s: State<'_, Shared>) -> Res<vda_app::RView> {
+    with(&s, |a| a.r_environment())
+}
+
+#[tauri::command]
+async fn set_r(s: State<'_, Shared>, path: PathBuf) -> Res<vda_app::RView> {
+    with(&s, |a| a.set_r(&path))
+}
+
+#[tauri::command]
 async fn set_python(s: State<'_, Shared>, path: PathBuf) -> Res<vda_app::PythonView> {
     with(&s, |a| a.set_python(&path))
 }
@@ -352,6 +362,8 @@ fn main() {
             delete_comment,
             python_environment,
             set_python,
+            r_environment,
+            set_r,
             schedule,
             run,
             cancel

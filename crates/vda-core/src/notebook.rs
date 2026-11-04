@@ -62,6 +62,7 @@ pub fn render_markdown(session: &mut Session) -> Result<String, Error> {
                     StepKind::Python { .. } => {
                         "custom Python — not editable with visual controls".to_string()
                     }
+                    StepKind::R { .. } => "custom R — not editable with visual controls".to_string(),
                     k => format!("visual {}", k.type_name()),
                 };
                 out.push_str(&format!(
@@ -90,6 +91,16 @@ pub fn render_markdown(session: &mut Session) -> Result<String, Error> {
                             "Input `df` → output `result`\n\n```python\n".to_string()
                         } else {
                             format!("Inputs `df` and `dfs` (`{names}`) → output `result`\n\n```python\n")
+                        });
+                        out.push_str(code.trim());
+                        out.push_str("\n```\n\n");
+                    }
+                    StepKind::R { code, .. } => {
+                        let names = step.inputs.join("`, `");
+                        out.push_str(&if step.inputs.len() == 1 {
+                            "Input `df` → output `result`\n\n```r\n".to_string()
+                        } else {
+                            format!("Inputs `df` and `dfs` (`{names}`) → output `result`\n\n```r\n")
                         });
                         out.push_str(code.trim());
                         out.push_str("\n```\n\n");

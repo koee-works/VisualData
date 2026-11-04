@@ -324,7 +324,7 @@ pub fn rename(a: &mut crate::model::Analysis, old: &str, new: &str) -> Result<Ve
                 }
             }
             StepKind::Sql { sql } => *sql = swap(sql, sql_refs(sql), '$'),
-            StepKind::Python { code, .. } if code.contains(old) => python.push(s.id.clone()),
+            StepKind::Python { code, .. } | StepKind::R { code, .. } if code.contains(old) => python.push(s.id.clone()),
             _ => {}
         }
     }

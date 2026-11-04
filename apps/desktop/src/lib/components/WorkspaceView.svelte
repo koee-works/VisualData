@@ -10,6 +10,7 @@
   import SourceOverview from "./SourceOverview.svelte";
   import ReviewDialog from "./ReviewDialog.svelte";
   import PythonDialog from "./PythonDialog.svelte";
+  import RDialog from "./RDialog.svelte";
   import ScheduleDialog from "./ScheduleDialog.svelte";
   import Console from "./Console.svelte";
 
@@ -31,6 +32,7 @@
 
 <ReviewDialog {ws} />
 <PythonDialog {ws} />
+<RDialog {ws} />
 <ScheduleDialog {ws} />
 
 <div class="grid h-full grid-rows-[auto_1fr]">

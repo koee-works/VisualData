@@ -444,7 +444,7 @@ fn capped(bytes: &[u8]) -> String {
     }
 }
 
-fn step_output(stdout: &[u8], stderr: &str) -> String {
+pub(crate) fn step_output(stdout: &[u8], stderr: &str) -> String {
     let err: String = stderr
         .lines()
         .filter(|l| !l.starts_with("VDA_CONTRACT: ") && !l.starts_with("VDA_SETUP: "))

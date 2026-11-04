@@ -122,6 +122,7 @@ export type StepOp =
   | { type: "test"; test: TestKind; a: string; b: string }
   | { type: "sql"; sql: string }
   | { type: "python"; code: string; timeout_ms: number }
+  | { type: "r"; code: string; timeout_ms: number }
   | {
       type: "chart";
       mark: Mark;
@@ -187,7 +188,7 @@ export interface ColumnDetail {
   histogram: number[];
 }
 
-export type StepMode = "visual" | "sql" | "python" | "chart";
+export type StepMode = "visual" | "sql" | "python" | "r" | "chart";
 export type StepStateLabel = "fresh" | "stale" | "not run" | "failed" | "cancelled" | "blocked" | "needs review" | "waiting on review";
 
 export interface StepView {
@@ -231,6 +232,7 @@ export interface ReviewItem {
   label: string | null;
   inputs: string[];
   code: string;
+  language?: "python" | "r";
 }
 
 export interface StepEvent {
@@ -330,6 +332,18 @@ export interface PythonView {
   packages: PythonPackage[];
   problem: string | null;
   /** "env" (VDA_PYTHON), "chosen" in the app, or "default". */
+  chosen_by: "env" | "chosen" | "default";
+  candidates: string[];
+}
+
+export interface RView {
+  rscript: string;
+  version: string | null;
+  /** Package libraries R steps see (where RStudio installs packages). */
+  libraries: string[];
+  packages: PythonPackage[];
+  problem: string | null;
+  /** "env" (VDA_R), "chosen" in the app, or "default". */
   chosen_by: "env" | "chosen" | "default";
   candidates: string[];
 }

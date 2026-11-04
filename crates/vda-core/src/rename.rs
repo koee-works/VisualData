@@ -58,6 +58,7 @@ pub fn rename_source(a: &mut Analysis, old: &str, new: &str) -> Result<Renamed, 
         let changed = match &mut step.kind {
             StepKind::Sql { sql } => replace(sql, rename_sql(sql, old, new)),
             StepKind::Python { code, .. } => replace(code, rename_python(code, old, new)),
+            StepKind::R { code, .. } => replace(code, rename_r(code, old, new)),
             _ => false,
         };
         if changed {
@@ -278,9 +279,42 @@ pub fn rename_python(code: &str, old: &str, new: &str) -> String {
     out
 }
 
+/// Rewrite `dfs$old`, `` dfs$`old` ``, `dfs[["old"]]` and `dfs[['old']]` in R code.
+pub fn rename_r(code: &str, old: &str, new: &str) -> String {
+    let mut out = code.to_string();
+    for q in ['"', '\''] {
+        out = out.replace(&format!("dfs[[{q}{old}{q}]]"), &format!("dfs[[{q}{new}{q}]]"));
+    }
+    out = out.replace(&format!("dfs$`{old}`"), &format!("dfs$`{new}`"));
+    // dfs$old only as a whole name: not dfs$older.
+    let from = format!("dfs${old}");
+    let mut result = String::new();
+    let mut rest = out.as_str();
+    while let Some(i) = rest.find(&from) {
+        let after = rest[i + from.len()..].chars().next();
+        result.push_str(&rest[..i]);
+        if after.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '.') {
+            result.push_str(&from);
+        } else {
+            result.push_str(&format!("dfs${new}"));
+        }
+        rest = &rest[i + from.len()..];
+    }
+    result.push_str(rest);
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn r_lookups_are_renamed() {
+        assert_eq!(
+            rename_r("a <- dfs$regions; b <- dfs[[\"regions\"]]; c <- dfs$regions_old; d <- dfs$`regions`", "regions", "targets"),
+            "a <- dfs$targets; b <- dfs[[\"targets\"]]; c <- dfs$regions_old; d <- dfs$`targets`"
+        );
+    }
 
     #[test]
     fn only_real_table_references_are_renamed() {

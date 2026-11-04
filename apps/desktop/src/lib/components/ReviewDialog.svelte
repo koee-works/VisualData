@@ -10,11 +10,15 @@
   let { ws }: { ws: Workspace } = $props();
 
   let items = $derived(ws.pendingReview);
+  // "Python", "R", or "Python and R".
+  let langs = $derived(
+    [...new Set(items.map((i) => (i.language === "r" ? "R" : "Python")))].sort((a, b) => (a === "Python" ? -1 : b === "Python" ? 1 : 0)).join(" and ") || "Python",
+  );
   let busy = $state(false);
 
   function title(item: ReviewItem): string {
     const step = ws.view?.steps.find((s) => s.id === item.step_id);
-    return step ? stepTitle(step) : item.label || describe({ type: "python", code: item.code, timeout_ms: 0 });
+    return step ? stepTitle(step) : item.label || describe({ type: item.language === "r" ? "r" : "python", code: item.code, timeout_ms: 0 });
   }
 
   function inputName(item: ReviewItem): string {
@@ -42,12 +46,12 @@
         <ShieldAlert size={22} class="mt-0.5 shrink-0 text-review" aria-hidden="true" />
         <div>
           <Dialog.Title class="text-lg font-bold">
-            Review {items.length === 1 ? "this Python step" : `${items.length} Python steps`} before {items.length === 1
+            Review {items.length === 1 ? `this ${langs} step` : `${items.length} ${langs} steps`} before {items.length === 1
               ? "it runs"
               : "they run"}
           </Dialog.Title>
           <Dialog.Description class="mt-1 max-w-[62ch] text-sm text-ink-soft">
-            This project contains Python code you haven't approved on this computer. Python steps run as you: they can
+            This project contains {langs} code you haven't approved on this computer. Code steps run as you: they can
             read and change your files and use the network. Approve only code you understand or trust. Until then, these
             steps and the steps after them won't run. <em>Trust all until I quit</em> skips this check in every project
             you open until you close the app; nothing is saved.
@@ -82,7 +86,7 @@
         <button
           class="btn"
           disabled={busy}
-          title="Runs Python in every project you open until you quit, without asking. Nothing is saved; you'll be asked again next time."
+          title="Runs code steps in every project you open until you quit, without asking. Nothing is saved; you'll be asked again next time."
           onclick={() => ws.setTrustAll(true)}
         >
           Trust all until I quit

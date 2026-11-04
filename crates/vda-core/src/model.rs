@@ -158,6 +158,9 @@ pub enum StepKind {
     /// Custom Python. Receives the first input as `df` and every input in the
     /// dict `dfs` by id (pandas), and must assign a DataFrame to `result`.
     Python { code: String, timeout_ms: u64 },
+    /// Custom R. Receives the first input as the data frame `df` and every
+    /// input in the named list `dfs`, and must assign a data frame to `result`.
+    R { code: String, timeout_ms: u64 },
     /// Visual: chart specification over the upstream result. With a
     /// `summary`, one value per `x` (and `color`) is computed over all rows;
     /// `y` is unused by histograms and row counts, `x` optional for box plots.
@@ -182,6 +185,7 @@ impl StepKind {
             StepKind::Test { .. } => "test",
             StepKind::Sql { .. } => "sql",
             StepKind::Python { .. } => "python",
+            StepKind::R { .. } => "r",
             StepKind::Chart { .. } => "chart",
         }
     }
@@ -218,7 +222,7 @@ impl StepKind {
         match self {
             StepKind::Join { .. } => (2, Some(2)),
             StepKind::Append { .. } => (2, None),
-            StepKind::Sql { .. } | StepKind::Python { .. } => (1, None),
+            StepKind::Sql { .. } | StepKind::Python { .. } | StepKind::R { .. } => (1, None),
             _ => (1, Some(1)),
         }
     }

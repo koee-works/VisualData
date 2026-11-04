@@ -112,7 +112,7 @@
           align="end"
           sideOffset={4}
         >
-          {#each [{ icon: Terminal, name: "Python environment", hint: "Which Python runs your steps", open: () => (ws.pythonOpen = true) }, { icon: CalendarClock, name: "Refresh on a schedule", hint: "Rerun and export without the app", open: () => (ws.scheduleOpen = true) }, { icon: Undo2, name: "History", hint: "Every saved version", open: () => ((ws.consoleTab = "history"), (ws.consoleOpen = true)) }] as item (item.name)}
+          {#each [{ icon: Terminal, name: "Python environment", hint: "Which Python runs your steps", open: () => (ws.pythonOpen = true) }, { icon: Terminal, name: "R installation", hint: "Which R runs your steps", open: () => (ws.rOpen = true) }, { icon: CalendarClock, name: "Refresh on a schedule", hint: "Rerun and export without the app", open: () => (ws.scheduleOpen = true) }, { icon: Undo2, name: "History", hint: "Every saved version", open: () => ((ws.consoleTab = "history"), (ws.consoleOpen = true)) }] as item (item.name)}
             <DropdownMenu.Item
               class="flex cursor-pointer items-start gap-2 rounded px-2 py-1.5 outline-none data-[highlighted]:bg-select"
               onSelect={item.open}

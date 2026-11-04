@@ -186,7 +186,7 @@ fn format_1_projects_open_and_keep_their_saved_results() {
     // A single-input step's cache key is computed exactly as in format 1, so
     // results saved by earlier versions are still found.
     let sources = [(SOURCE_ID.to_string(), "abc".to_string())].into_iter().collect();
-    let keys = plan(&a, &Fingerprints { sources: &sources, engine: "duckdb x", python: None }).unwrap().keys;
+    let keys = plan(&a, &Fingerprints { sources: &sources, engine: "duckdb x", python: None, r: None }).unwrap().keys;
     let mut h = Sha256::new();
     for part in [
         "vda-key-v1",

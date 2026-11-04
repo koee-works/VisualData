@@ -26,6 +26,7 @@ pub mod persist;
 pub mod profile;
 pub mod plan;
 pub mod python;
+pub mod rlang;
 pub mod reference;
 pub mod rename;
 pub mod review;
@@ -46,6 +47,8 @@ pub enum Error {
     Format(String),
     /// Custom Python step failed, timed out, or could not start.
     Python(String),
+    /// Custom R step failed, timed out, or could not start.
+    R(String),
     /// Feature or boundary not implemented in this build.
     Unsupported(String),
     Cancelled,
@@ -59,6 +62,7 @@ impl fmt::Display for Error {
             Error::Data(m) => write!(f, "data error: {m}"),
             Error::Format(m) => write!(f, "format error: {m}"),
             Error::Python(m) => write!(f, "python step: {m}"),
+            Error::R(m) => write!(f, "R step: {m}"),
             Error::Unsupported(m) => write!(f, "not supported yet: {m}"),
             Error::Cancelled => write!(f, "cancelled"),
             Error::Io(e) => write!(f, "i/o error: {e}"),

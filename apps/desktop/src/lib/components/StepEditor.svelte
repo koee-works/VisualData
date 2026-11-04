@@ -235,11 +235,11 @@
       <CheckEditor bind:rules={draft.rules} bind:stop={draft.stop} columns={inputColumns} parameters={ws.view?.parameters ?? []} problems={byField} report={dirty ? null : report} />
     {:else if draft.type === "append"}
       <AppendEditor {ws} bind:inputs bind:distinct={draft.distinct} bind:origin={draft.origin} choices={readable} />
-    {:else if draft.type === "sql" || draft.type === "python"}
+    {:else if draft.type === "sql" || draft.type === "python" || draft.type === "r"}
       {#if draft.type === "sql"}
         <CodeEditor bind:code={draft.sql} language="sql" inputs={codeInputs} parameters={ws.view?.parameters ?? []} problems={byField["sql"] ?? []} onrun={runFromEditor} />
       {:else}
-        <CodeEditor bind:code={draft.code} language="python" inputs={codeInputs} parameters={ws.view?.parameters ?? []} problems={byField["code"] ?? []} onrun={runFromEditor} />
+        <CodeEditor bind:code={draft.code} language={draft.type} inputs={codeInputs} parameters={ws.view?.parameters ?? []} problems={byField["code"] ?? []} onrun={runFromEditor} />
       {/if}
       <div class="mt-3 flex flex-wrap items-center gap-2 text-sm" aria-label="More inputs">
         <span class="text-ink-soft">Also reads</span>
@@ -269,7 +269,7 @@
           </select>
         {/if}
       </div>
-      {#if draft.type === "python"}
+      {#if draft.type === "python" || draft.type === "r"}
         <label class="mt-3 flex items-center gap-2 text-sm text-ink-soft">
           Stop after
           <input
@@ -278,7 +278,7 @@
             min="1"
             value={Math.round(draft.timeout_ms / 1000)}
             oninput={(e) => {
-              if (draft.type === "python") draft.timeout_ms = Math.max(1, Number(e.currentTarget.value) || 60) * 1000;
+              if (draft.type === "python" || draft.type === "r") draft.timeout_ms = Math.max(1, Number(e.currentTarget.value) || 60) * 1000;
             }}
           />
           seconds

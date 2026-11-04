@@ -30,6 +30,12 @@ pub fn fingerprint(kind: &StepKind) -> Option<String> {
             h.update(code.as_bytes());
             Some(h.hex_digest())
         }
+        StepKind::R { code, .. } => {
+            let mut h = Sha256::new();
+            h.update(b"vda-review-v1\nr\n");
+            h.update(code.as_bytes());
+            Some(h.hex_digest())
+        }
         _ => None,
     }
 }

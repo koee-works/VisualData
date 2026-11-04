@@ -130,7 +130,7 @@ async function stepSection(ws: Workspace, s: StepView): Promise<string> {
   } else if (s.state === "not run") {
     parts.push(`<p class="note">Not run yet.</p>`);
   }
-  const code = s.op.type === "python" ? { lang: "Python", text: s.op.code } : s.op.type === "sql" ? { lang: "SQL", text: s.op.sql } : null;
+  const code = s.op.type === "python" ? { lang: "Python", text: s.op.code } : s.op.type === "r" ? { lang: "R", text: s.op.code } : s.op.type === "sql" ? { lang: "SQL", text: s.op.sql } : null;
   if (code) parts.push(`<details><summary>${code.lang}</summary><pre>${esc(code.text)}</pre></details>`);
   parts.push(commentsHtml(ws, `step:${s.id}`));
   parts.push("</section>");

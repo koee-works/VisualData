@@ -13,7 +13,7 @@ pub mod refresh;
 mod settings;
 pub use comments::CommentView;
 pub use history::VersionView;
-pub use settings::{PackageView, PythonView};
+pub use settings::{PackageView, PythonView, RView};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value as J;
@@ -182,6 +182,8 @@ pub struct ReviewItem {
     pub label: Option<String>,
     pub inputs: Vec<String>,
     pub code: String,
+    /// "python" or "r".
+    pub language: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -308,6 +310,7 @@ fn mode(kind: &StepKind) -> &'static str {
     match kind {
         StepKind::Sql { .. } => "sql",
         StepKind::Python { .. } => "python",
+        StepKind::R { .. } => "r",
         StepKind::Chart { .. } => "chart",
         _ => "visual",
     }
@@ -338,6 +341,9 @@ pub struct App {
     restoring: Option<u64>,
     /// Why `interpreter` was chosen: "env", "chosen" or "default".
     python_chosen_by: &'static str,
+    /// `Rscript` for R steps, and why it was chosen (as for Python).
+    rscript: PathBuf,
+    r_chosen_by: &'static str,
 }
 
 impl Default for App {
@@ -364,6 +370,8 @@ impl App {
             author: comments::current_author(),
             restoring: None,
             python_chosen_by: "default",
+            rscript: vda_core::rlang::default_rscript(),
+            r_chosen_by: "default",
         }
     }
 
@@ -385,6 +393,9 @@ impl App {
         let (interpreter, why) = settings::choose_interpreter(&self.settings);
         self.interpreter = interpreter;
         self.python_chosen_by = why;
+        let (rscript, why) = settings::choose_rscript(&self.settings);
+        self.rscript = rscript;
+        self.r_chosen_by = why;
         self
     }
 
@@ -410,6 +421,7 @@ impl App {
             Some(a) => Session::new(a, dir, engine, python)?,
             None => Session::open(dir, engine, python)?,
         };
+        session.set_r(Some(vda_core::rlang::RRunner::new(self.rscript.clone(), dir.join(".work"))));
         let mut approvals = match &self.approvals_path {
             Some(p) => Approvals::load(p.clone())?,
             None => self.memory_approvals.clone(),
@@ -554,11 +566,12 @@ impl App {
                 .iter()
                 .filter_map(|id| a.step(id))
                 .filter_map(|st| match &st.kind {
-                    StepKind::Python { code, .. } => Some(ReviewItem {
+                    StepKind::Python { code, .. } | StepKind::R { code, .. } => Some(ReviewItem {
                         step_id: st.id.clone(),
                         label: st.label.clone(),
                         inputs: st.inputs.clone(),
                         code: code.clone(),
+                        language: if matches!(st.kind, StepKind::R { .. }) { "r" } else { "python" }.into(),
                     }),
                     _ => None,
                 })

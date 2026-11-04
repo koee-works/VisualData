@@ -557,10 +557,31 @@ def slice4(s, shots):
     assert entry.startswith("0 7 * * 1-5 ") and "scheduled.log" in entry, entry
     s.screenshot(f"{shots}/24-schedule.png")
     s.click("//button[normalize-space()='Done']")
+    s.wait_gone("//*[@role='dialog']")
+
+    step(31, "An R step: written with dplyr in the code editor, it runs at once")
+    s.click(node("sales.csv"))
+    s.click("//button[@aria-label='Add a step']")
+    s.click("//div[@role='menuitem' and .//text()[normalize-space()='R']]")
+    s.wait_gone("//*[@role='menu']")
+    editor = "//*[@role='textbox' and @aria-label='R code']"
+    s.find(editor)
+    s.set_code(editor, "library(dplyr)\nresult <- df |>\n  group_by(region) |>\n  summarise(units = sum(units), orders = n()) |>\n  arrange(desc(units))")
+    s.click("//button[normalize-space()='Save step']")
+    s.click("//header//button[normalize-space()='Run analysis']")
+    s.wait_text(STATUS, "All results current")
+    s.wait_text(table, "orders")
+    s.screenshot(f"{shots}/25-r.png")
+    s.click("//button[@aria-label='More']")
+    s.click("//div[@role='menuitem' and contains(., 'R installation')]")
+    s.wait_text("//table[@aria-label='R packages']", "dplyr")
+    s.screenshot(f"{shots}/26-r-installation.png")
+    s.click("//button[normalize-space()='Done']")
+    s.wait_gone("//*[@role='dialog']")
 
 
 def refresh_without_the_app(app, project, approvals):
-    step(31, "vda-run refreshes the project without the app, and the run log says so")
+    step(32, "vda-run refreshes the project without the app, and the run log says so")
     runner = os.path.join(os.path.dirname(app), "vda-run")
     out = os.path.join(project, "latest.csv")
     r = subprocess.run([runner, project, "--export", f"by_region={out}"], env=dict(os.environ, VDA_APPROVALS=approvals), capture_output=True, text=True)

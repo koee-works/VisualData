@@ -16,6 +16,7 @@ use crate::model::{Analysis, SourceFormat, StepKind, SOURCE_ID};
 use crate::table::Schema;
 use crate::plan::{self, Fingerprints, Plan};
 use crate::python::PythonRunner;
+use crate::rlang::{default_rscript, RRunner};
 use crate::review::ReviewPolicy;
 use crate::table::{ColumnProfile, Table};
 use crate::Error;
@@ -275,6 +276,9 @@ pub struct Session {
     engine: Box<dyn Engine>,
     python: Option<PythonRunner>,
     python_fp: Option<String>,
+    /// R runs only when an R step needs it; its fingerprint is found then.
+    r: RefCell<Option<RRunner>>,
+    r_fp: RefCell<Option<Option<String>>>,
     /// (size, modified time, hash) of each source file by id, so sources are
     /// not rehashed on every state query.
     source_fp: RefCell<HashMap<String, (u64, SystemTime, String)>>,
@@ -307,6 +311,8 @@ impl Session {
             engine,
             python,
             python_fp,
+            r: RefCell::new(Some(RRunner::new(default_rscript(), std::env::temp_dir().join("vda-r-work")))),
+            r_fp: RefCell::new(None),
             source_fp: RefCell::new(HashMap::new()),
             source_ds: HashMap::new(),
             results: HashMap::new(),
@@ -404,6 +410,31 @@ impl Session {
         self.python_fp.as_deref()
     }
 
+    /// Use this R installation for R steps (`None`: R steps cannot run).
+    pub fn set_r(&mut self, runner: Option<RRunner>) {
+        self.r = RefCell::new(runner);
+        self.r_fp = RefCell::new(None);
+    }
+
+    /// The R installation's fingerprint, found the first time an R step
+    /// needs it. `None` without R steps or when R cannot run.
+    pub fn r_fingerprint(&self) -> Option<String> {
+        if !self.analysis.steps.iter().any(|s| matches!(s.kind, StepKind::R { .. })) {
+            return None;
+        }
+        if let Some(fp) = self.r_fp.borrow().clone() {
+            return fp;
+        }
+        let fp = self.r.borrow_mut().as_mut().and_then(|r| r.fingerprint());
+        *self.r_fp.borrow_mut() = Some(fp.clone());
+        fp
+    }
+
+    /// The R installation steps use, described (version, libraries, packages).
+    pub fn r_environment(&self) -> Option<crate::rlang::REnvironment> {
+        self.r.borrow_mut().as_mut().map(|r| r.environment())
+    }
+
     pub fn project_dir(&self) -> &Path {
         &self.project_dir
     }
@@ -488,9 +519,10 @@ impl Session {
     pub fn plan(&self) -> Result<Plan, Error> {
         let sources = self.source_fingerprints()?;
         let engine = self.engine.fingerprint();
+        let r_fp = self.r_fingerprint();
         plan::plan(
             &self.analysis.bound(),
-            &Fingerprints { sources: &sources, engine: &engine, python: self.python_fp.as_deref() },
+            &Fingerprints { sources: &sources, engine: &engine, python: self.python_fp.as_deref(), r: r_fp.as_deref() },
         )
     }
 
@@ -876,6 +908,25 @@ impl Session {
                     self.step_output = Some(run.output);
                     let ran = run.result;
                     let adopted = ran.and_then(|_| self.engine.adopt_parquet(&raw, &tmp));
+                    let _ = fs::remove_file(&raw);
+                    Ok(Output::Table(self.artifacts.commit_table(key, adopted?)?))
+                }
+                StepKind::R { code, timeout_ms } => {
+                    if self.r_fingerprint().is_none() {
+                        let why = self.r_environment().and_then(|e| e.problem).unwrap_or_else(|| "no R installation is chosen".into());
+                        return Err(Error::R(format!("R is not usable: {why}")));
+                    }
+                    let raw = self.artifacts.temp_path(key);
+                    let named: Vec<(String, PathBuf)> =
+                        step.inputs.iter().cloned().zip(inputs.iter().map(|d| d.path.clone())).collect();
+                    let params = crate::rlang::params_r(&self.analysis.parameters);
+                    let run = {
+                        let mut r = self.r.borrow_mut();
+                        let runner = r.as_mut().expect("checked above");
+                        runner.run(code, &named, &params, &raw, Duration::from_millis(*timeout_ms), &self.cancel)
+                    };
+                    self.step_output = Some(run.output);
+                    let adopted = run.result.and_then(|_| self.engine.adopt_parquet(&raw, &tmp));
                     let _ = fs::remove_file(&raw);
                     Ok(Output::Table(self.artifacts.commit_table(key, adopted?)?))
                 }

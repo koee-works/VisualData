@@ -88,6 +88,14 @@ fn the_notebook_reproduces_every_step() {
                 },
             ),
             step(
+                "rs",
+                &["big", "regions"],
+                StepKind::R {
+                    code: "result <- merge(df, dfs$regions, by = \"region\", all.x = TRUE)\nresult$share <- result$n / sum(result$n)\nresult$limit <- params$min_units".into(),
+                    timeout_ms: 60_000,
+                },
+            ),
+            step(
                 "quality",
                 &["joined"],
                 StepKind::Check { stop: false, rules: vec![Rule::Expect { formula: "units >= @min_units".into() }, Rule::Unique { columns: vec!["order_id".into()] }] },
@@ -109,6 +117,7 @@ fn the_notebook_reproduces_every_step() {
     };
     let mut s = Session::new(a, &dir, Box::new(DuckDbEngine::new().unwrap()), Some(PythonRunner::new(vda_core::python::default_interpreter(), dir.join(".work")))).unwrap();
     s.approve_step("py").unwrap();
+    s.approve_step("rs").unwrap();
     let run = s.run_all().unwrap();
     assert!(run.succeeded(), "{run:#?}");
 
@@ -138,7 +147,7 @@ fn the_notebook_reproduces_every_step() {
         .map(|c| text(c) + "\n\n")
         .collect::<String>()
         .replace("from IPython.display import display\n", "display = lambda *a, **k: None\n");
-    let tables = ["kept", "calc", "joined", "running", "latest", "wide", "long", "big", "py", "quality", "by_product", "related", "moves"];
+    let tables = ["kept", "calc", "joined", "running", "latest", "wide", "long", "big", "py", "rs", "quality", "by_product", "related", "moves"];
     for t in tables {
         script.push_str(&format!("con.sql(f'COPY (SELECT * FROM \"{t}\") TO {{lit({:?})}} (FORMAT parquet)')\n", out.join(format!("{t}.parquet")).to_string_lossy()));
     }
