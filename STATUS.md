@@ -16,7 +16,7 @@ From the "Shared team acceptance" section of the v0.2.0 briefs. Tests: `crates/v
 | 6 | Change an upstream step; downstream stale until rerun | Done | `step6_…`, `undoing_an_edit_reuses_the_earlier_saved_results` |
 | 7 | Controlled failure: diagnose, cancel or correct, recover | Done | `step7_…` (2 tests), `unreadable_saved_result_is_recomputed` |
 
-All 187 Rust tests pass (`cargo test --workspace`; R tests skip when `Rscript` is missing), plus 122 frontend unit tests and the desktop end-to-end scenario (below). The demo writes a complete project folder: `cargo run -p vda-core --example slice -- <dir>`.
+All 189 Rust tests pass (`cargo test --workspace`; R tests skip when `Rscript` is missing), plus 122 frontend unit tests and the desktop end-to-end scenario (below). The demo writes a complete project folder: `cargo run -p vda-core --example slice -- <dir>`.
 
 ## What exists
 
@@ -121,6 +121,18 @@ Before this change, results were in-memory tables. The regional-revenue sample w
 | Start-up | The code editor loads with the first editor shown, Vim keys only when chosen: the start-up script went from 993 KB to 381 KB (117 KB compressed). | build output |
 
 Fixed while doing this: a filter on a parameter was described without the parameter ("revenue above ").
+
+## Packaging (2026-11-04)
+
+`npm run bundle` in `apps/desktop` makes installers that include `vda-run`; `docs/packaging.md` has the details and what's still to decide (name, signing, updates).
+
+| Area | What | Checked by |
+|---|---|---|
+| Installers | Linux `.deb` and `.rpm` (53 MB each) and AppImage (122 MB) built here; macOS universal `.dmg` and Windows `.msi`/setup `.exe` from the release workflow, not yet run. | `release.yml` checks each carries `vda-run` |
+| `vda-run` bundled | Built in release and added as a Tauri `externalBin` by `scripts/sidecar.mjs`; lands beside the app (`/usr/bin`, `VDA.app/Contents/MacOS`, the Windows install folder). | e2e on the installed `.deb` (all 33 steps) |
+| Schedules from temporary places | From an AppImage, or a Mac app run from its disk image or moved aside by macOS, `vda-run` is copied to the user's data folder and the schedule points there; an updated app refreshes the copy. | `schedules_do_not_point_into_a_temporary_mount`, `the_kept_copy_follows_the_app`; e2e on the AppImage (step 33 runs the program the schedule entry names) |
+| Icons and metadata | One 1024 px source (`icons/icon.svg`) for every size, `.icns` and `.ico`; description and category in the app menu. | |
+| Release workflow | Ubuntu 22.04 (older glibc), macOS universal, Windows; a `v*` tag makes a draft release; signing secrets passed when set. | not yet run on GitHub |
 
 ## Code editing, R, the console and round trips (ADR-0011)
 

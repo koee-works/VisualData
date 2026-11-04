@@ -1,0 +1,130 @@
+# Installers for Linux, macOS and Windows (docs/packaging.md).
+# A tag like v0.2.0 makes a draft release with every installer attached;
+# running the workflow by hand only uploads them as build artifacts.
+# Nothing is signed until the signing secrets below are set.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: "true"
+  SCCACHE_BASEDIRS: ${{ github.workspace }}
+
+jobs:
+  bundle:
+    name: installers (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The oldest supported Ubuntu, so the .deb and AppImage run on
+          # older distributions too (glibc is not newer than theirs).
+          - { name: Linux, os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, rust_targets: "", out: target/release/bundle }
+          # One app for Intel and Apple silicon Macs.
+          - { name: macOS, os: macos-latest, target: universal-apple-darwin, rust_targets: "aarch64-apple-darwin,x86_64-apple-darwin", out: target/universal-apple-darwin/release/bundle }
+          - { name: Windows, os: windows-latest, target: x86_64-pc-windows-msvc, rust_targets: "", out: target/release/bundle }
+    # Windows has not been verified yet (see the CI test job).
+    continue-on-error: ${{ matrix.name == 'Windows' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install WebKitGTK
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_targets }}
+      - uses: mozilla-actions/sccache-action@v0.0.11
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Build the installers
+        working-directory: apps/desktop
+        env:
+          # macOS signing and notarization, used when set (docs/packaging.md).
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        shell: bash
+        run: |
+          npm ci
+          if [ "${{ matrix.target }}" = "universal-apple-darwin" ]; then
+            npm run bundle -- --target universal-apple-darwin
+          else
+            npm run bundle
+          fi
+
+      # Every installer must carry vda-run, or schedules made from it fail.
+      - name: Check vda-run is in the installers
+        shell: bash
+        run: |
+          set -e
+          out="${{ matrix.out }}"
+          ls -R "$out" | head -50
+          case "${{ runner.os }}" in
+            Linux)
+              dpkg-deb -c "$out"/deb/*.deb | grep -q 'usr/bin/vda-run$'
+              rpm -qlp "$out"/rpm/*.rpm 2>/dev/null | grep -q '/usr/bin/vda-run$' || echo "rpm not checked (no rpm tool)"
+              chmod +x "$out"/appimage/*.AppImage
+              (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/$out"/appimage/*.AppImage --appimage-extract >/dev/null)
+              test -x "$RUNNER_TEMP/squashfs-root/usr/bin/vda-run"
+              ;;
+            macOS)
+              test -x "$out/macos/VDA.app/Contents/MacOS/vda-run"
+              lipo -archs "$out/macos/VDA.app/Contents/MacOS/vda-run" | grep -q arm64
+              ;;
+            Windows)
+              test -f apps/desktop/src-tauri/binaries/vda-run-x86_64-pc-windows-msvc.exe
+              test -f target/release/vda-run.exe
+              ;;
+          esac
+          echo "vda-run is bundled"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.name }}
+          path: |
+            ${{ matrix.out }}/deb/*.deb
+            ${{ matrix.out }}/rpm/*.rpm
+            ${{ matrix.out }}/appimage/*.AppImage
+            ${{ matrix.out }}/dmg/*.dmg
+            ${{ matrix.out }}/msi/*.msi
+            ${{ matrix.out }}/nsis/*.exe
+          if-no-files-found: error
+
+  release:
+    name: draft release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: bundle
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: installers
+          merge-multiple: true
+      - name: Make a draft release with the installers
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # Artifacts keep their folders (deb/, dmg/, ...); attach the files.
+        run: find installers -type f -print0 | xargs -0 gh release create "${{ github.ref_name }}" --repo "${{ github.repository }}" --draft --title "VDA ${{ github.ref_name }}" --notes "Unsigned unless stated. See docs/packaging.md for how to install."

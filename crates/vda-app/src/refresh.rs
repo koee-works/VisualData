@@ -156,10 +156,65 @@ fn shell_quote(s: &str) -> String {
     }
 }
 
-/// `vda-run` beside the running app, or on the PATH.
+const RUNNER: &str = if cfg!(windows) { "vda-run.exe" } else { "vda-run" };
+
+/// `vda-run` for a schedule: beside the running app when the app is
+/// installed, else a copy kept in the user's data folder (see
+/// [`runs_from_a_temporary_place`]), else whatever `vda-run` is on the PATH.
 pub fn runner_path() -> PathBuf {
-    let name = if cfg!(windows) { "vda-run.exe" } else { "vda-run" };
-    std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join(name))).filter(|p| p.is_file()).unwrap_or_else(|| PathBuf::from(name))
+    let exe = std::env::current_exe().ok();
+    let beside = exe.as_ref().and_then(|e| e.parent()).map(|d| d.join(RUNNER)).filter(|p| p.is_file());
+    let Some(beside) = beside else { return PathBuf::from(RUNNER) };
+    let temporary = exe.as_deref().is_some_and(|e| runs_from_a_temporary_place(e, std::env::var_os("APPIMAGE").is_some()));
+    if !temporary {
+        return beside;
+    }
+    keep_runner(&beside, &kept_runner_path()).unwrap_or(beside)
+}
+
+/// Where a copy of `vda-run` is kept for schedules: beside approvals.json.
+pub fn kept_runner_path() -> PathBuf {
+    let approvals = vda_core::review::default_approvals_path();
+    approvals.parent().map(Path::to_path_buf).unwrap_or_else(std::env::temp_dir).join("bin").join(RUNNER)
+}
+
+/// Whether the app runs from somewhere that goes away or moves: an
+/// AppImage (mounted afresh each time it starts), a Mac app run from its
+/// disk image, or one macOS has moved aside until it is put in Applications.
+pub fn runs_from_a_temporary_place(exe: &Path, appimage: bool) -> bool {
+    let p = exe.to_string_lossy();
+    appimage || p.contains("/AppTranslocation/") || p.starts_with("/Volumes/")
+}
+
+/// Copy `from` to `to` unless it is already the same file; the copy is
+/// written beside `to` first and renamed, so a scheduled run that starts
+/// meanwhile never reads half a file.
+pub fn keep_runner(from: &Path, to: &Path) -> std::io::Result<PathBuf> {
+    let new = std::fs::read(from)?;
+    if std::fs::read(to).ok().as_deref() == Some(&new[..]) {
+        return Ok(to.to_path_buf());
+    }
+    if let Some(dir) = to.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let part = to.with_extension("part");
+    std::fs::write(&part, &new)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&part, std::fs::Permissions::from_mode(0o755))?;
+    }
+    std::fs::rename(&part, to)?;
+    Ok(to.to_path_buf())
+}
+
+/// After an update, bring the kept copy up to date with the app (only when
+/// one was made: schedules made earlier point at it).
+pub fn refresh_kept_runner() {
+    let kept = kept_runner_path();
+    if kept.is_file() {
+        let _ = runner_path();
+    }
 }
 
 /// The scheduler entry that refreshes `project` every hour, day, weekday
@@ -226,5 +281,42 @@ impl App {
         let Some(every) = Every::parse(every) else { return fail("choose hourly, daily, weekdays or weekly") };
         let project = self.session()?.project_dir().canonicalize()?;
         schedule(&project, every, hour, minute, exports)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn schedules_do_not_point_into_a_temporary_mount() {
+        assert!(runs_from_a_temporary_place(Path::new("/tmp/.mount_VDAx1/usr/bin/vda-desktop"), true));
+        assert!(runs_from_a_temporary_place(Path::new("/private/var/folders/x/AppTranslocation/ABC/d/VDA.app/Contents/MacOS/vda-desktop"), false));
+        assert!(runs_from_a_temporary_place(Path::new("/Volumes/VDA/VDA.app/Contents/MacOS/vda-desktop"), false));
+        assert!(!runs_from_a_temporary_place(Path::new("/usr/bin/vda-desktop"), false));
+        assert!(!runs_from_a_temporary_place(Path::new("/Applications/VDA.app/Contents/MacOS/vda-desktop"), false));
+    }
+
+    #[test]
+    fn the_kept_copy_follows_the_app() {
+        let dir = std::env::temp_dir().join(format!("vda-keep-runner-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let from = dir.join("mount").join("vda-run");
+        std::fs::create_dir_all(from.parent().unwrap()).unwrap();
+        std::fs::write(&from, b"v1").unwrap();
+        let kept = dir.join("data").join("bin").join("vda-run");
+        assert_eq!(keep_runner(&from, &kept).unwrap(), kept);
+        assert_eq!(std::fs::read(&kept).unwrap(), b"v1");
+        // An updated app replaces the copy, and leaves no partial file.
+        std::fs::write(&from, b"v2").unwrap();
+        keep_runner(&from, &kept).unwrap();
+        assert_eq!(std::fs::read(&kept).unwrap(), b"v2");
+        assert!(!kept.with_extension("part").exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&kept).unwrap().permissions().mode() & 0o111, 0o111);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

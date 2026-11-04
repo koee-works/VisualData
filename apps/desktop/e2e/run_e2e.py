@@ -18,6 +18,7 @@ Needs a display (Xvfb in CI) and tauri-driver on PATH.
 import base64
 import http.client
 import json
+import shlex
 import os
 import subprocess
 import sys
@@ -134,6 +135,26 @@ class Session:
         up = [{"type": "keyUp", "value": k} for k in reversed(keys)]
         call("POST", f"/session/{self.id}/actions", {"actions": [{"type": "key", "id": "kb", "actions": down + up}]})
 
+    def settled_count(self, xpath, quiet=1.0, timeout=15):
+        """How many match, once the number has stayed the same for `quiet` seconds."""
+        end = time.time() + timeout
+        last, since = self.count(xpath), time.time()
+        while time.time() < end:
+            time.sleep(0.2)
+            n = self.count(xpath)
+            if n != last:
+                last, since = n, time.time()
+            elif time.time() - since >= quiet:
+                return n
+        return last
+
+    def wait_count(self, xpath, n, timeout=10):
+        end = time.time() + timeout
+        while self.count(xpath) != n:
+            if time.time() > end:
+                raise AssertionError(f"{xpath!r}: {self.count(xpath)} matches, expected {n}")
+            time.sleep(0.2)
+
     def count(self, xpath):
         return len(call("POST", f"/session/{self.id}/elements", {"using": "xpath", "value": xpath}))
 
@@ -163,6 +184,7 @@ def node(title):
     return f"//nav[@aria-label='Pipeline']//button[.//span[contains(@class,'node-title') and starts-with(normalize-space(.), {json.dumps(title)})]]"
 
 
+SCHEDULED = {}
 STATUS = "//footer[@aria-label='Status bar']//p[@role='status']"
 
 
@@ -379,10 +401,11 @@ def joins(s, shots):
     problems = "//section[@aria-label='Activity']//ul[@aria-label='Problems']"
     s.wait_text(problems, "steps are not read by another step or shown in the notebook")
     s.screenshot(f"{shots}/13-console.png")
-    before = s.count(problems + "/li")
+    # The list refreshes after each run; count it once it has settled.
+    before = s.settled_count(problems + "/li")
     s.click(f"({problems}/li[contains(., 'not read by another step')]//button[@aria-label='Dismiss'])[1]")
     s.wait_text("//section[@aria-label='Activity']", "dismissed")
-    assert s.count(problems + "/li") == before - 1
+    s.wait_count(problems + "/li", before - 1)
     s.click("//section[@aria-label='Activity']//button[normalize-space()='Run log']")
     s.wait_text("//section[@aria-label='Activity']//ul[@aria-label='Runs']", "Succeeded")
 
@@ -565,6 +588,8 @@ def slice4(s, shots, project):
     s.wait_text("//pre[@aria-label='Schedule entry']", "vda-run")
     entry = s.text("//pre[@aria-label='Schedule entry']")
     assert entry.startswith("0 7 * * 1-5 ") and "scheduled.log" in entry, entry
+    # Step 33 runs the program this entry names, as cron would.
+    SCHEDULED["runner"] = shlex.split(entry)[5]
     s.screenshot(f"{shots}/24-schedule.png")
     s.click("//button[normalize-space()='Done']")
     s.wait_gone("//*[@role='dialog']")
@@ -674,7 +699,11 @@ def slice4(s, shots, project):
 
 def refresh_without_the_app(app, project, approvals):
     step(33, "vda-run refreshes the project without the app, and the run log says so")
-    runner = os.path.join(os.path.dirname(app), "vda-run")
+    # The program the schedule entry names (step 30); it must outlive the app,
+    # so not inside an AppImage's temporary mount.
+    runner = SCHEDULED["runner"]
+    assert os.path.isfile(runner) and "/.mount_" not in runner and "appimage_extracted" not in runner, runner
+    print(f"  the schedule runs {runner}")
     out = os.path.join(project, "latest.csv")
     r = subprocess.run([runner, project, "--export", f"by_region={out}"], env=dict(os.environ, VDA_APPROVALS=approvals), capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr

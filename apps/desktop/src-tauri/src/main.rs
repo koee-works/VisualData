@@ -376,6 +376,8 @@ fn startup_project_arg() -> Option<String> {
 }
 
 fn main() {
+    // An updated AppImage brings the copy of vda-run that schedules use up to date.
+    std::thread::spawn(vda_app::refresh::refresh_kept_runner);
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(Shared {

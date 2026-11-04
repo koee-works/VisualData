@@ -108,7 +108,7 @@ Python and R steps run as you, so code you didn't write in the app doesn't run u
 
 ![Python code from a received project, shown for review before it can run](docs/screenshots/0-review.png)
 
-Open a project at startup with `vda-desktop --open <folder>`. The end-to-end test drives the real app through WebDriver: see `apps/desktop/e2e/` and the `desktop` CI job.
+Make installers with `npm run bundle` in `apps/desktop` (it includes `vda-run`; see `docs/packaging.md`). Open a project at startup with `vda-desktop --open <folder>`. The end-to-end test drives the real app through WebDriver: see `apps/desktop/e2e/` and the `desktop` CI job.
 
 ## Run the core
 
