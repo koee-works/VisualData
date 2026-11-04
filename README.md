@@ -84,6 +84,8 @@ A **Statistical test** step compares two averages (Welch's t-test), averages acr
 
 ### Sharing the notebook
 
+**Writing code.** SQL, Python and **R** steps are written in a code editor that suggests the columns, inputs and parameters the step can use, with the keys of RStudio and Jupyter: **Ctrl+Enter** runs the line or selection in the step's **console**, where the inputs stay loaded, printed output, tables and plots show at once, and an Environment pane lists what you have made; **Shift+Enter** saves and runs the step, and the app says if the step's result differs from the console's. **Open in Jupyter** or **Open in RStudio** opens a step as a notebook or an `.R` file with its inputs loaded; saving it there updates the step. R steps use the R and packages you use in RStudio (**R installation** in the ⋯ menu; `VDA_R` overrides). See [ADR-0011](docs/adr/0011-code-editing-r-console-round-trip.md).
+
 **Export** on the notebook saves a **report**, one web page with the text, tables, check results and charts that opens anywhere and prints as it is, or a **Jupyter notebook** that reruns the analysis with DuckDB and pandas outside the app. With `VDA_SAVE_DIR` set, notebooks are saved into that folder without a dialog (for scripted use).
 
 ### Combining data
@@ -94,7 +96,7 @@ A **Statistical test** step compares two averages (Welch's t-test), averages acr
 
 ### Opening projects from other people
 
-Python steps run as you, so Python code you didn't write in the app doesn't run until you've read and approved it. Opening such a project shows the code first; until it is approved, that step and the steps after it wait, and everything else works. *Trust all until I quit* skips the check for everything you open until the app closes, without saving anything. Approvals are kept per user outside every project (`VDA_APPROVALS` overrides the location), so a project can't approve itself, and changing a single character of approved code asks again. SQL steps need no approval: they can only run one read-only query and only read files inside the project folder. See [ADR-0004](docs/adr/0004-code-review-and-sandbox.md).
+Python and R steps run as you, so code you didn't write in the app doesn't run until you've read and approved it. Opening such a project shows the code first; until it is approved, that step and the steps after it wait, and everything else works. *Trust all until I quit* skips the check for everything you open until the app closes, without saving anything. Approvals are kept per user outside every project (`VDA_APPROVALS` overrides the location), so a project can't approve itself, and changing a single character of approved code asks again. SQL steps need no approval: they can only run one read-only query and only read files inside the project folder. See [ADR-0004](docs/adr/0004-code-review-and-sandbox.md).
 
 ![Python code from a received project, shown for review before it can run](docs/screenshots/0-review.png)
 
@@ -102,7 +104,7 @@ Open a project at startup with `vda-desktop --open <folder>`. The end-to-end tes
 
 ## Run the core
 
-Requirements: stable Rust (built with 1.97), a C++ compiler, and Python 3 with pandas and pyarrow. The tests use `python3`, or whatever `VDA_PYTHON` names; with scipy and duckdb installed they also check the statistical tests against SciPy and run the exported Jupyter notebook.
+Requirements: stable Rust (built with 1.97), a C++ compiler, and Python 3 with pandas and pyarrow; R (`Rscript`) for R steps, with dplyr and ggplot2 for their tests. The tests use `python3`, or whatever `VDA_PYTHON` names (and `Rscript` or `VDA_R`; R tests skip without it); with scipy and duckdb installed they also check the statistical tests against SciPy and run the exported Jupyter notebook.
 
 ```sh
 cargo test

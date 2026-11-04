@@ -1,6 +1,6 @@
 # First engineering slice — status
 
-Updated: 2026-11-03. Decisions: [ADR-0001](docs/adr/0001-deployment-model.md) (local-first desktop; Tauri 2 + Rust core + embedded DuckDB + Python child process), [ADR-0002](docs/adr/0002-build-cache.md) (build cache), [ADR-0003](docs/adr/0003-frontend.md) (desktop frontend), [ADR-0004](docs/adr/0004-code-review-and-sandbox.md) (code review and SQL sandbox), [ADR-0005](docs/adr/0005-multi-input-steps.md) (several sources and multi-input steps), [ADR-0006](docs/adr/0006-formulas-and-core-transforms.md) (formulas and core transforms), [ADR-0007](docs/adr/0007-linter-and-console.md) (linter and console), [ADR-0008](docs/adr/0008-reshaping-and-window-calculations.md) (reshaping and window calculations), [ADR-0009](docs/adr/0009-charts-profiles-checks-parameters-export.md) (charts, column details, checks, parameters and notebook export), [ADR-0010](docs/adr/0010-history-collaboration-environment-refresh.md) (undo and history, comments, statistical tests, the Python environment, database sources, scheduled refresh).
+Updated: 2026-11-03. Decisions: [ADR-0001](docs/adr/0001-deployment-model.md) (local-first desktop; Tauri 2 + Rust core + embedded DuckDB + Python child process), [ADR-0002](docs/adr/0002-build-cache.md) (build cache), [ADR-0003](docs/adr/0003-frontend.md) (desktop frontend), [ADR-0004](docs/adr/0004-code-review-and-sandbox.md) (code review and SQL sandbox), [ADR-0005](docs/adr/0005-multi-input-steps.md) (several sources and multi-input steps), [ADR-0006](docs/adr/0006-formulas-and-core-transforms.md) (formulas and core transforms), [ADR-0007](docs/adr/0007-linter-and-console.md) (linter and console), [ADR-0008](docs/adr/0008-reshaping-and-window-calculations.md) (reshaping and window calculations), [ADR-0009](docs/adr/0009-charts-profiles-checks-parameters-export.md) (charts, column details, checks, parameters and notebook export), [ADR-0010](docs/adr/0010-history-collaboration-environment-refresh.md) (undo and history, comments, statistical tests, the Python environment, database sources, scheduled refresh), [ADR-0011](docs/adr/0011-code-editing-r-console-round-trip.md) (code editor, R steps, the console beside code steps, round trips with Jupyter and RStudio).
 
 ## Acceptance scenario coverage
 
@@ -16,7 +16,7 @@ From the "Shared team acceptance" section of the v0.2.0 briefs. Tests: `crates/v
 | 6 | Change an upstream step; downstream stale until rerun | Done | `step6_…`, `undoing_an_edit_reuses_the_earlier_saved_results` |
 | 7 | Controlled failure: diagnose, cancel or correct, recover | Done | `step7_…` (2 tests), `unreadable_saved_result_is_recomputed` |
 
-All 162 Rust tests pass (`cargo test -p vda-core -p vda-app`), plus 55 frontend unit tests and the desktop end-to-end scenario (below). The demo writes a complete project folder: `cargo run -p vda-core --example slice -- <dir>`.
+All 182 Rust tests pass (`cargo test --workspace`; R tests skip when `Rscript` is missing), plus 68 frontend unit tests and the desktop end-to-end scenario (below). The demo writes a complete project folder: `cargo run -p vda-core --example slice -- <dir>`.
 
 ## What exists
 
@@ -103,6 +103,18 @@ Before this change, results were in-memory tables. The regional-revenue sample w
 - **Reopening a large project rehashed the source** (1.9 s at 10M rows). The source fingerprint is now saved with the results (355 ms).
 - **Out-of-memory Python steps hung until their timeout.** After a `MemoryError`, Python's shutdown deadlocked in pyarrow's thread pool, so the step sat for the full timeout (30 s by default) instead of failing at once. Found through an intermittent test failure; reproduced by catching the hung process. The wrapper now flushes its error and exits immediately, and the memory test asserts the failure arrives within 10 s. Twenty consecutive stress runs had no hang.
 - **A test changed a process-wide environment variable** while other tests started child processes in parallel (a data race; `set_var` is `unsafe` in newer Rust editions for this reason). The test now inspects the child's whole environment instead.
+
+## Code editing, R, the console and round trips (ADR-0011)
+
+| Part | Behaviour | Tests |
+|---|---|---|
+| Code editor | CodeMirror for SQL, Python, R, formulas, rules and queries; completion from the step's inputs, columns and parameters; RStudio and Jupyter keys; optional Vim keys. | `src/lib/editor/complete.test.ts`; `formula.rs` (`the_editor_offers_exactly_these_functions`); e2e steps 9, 17–20, 25, 31 |
+| Errors on their line | Run errors are underlined at their line and column (Python traceback, DuckDB caret, R expression). | `tests/lint.rs` (`a_run_error_points_at_its_line_and_name`), `lint.rs` (`place_tests`) |
+| R steps | `Rscript --vanilla` with the user's libraries; CSV with exact types; errors and warnings with lines; review, caching, renames, Jupyter export; R installation dialog. | `tests/r_runner.rs` (types round trip, dplyr, parameters, errors, timeout, cancel), `tests/jupyter.rs`, `crates/vda-app/tests/r_steps.rs`; e2e step 31 |
+| Console | Python or R beside the step, inputs loaded; output, last value as a table, errors with lines, plots, Environment pane; interrupt keeps state; the step's result is compared with the console's. | `tests/console.rs` (both languages, plots, interrupt, speed), `a_console_beside_a_step_…`; e2e step 31 |
+| Jupyter and RStudio | A step opens as a notebook or `.R` file with its inputs loaded; saving there updates the step without review; app edits are written back. | `code_steps_round_trip_through_a_notebook_and_an_r_file`, `external.rs` (unit); e2e step 31 |
+
+Fixed while testing: "save and run" in the editor only saved; R's reader rejected quoted numbers; package banners showed as step output.
 
 ## History, comments, tests, environment, databases and refresh (ADR-0010)
 
