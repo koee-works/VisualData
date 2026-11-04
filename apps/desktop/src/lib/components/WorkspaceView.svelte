@@ -13,10 +13,13 @@
   import RDialog from "./RDialog.svelte";
   import ScheduleDialog from "./ScheduleDialog.svelte";
   import Console from "./Console.svelte";
+  import StatusBar from "./StatusBar.svelte";
+  import CodeConsole from "./CodeConsole.svelte";
+  import { editorParameters } from "../editor/complete";
 
   let { ws }: { ws: Workspace } = $props();
 
-  import { paneKind, resultHeight, defaultSplit, savedSplit, saveSplit, savedSidebar, saveSidebar, clamp, SPLIT_MIN, SPLIT_MAX, SIDEBAR_MIN, SIDEBAR_MAX } from "../layout";
+  import { paneKind, resultHeight, defaultSplit, savedSplit, saveSplit, savedSidebar, saveSidebar, savedDock, saveDock, clamp, SPLIT_MIN, SPLIT_MAX, SIDEBAR_MIN, SIDEBAR_MAX } from "../layout";
 
   // The editor's share of the centre column, per kind of step: what the user
   // last dragged to, else room for a small result, else a default.
@@ -33,13 +36,32 @@
   }
 
   let sidebar = $state(savedSidebar() ?? 272);
+  // Docks, as in Zed: the console on the right, Activity at the bottom.
+  let right = $state(savedDock("right") ?? 460);
+  let bottom = $state(savedDock("bottom") ?? 224);
+  let codeStep = $derived(ws.centerTab === "step" && (ws.selectedStep?.op.type === "python" || ws.selectedStep?.op.type === "r"));
+  let showConsole = $derived(codeStep && ws.panes.console);
+  let consoleLang = $derived(ws.selectedStep?.op.type === "r" ? ("r" as const) : ("python" as const));
+  let consoleContext = $derived({
+    inputs: (ws.selectedStep?.inputs ?? []).map((id) => ({ id, name: ws.nameOf(id), columns: ws.columnsOf(id) })),
+    parameters: editorParameters(ws.view?.parameters ?? []),
+  });
+  let consoleRef: CodeConsole | undefined = $state();
+  $effect(() => {
+    ws.codeConsole = consoleRef ?? null;
+  });
+  let columns = $derived(
+    [ws.panes.pipeline ? `${sidebar}px 6px` : "", "minmax(0,1fr)", showConsole ? `6px ${right}px` : ""].filter(Boolean).join(" "),
+  );
 
   // Opening History from the menu (or anything that opens the Activity
   // panel) shows the panel even if it was hidden.
   $effect(() => {
     if (ws.consoleOpen && !ws.panes.activity) ws.togglePane("activity");
+    else if (!ws.consoleOpen && ws.panes.activity) ws.togglePane("activity");
   });
-  let dragging = $state<"split" | "sidebar" | null>(null);
+  let dragging = $state<"split" | "sidebar" | "right" | "bottom" | null>(null);
+  let main: HTMLElement | undefined = $state();
   let centre: HTMLElement | undefined = $state();
 
   function drag(e: PointerEvent) {
@@ -48,11 +70,24 @@
       setSplit((e.clientY - r.top) / r.height);
     } else if (dragging === "sidebar") {
       sidebar = clamp(e.clientX, SIDEBAR_MIN, SIDEBAR_MAX);
+    } else if (dragging === "right" && main) {
+      right = clamp(main.getBoundingClientRect().right - e.clientX, 300, 900);
+    } else if (dragging === "bottom" && main) {
+      bottom = clamp(main.getBoundingClientRect().bottom - e.clientY, 120, 600);
     }
   }
   function stop() {
     if (dragging === "sidebar") saveSidebar(sidebar);
+    if (dragging === "right") saveDock("right", right);
+    if (dragging === "bottom") saveDock("bottom", bottom);
     dragging = null;
+  }
+  function dockKeys(which: "right" | "bottom", e: KeyboardEvent) {
+    const step = which === "right" ? (e.key === "ArrowLeft" ? 24 : e.key === "ArrowRight" ? -24 : 0) : e.key === "ArrowUp" ? 24 : e.key === "ArrowDown" ? -24 : 0;
+    if (!step) return;
+    e.preventDefault();
+    if (which === "right") saveDock("right", (right = clamp(right + step, 300, 900)));
+    else saveDock("bottom", (bottom = clamp(bottom + step, 120, 600)));
   }
   // Keyboard: arrows move the divider; Home puts it back to fit the result.
   function splitKeys(e: KeyboardEvent) {
@@ -79,9 +114,9 @@
 <RDialog {ws} />
 <ScheduleDialog {ws} />
 
-<div class="grid h-full grid-rows-[auto_1fr]">
+<div class="grid h-full grid-rows-[auto_1fr_auto]">
   <TopBar {ws} />
-  <div class="grid min-h-0" class:select-none={dragging !== null} style:grid-template-columns={ws.panes.pipeline ? `${sidebar}px 6px minmax(0,1fr)` : "minmax(0,1fr)"}>
+  <div bind:this={main} class="grid min-h-0" class:select-none={dragging !== null} style:grid-template-columns={columns}>
     {#if ws.panes.pipeline}
       <aside class="min-h-0 bg-panel">
         <Pipeline {ws} />
@@ -148,7 +183,33 @@
       <Tabs.Content value="notebook" class="min-h-0 flex-1 overflow-y-auto">
         <Notebook {ws} />
       </Tabs.Content>
-      {#if ws.panes.activity || ws.consoleOpen}<Console {ws} />{/if}
+      {#if ws.panes.activity}
+        <button
+          class="divider divider-h shrink-0"
+          style:height="6px"
+          class:active={dragging === "bottom"}
+          aria-label="Resize the Activity panel (arrow keys)"
+          onpointerdown={() => (dragging = "bottom")}
+          onkeydown={(e) => dockKeys("bottom", e)}
+        ></button>
+        <div class="flex min-h-0 shrink-0 flex-col" style:height="{bottom}px"><Console {ws} /></div>
+      {/if}
     </Tabs.Root>
+
+    {#if showConsole && ws.selectedStep}
+      <button
+        class="divider divider-v"
+        class:active={dragging === "right"}
+        aria-label="Resize the console (arrow keys)"
+        onpointerdown={() => (dragging = "right")}
+        onkeydown={(e) => dockKeys("right", e)}
+      ></button>
+      <aside class="min-h-0 min-w-0 border-l border-rule bg-panel" aria-label="Right dock">
+        {#key ws.selectedStep.id}
+          <CodeConsole bind:this={consoleRef} {ws} stepId={ws.selectedStep.id} language={consoleLang} context={consoleContext} ongoto={(n) => ws.focusCodeLine?.(n)} docked />
+        {/key}
+      </aside>
+    {/if}
   </div>
+  <StatusBar {ws} />
 </div>

@@ -32,14 +32,14 @@ import type { Keys, RunRequest } from "./prefs";
 export type { Keys, RunRequest } from "./prefs";
 
 const highlight = HighlightStyle.define([
-  { tag: [t.keyword, t.controlKeyword, t.operatorKeyword, t.definitionKeyword, t.moduleKeyword], color: "#4652c8", fontWeight: "600" },
-  { tag: [t.string, t.special(t.string)], color: "#1b6f62" },
-  { tag: [t.number, t.bool, t.null, t.atom], color: "#8a560c" },
-  { tag: [t.comment, t.lineComment, t.blockComment], color: "#5c687c", fontStyle: "italic" },
-  { tag: [t.function(t.variableName), t.function(t.propertyName)], color: "#1d2a3f", fontWeight: "600" },
-  { tag: [t.definition(t.variableName), t.className], color: "#7b3b8f" },
-  { tag: [t.operator, t.punctuation, t.bracket], color: "#4a5872" },
-  { tag: t.invalid, color: "#a8322d" },
+  { tag: [t.keyword, t.controlKeyword, t.operatorKeyword, t.definitionKeyword, t.moduleKeyword], color: "var(--color-running)", fontWeight: "600" },
+  { tag: [t.string, t.special(t.string)], color: "var(--color-fresh)" },
+  { tag: [t.number, t.bool, t.null, t.atom], color: "var(--color-stale)" },
+  { tag: [t.comment, t.lineComment, t.blockComment], color: "var(--color-ink-faint)", fontStyle: "italic" },
+  { tag: [t.function(t.variableName), t.function(t.propertyName)], color: "var(--color-ink)", fontWeight: "600" },
+  { tag: [t.definition(t.variableName), t.className], color: "var(--color-review)" },
+  { tag: [t.operator, t.punctuation, t.bracket], color: "var(--color-ink-soft)" },
+  { tag: t.invalid, color: "var(--color-failed)" },
 ]);
 
 const theme = EditorView.theme({
@@ -55,11 +55,11 @@ const theme = EditorView.theme({
   ".cm-scroller": { fontFamily: "var(--font-mono)", lineHeight: "1.55", fontVariantLigatures: "none" },
   ".cm-content": { padding: "6px 0", caretColor: "var(--color-ink)" },
   ".cm-gutters": { backgroundColor: "var(--color-paper)", color: "var(--color-ink-faint)", border: "none", borderRight: "1px solid var(--color-rule)", borderRadius: "5px 0 0 5px" },
-  ".cm-activeLine": { backgroundColor: "#f6f8fa" },
+  ".cm-activeLine": { backgroundColor: "var(--color-active-line)" },
   ".cm-activeLineGutter": { backgroundColor: "var(--color-rule)", color: "var(--color-ink)" },
   "&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection": { backgroundColor: "var(--color-select) !important" },
   ".cm-matchingBracket": { backgroundColor: "var(--color-running-wash)", outline: "1px solid var(--color-running)" },
-  ".cm-selectionMatch": { backgroundColor: "#eef0fb" },
+  ".cm-selectionMatch": { backgroundColor: "var(--color-running-wash)" },
   ".cm-tooltip": { border: "1px solid var(--color-rule-strong)", borderRadius: "5px", backgroundColor: "var(--color-panel)", fontFamily: "var(--font-sans)" },
   ".cm-tooltip-autocomplete > ul > li": { fontFamily: "var(--font-mono)", padding: "2px 8px" },
   ".cm-tooltip-autocomplete > ul > li[aria-selected]": { backgroundColor: "var(--color-select)", color: "var(--color-ink)" },

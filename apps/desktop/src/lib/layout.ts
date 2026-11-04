@@ -61,6 +61,8 @@ function write(key: string, v: number | null) {
 export const savedSplit = (kind: PaneKind) => read(`vda.split.${kind}`);
 export const saveSplit = (kind: PaneKind, v: number | null) => write(`vda.split.${kind}`, v);
 export const savedSidebar = () => read("vda.sidebar");
+export const savedDock = (which: "right" | "bottom") => read(`vda.dock.${which}`);
+export const saveDock = (which: "right" | "bottom", v: number) => write(`vda.dock.${which}`, v);
 export const saveSidebar = (v: number) => write("vda.sidebar", v);
 
 export const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
@@ -79,15 +81,17 @@ export interface Panes {
 export type PaneName = keyof Panes;
 
 export const ALL_PANES: Panes = { pipeline: true, editor: true, result: true, activity: true, console: true };
+/** At first: everything but the Activity dock, which opens when wanted. */
+const FIRST: Panes = { ...ALL_PANES, activity: false };
 
 export function loadPanes(): Panes {
   try {
     const v = JSON.parse(localStorage.getItem("vda.panes") ?? "null");
-    if (v && typeof v === "object") return withOneOf({ ...ALL_PANES, ...v });
+    if (v && typeof v === "object") return withOneOf({ ...FIRST, ...v });
   } catch {
-    // Fall through to everything shown.
+    // Fall through to the first arrangement.
   }
-  return { ...ALL_PANES };
+  return { ...FIRST };
 }
 
 export function savePanes(p: Panes) {

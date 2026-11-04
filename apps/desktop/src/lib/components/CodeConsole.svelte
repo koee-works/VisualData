@@ -17,6 +17,7 @@
     language,
     context,
     ongoto,
+    docked = false,
   }: {
     ws: Workspace;
     stepId: string;
@@ -24,6 +25,8 @@
     context: EditorContext;
     /** Show a line of the step's code (from an error). */
     ongoto?: (line: number) => void;
+    /** In the right dock: full height, the Environment under the output. */
+    docked?: boolean;
   } = $props();
 
   type Entry =
@@ -147,7 +150,7 @@
   }
 </script>
 
-<section class="mt-4 rounded-md border border-rule bg-panel" aria-label="{name} console">
+<section class={docked ? "flex h-full min-h-0 flex-col bg-panel" : "mt-4 rounded-md border border-rule bg-panel"} aria-label="{name} console">
   <header class="flex items-center gap-2 border-b border-rule px-3 py-1.5">
     <h3 class="min-w-0 text-sm font-semibold">{name} console</h3>
     <span class="min-w-0 flex-1 truncate text-xs text-ink-faint" aria-live="polite">
@@ -165,9 +168,9 @@
       <button class="btn btn-quiet !min-h-7 !px-2 text-sm" disabled={!entries.length} onclick={() => (entries = [])}><Eraser size={14} /> Clear</button>
     </span>
   </header>
-  <div class="grid grid-cols-[minmax(0,1fr)_14rem] max-[56rem]:grid-cols-1">
-    <div class="flex min-w-0 flex-col">
-      <div bind:this={log} class="max-h-[26rem] min-h-24 overflow-y-auto px-3 py-2 text-sm" role="log" aria-label="{name} console output">
+  <div class={docked ? "flex min-h-0 flex-1 flex-col" : "grid grid-cols-[minmax(0,1fr)_14rem] max-[56rem]:grid-cols-1"}>
+    <div class="flex min-w-0 flex-col" class:flex-1={docked} class:min-h-0={docked}>
+      <div bind:this={log} class="{docked ? 'min-h-0 flex-1' : 'max-h-[26rem] min-h-24'} overflow-y-auto px-3 py-2 text-sm" role="log" aria-label="{name} console output">
         {#each entries as e, i (i)}
           {#if e.kind === "note"}
             <p class="my-1.5 {e.tone === 'error' ? 'text-failed' : e.tone === 'warn' ? 'text-stale' : 'text-ink-soft'}" role={e.tone === "error" ? "alert" : undefined}>
@@ -230,7 +233,7 @@
         </div>
       </div>
     </div>
-    <aside class="border-l border-rule px-3 py-2 text-sm max-[56rem]:border-t max-[56rem]:border-l-0" aria-label="Environment">
+    <aside class={docked ? "max-h-[35%] shrink-0 overflow-y-auto border-t border-rule px-3 py-2 text-sm" : "border-l border-rule px-3 py-2 text-sm max-[56rem]:border-t max-[56rem]:border-l-0"} aria-label="Environment">
       <h4 class="mb-1 text-xs font-semibold text-ink-soft">Environment</h4>
       {#each objects as o (o.name)}
         <div class="border-t border-rule py-1 first:border-t-0">

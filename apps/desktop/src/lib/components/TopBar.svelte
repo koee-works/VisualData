@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { CalendarClock, Ellipsis, PanelBottom, PanelLeft, PanelTop, Play, Redo2, ShieldAlert, ShieldOff, Square, SquareTerminal, Table2, Terminal, Undo2 } from "@lucide/svelte";
+  import { CalendarClock, Ellipsis, Play, Redo2, ShieldAlert, ShieldOff, Square, Terminal, Undo2 } from "@lucide/svelte";
   import type { PaneName } from "../layout";
   import { DropdownMenu } from "bits-ui";
   import type { Workspace } from "../workspace.svelte";
@@ -23,14 +23,6 @@
   let review = $derived(ws.pendingReview.length);
 
   let codeStep = $derived(ws.centerTab === "step" && (ws.selectedStep?.op.type === "python" || ws.selectedStep?.op.type === "r"));
-  // The panel buttons, left to right as the panels sit on screen.
-  let paneButtons = $derived([
-    { name: "pipeline" as const, icon: PanelLeft, label: "Pipeline", keys: `${key}B` },
-    { name: "editor" as const, icon: PanelTop, label: ws.selectedSource ? "Source details" : "Step editor", keys: "" },
-    { name: "console" as const, icon: SquareTerminal, label: "Code console", keys: `${key}\``, hidden: !codeStep },
-    { name: "result" as const, icon: Table2, label: "Result", keys: "" },
-    { name: "activity" as const, icon: PanelBottom, label: "Activity", keys: `${key}J` },
-  ]);
 
 
   // Undo and redo the analysis, but not while typing: text fields keep
@@ -81,16 +73,6 @@
       {ws.view?.sources.length} sources
     {/if}
   </p>
-  <p
-    class="text-sm"
-    class:text-failed={lastFailed > 0 && !ws.running}
-    class:text-running={ws.running}
-    class:text-ink-soft={!ws.running && !lastFailed}
-    role="status"
-    aria-live="polite"
-  >
-    {summary}
-  </p>
   {#if ws.view?.trust_all}
     <p class="flex items-center gap-2 rounded-md border border-review/50 bg-review-wash py-0.5 pr-0.5 pl-2.5 text-sm text-review">
       <ShieldOff size={14} aria-hidden="true" /> Python runs without review until you quit
@@ -102,23 +84,6 @@
       <ShieldAlert size={14} /> Review {review} Python step{review === 1 ? "" : "s"}
     </button>
   {/if}
-  <div class="flex items-center rounded-md border border-rule p-0.5" role="group" aria-label="Panels">
-    {#each paneButtons as b (b.name)}
-      {#if !b.hidden}
-        {@const Icon = b.icon}
-        {@const shown = ws.panes[b.name]}
-        <button
-          class="pane-toggle"
-          aria-pressed={shown}
-          aria-label={b.label}
-          title="{shown ? 'Hide' : 'Show'} {b.label.toLowerCase()}{b.keys ? ` (${b.keys})` : ''}"
-          onclick={() => ws.togglePane(b.name)}
-        >
-          <Icon size={16} />
-        </button>
-      {/if}
-    {/each}
-  </div>
   <div class="flex items-center">
     <button
       class="btn btn-quiet !px-2"
@@ -144,7 +109,7 @@
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content
-          class="z-50 min-w-64 rounded-md border border-rule-strong bg-panel p-1 shadow-[0_6px_24px_rgba(29,42,63,0.14)]"
+          class="z-50 min-w-64 rounded-md border border-rule-strong bg-panel p-1 shadow-[var(--shadow-menu)]"
           align="end"
           sideOffset={4}
         >

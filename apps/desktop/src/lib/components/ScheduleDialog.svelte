@@ -44,9 +44,9 @@
 
 <Dialog.Root bind:open={ws.scheduleOpen}>
   <Dialog.Portal>
-    <Dialog.Overlay class="fixed inset-0 z-40 bg-ink/35" />
+    <Dialog.Overlay class="fixed inset-0 z-40 bg-black/40" />
     <Dialog.Content
-      class="fixed top-1/2 left-1/2 z-50 flex max-h-[min(44rem,92vh)] w-[min(44rem,94vw)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-lg border border-rule-strong bg-panel shadow-[0_12px_40px_rgba(29,42,63,0.25)]"
+      class="fixed top-1/2 left-1/2 z-50 flex max-h-[min(44rem,92vh)] w-[min(44rem,94vw)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-lg border border-rule-strong bg-panel shadow-[var(--shadow-pop)]"
     >
       <header class="flex gap-3 border-b border-rule px-5 pt-4 pb-3">
         <CalendarClock size={20} class="mt-1 shrink-0 text-ink-soft" aria-hidden="true" />

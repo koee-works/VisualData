@@ -24,6 +24,9 @@
   --color-rule: #d5dce4;
   --color-rule-strong: #8592a3;
   --color-select: #dfe7f7;
+  --color-active-line: #f6f8fa;
+  --shadow-pop: 0 12px 40px rgba(29, 42, 63, 0.18);
+  --shadow-menu: 0 6px 24px rgba(29, 42, 63, 0.18);
 
   --color-fresh: #1b6f62;
   --color-fresh-wash: #e3f2ef;
@@ -127,10 +130,10 @@
   .btn-primary {
     background: var(--color-ink);
     border-color: var(--color-ink);
-    color: white;
+    color: var(--color-panel);
   }
   .btn-primary:hover:not(:disabled) {
-    background: #2c3d5a;
+    background: color-mix(in srgb, var(--color-ink) 85%, var(--color-panel));
   }
   /* A column that can be switched on and off (group by, keys, …). */
   .chip {
@@ -143,7 +146,7 @@
   .chip[aria-pressed="true"] {
     background: var(--color-ink);
     border-color: var(--color-ink);
-    color: white;
+    color: var(--color-panel);
   }
   .btn-quiet {
     border-color: transparent;

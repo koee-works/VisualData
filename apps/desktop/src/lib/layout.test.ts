@@ -43,7 +43,7 @@ describe("panels shown", () => {
 
   it("shows everything at first, and remembers what was hidden", async () => {
     const { loadPanes, savePanes, toggled, ALL_PANES } = await import("./layout");
-    expect(loadPanes()).toEqual(ALL_PANES);
+    expect(loadPanes()).toEqual({ ...ALL_PANES, activity: false });
     const p = toggled(ALL_PANES, "pipeline");
     expect(p.pipeline).toBe(false);
     savePanes(p);
@@ -60,6 +60,6 @@ describe("panels shown", () => {
     localStorage.setItem("vda.panes", JSON.stringify({ editor: false, result: false }));
     expect(loadPanes().result).toBe(true);
     localStorage.setItem("vda.panes", "{not json");
-    expect(loadPanes()).toEqual(ALL_PANES);
+    expect(loadPanes()).toEqual({ ...ALL_PANES, activity: false });
   });
 });

@@ -108,13 +108,13 @@
   }
 </script>
 
-<section class="flex min-h-0 flex-col border-t border-rule-strong bg-panel" aria-label="Activity" class:h-56={ws.consoleOpen}>
+<section class="flex min-h-0 flex-col border-t border-rule-strong bg-panel" aria-label="Activity" class:h-full={ws.consoleOpen}>
   <div class="flex items-center gap-1 px-2">
     {#each tabs as t (t.id)}
       <button
         class="tab-button"
         aria-pressed={ws.consoleOpen && ws.consoleTab === t.id}
-        onclick={() => (ws.consoleOpen && ws.consoleTab === t.id ? (ws.consoleOpen = false) : open(t.id))}
+        onclick={() => open(t.id)}
       >
         {t.label}
         {#if t.id === "problems" && (ws.counts.error || ws.counts.warning)}
@@ -128,10 +128,11 @@
     <span class="ml-auto truncate px-2 text-xs text-ink-faint" aria-live="polite">{summary(ws.counts)}</span>
     <button
       class="btn btn-quiet !min-h-7 !px-1.5"
-      aria-label={ws.consoleOpen ? "Close the activity panel" : "Open the activity panel"}
-      onclick={() => (ws.consoleOpen = !ws.consoleOpen)}
+      aria-label="Hide the Activity panel"
+      title="Hide (Ctrl+J)"
+      onclick={() => ws.togglePane("activity")}
     >
-      {#if ws.consoleOpen}<ChevronDown size={15} />{:else}<ChevronUp size={15} />{/if}
+      <ChevronDown size={15} />
     </button>
   </div>
 

@@ -157,7 +157,7 @@ def node(title):
     return f"//nav[@aria-label='Pipeline']//button[.//span[contains(@class,'node-title') and starts-with(normalize-space(.), {json.dumps(title)})]]"
 
 
-STATUS = "//header//p[@role='status']"
+STATUS = "//footer[@aria-label='Status bar']//p[@role='status']"
 
 
 def with_app(app, project, shots, approvals, scenario):
@@ -369,7 +369,7 @@ def joins(s, shots):
     s.wait_text(node("Closest to target"), "2 rows")
 
     step(18, "The console lists what the linter finds; a note can be dismissed, and the run log shows the runs")
-    s.click("//section[@aria-label='Activity']//button[starts-with(normalize-space(), 'Problems')]")
+    s.click("//footer[@aria-label='Status bar']//button[@aria-label='Problems']")
     problems = "//section[@aria-label='Activity']//ul[@aria-label='Problems']"
     s.wait_text(problems, "steps are not read by another step or shown in the notebook")
     s.screenshot(f"{shots}/13-console.png")
@@ -605,19 +605,25 @@ def slice4(s, shots, project):
     s.click("//button[normalize-space()='Done']")
     s.wait_gone("//*[@role='dialog']")
 
-    # Panels: hide what is not needed; the result fills the centre; all back.
-    panels = "//div[@role='group' and @aria-label='Panels']"
-    for name in ["Pipeline", "Step editor", "Activity"]:
-        s.click(f"{panels}//button[@aria-label='{name}']")
+    # Docks, as in Zed: each one's button in the status bar, on its side.
+    bar = "//footer[@aria-label='Status bar']"
+    s.find("//aside[@aria-label='Right dock']//section[@aria-label='R console']")
+    if s.count("//section[@aria-label='Activity']") == 0:
+        s.click(f"{bar}//button[@aria-label='Activity']")
+    s.find("//section[@aria-label='Activity']")
+    for name in ["Pipeline", "Step editor", "Activity", "Code console"]:
+        s.click(f"{bar}//button[@aria-label='{name}']")
     s.wait_gone("//nav[@aria-label='Pipeline']")
     s.wait_gone("//section[@aria-label='Step editor']")
+    s.wait_gone("//section[@aria-label='Activity']")
+    s.wait_gone("//aside[@aria-label='Right dock']")
     s.find("//section[@aria-label='Result']")
-    assert s.count("//section[@aria-label='Activity']") == 0
     s.screenshot(f"{shots}/27-panels.png")
-    for name in ["Pipeline", "Step editor", "Activity"]:
-        s.click(f"{panels}//button[@aria-label='{name}']")
+    for name in ["Pipeline", "Step editor", "Code console"]:
+        s.click(f"{bar}//button[@aria-label='{name}']")
     s.find("//nav[@aria-label='Pipeline']")
     s.find("//section[@aria-label='Step editor']")
+    s.find("//aside[@aria-label='Right dock']")
 
 
 def refresh_without_the_app(app, project, approvals):

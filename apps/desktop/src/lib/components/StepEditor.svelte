@@ -8,7 +8,6 @@
   import FilterEditor from "./FilterEditor.svelte";
   import AggregateEditor from "./AggregateEditor.svelte";
   import CodeEditor from "./CodeEditor.svelte";
-  import CodeConsole from "./CodeConsole.svelte";
   import type { RunRequest } from "../editor/prefs";
   import { editorParameters } from "../editor/complete";
   import ChartEditor from "./ChartEditor.svelte";
@@ -125,7 +124,11 @@
   let codeInputs = $derived(inputs.map((id) => ({ id, name: ws.nameOf(id), columns: ws.columnsOf(id) })));
 
   let codeEditor: CodeEditor | undefined = $state();
-  let console_: CodeConsole | undefined = $state();
+  // The console lives in the right dock; it registers itself on `ws`.
+  $effect(() => {
+    ws.focusCodeLine = (n) => codeEditor?.focusLine(n);
+    return () => (ws.focusCodeLine = null);
+  });
 
   // Shift+Enter (and SQL's Ctrl+Enter): save and run the step. In Python and
   // R, Ctrl+Enter runs the line or selection in the console instead.
@@ -137,13 +140,13 @@
         ws.togglePane("console");
         await tick();
       }
-      await console_?.run(r.code, r.fromLine);
+      await ws.codeConsole?.run(r.code, r.fromLine);
       return;
     }
     if (saving || invalid) return;
     if (dirty) await save();
     await ws.run();
-    await console_?.compare();
+    await ws.codeConsole?.compare();
   }
 
   function onkeydown(e: KeyboardEvent) {
@@ -257,7 +260,7 @@
     {:else if draft.type === "append"}
       <AppendEditor {ws} bind:inputs bind:distinct={draft.distinct} bind:origin={draft.origin} choices={readable} />
     {:else if draft.type === "sql" || draft.type === "python" || draft.type === "r"}
-      <div class="code-layout" class:with-console={draft.type !== "sql" && ws.panes.console}>
+      <div class="code-layout">
         <div class="min-w-0">
         {#if draft.type === "sql"}
           <CodeEditor bind:code={draft.sql} language="sql" inputs={codeInputs} parameters={ws.view?.parameters ?? []} problems={byField["sql"] ?? []} onrun={runFromEditor} />
@@ -319,18 +322,6 @@
 
         {/if}
         </div>
-        {#if (draft.type === "python" || draft.type === "r") && ws.panes.console}
-          <div class="min-w-0">
-            <CodeConsole
-              bind:this={console_}
-              {ws}
-              stepId={step.id}
-              language={draft.type}
-              context={{ inputs: codeInputs.map((i) => ({ ...i, columns: i.columns ?? null })), parameters: editorParameters(ws.view?.parameters ?? []) }}
-              ongoto={(n) => codeEditor?.focusLine(n)}
-            />
-          </div>
-        {/if}
       </div>
     {:else if draft.type === "chart"}
       <ChartEditor
@@ -351,21 +342,3 @@
     <Comments {ws} target="step:{step.id}" />
   </div>
 </section>
-
-<style>
-  /* Python and R: the code and its console side by side when there is room,
-     as in RStudio's source pane and console. */
-  @container (min-width: 68rem) {
-    .code-layout.with-console {
-      display: grid;
-      grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
-      gap: 1.25rem;
-      align-items: start;
-    }
-    .code-layout.with-console > :nth-child(2) :global(section[aria-label$="console"]) {
-      margin-top: 0;
-      position: sticky;
-      top: 0;
-    }
-  }
-</style>

@@ -180,7 +180,7 @@
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content
-          class="z-50 min-w-56 rounded-md border border-rule-strong bg-panel p-1 shadow-[0_6px_24px_rgba(29,42,63,0.14)]"
+          class="z-50 min-w-56 rounded-md border border-rule-strong bg-panel p-1 shadow-[var(--shadow-menu)]"
           align="end"
           sideOffset={4}
         >

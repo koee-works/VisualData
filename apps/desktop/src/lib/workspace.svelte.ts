@@ -44,9 +44,13 @@ export class Workspace {
   }
   /** What the linter found, refreshed after every change and run. */
   problems = $state<Problems>({ items: [], dismissed: 0 });
-  consoleOpen = $state(false);
-  /** Panels shown, chosen with the toolbar's panel buttons (remembered). */
+  /** Panels shown, chosen with the status bar's dock buttons (remembered). */
   panes = $state<Panes>(loadPanes());
+  /** The Activity dock is open (kept equal to `panes.activity`). */
+  consoleOpen = $state(this.panes.activity);
+  /** The code console in the right dock, and the editor's "show this line". */
+  codeConsole: { run(code: string, fromLine: number | null): Promise<void>; compare(): Promise<void> } | null = null;
+  focusCodeLine: ((line: number) => void) | null = null;
 
   togglePane(name: PaneName) {
     this.panes = toggled(this.panes, name);
