@@ -151,7 +151,7 @@ fn code_steps_round_trip_through_a_notebook_and_an_r_file() {
     nb["cells"][2]["source"] = json!(["big = df[df['units'] >= params['min_units']]\n", "result = big"]);
     fs::write(&x.path, serde_json::to_string_pretty(&nb).unwrap()).unwrap();
     let s = app.sync_external().unwrap();
-    assert_eq!(s.updated, [id.clone()]);
+    assert_eq!(s.updated, std::slice::from_ref(&id));
     let v = s.view.unwrap();
     assert_eq!(v.steps[0].op["code"], "big = df[df['units'] >= params['min_units']]\nresult = big");
     assert!(v.review.is_empty(), "the user's own edit needs no review");
@@ -175,7 +175,7 @@ fn code_steps_round_trip_through_a_notebook_and_an_r_file() {
         let text = fs::read_to_string(&x.path).unwrap().replace("result <- df[df$units >= params$min_units, ]", "result <- head(df, 3)");
         fs::write(&x.path, text).unwrap();
         let s = app.sync_external().unwrap();
-        assert_eq!(s.updated, [rid.clone()]);
+        assert_eq!(s.updated, std::slice::from_ref(&rid));
         assert_eq!(s.view.unwrap().steps.iter().find(|s| s.id == rid).unwrap().op["code"], "result <- head(df, 3)");
     }
 }
