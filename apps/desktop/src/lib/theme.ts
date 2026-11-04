@@ -141,6 +141,67 @@ const contrast: Theme = {
 
 export const THEMES: Theme[] = [paper, night, sepia, contrast];
 
+/** A theme the user made: a built-in theme with some colours changed. */
+export interface CustomTheme {
+  /** "custom-" and a number or name. */
+  id: string;
+  name: string;
+  base: ThemeId;
+  /** Token → "#rrggbb"; tokens not given come from the base. */
+  colors: Record<string, string>;
+  chart?: string[];
+}
+
+/** The tokens a custom theme can set, grouped and named for the editor. */
+export const TOKEN_GROUPS: { group: string; tokens: [string, string][] }[] = [
+  { group: "Surfaces", tokens: [["paper", "Background"], ["panel", "Panels"], ["select", "Selection"], ["active-line", "Current line in code"], ["rule", "Lines"], ["rule-strong", "Field and button edges"]] },
+  { group: "Text", tokens: [["ink", "Text"], ["ink-soft", "Secondary text"], ["ink-faint", "Hints and captions"]] },
+  {
+    group: "States",
+    tokens: [["fresh", "Current"], ["fresh-wash", "Current, background"], ["stale", "Outdated"], ["stale-wash", "Outdated, background"], ["failed", "Failed"], ["failed-wash", "Failed, background"], ["running", "Running and links"], ["running-wash", "Running, background"], ["review", "Needs review"], ["review-wash", "Needs review, background"]],
+  },
+];
+
+export function buildCustom(c: CustomTheme): Theme {
+  const base = themeById(c.base);
+  const colors = { ...base.colors, ...c.colors };
+  // Dark when the background is darker than the text.
+  const dark = lum(colors.paper!) < lum(colors.ink!);
+  return { ...base, id: c.base, name: c.name, hint: `Your theme, from ${base.name}`, dark, colors, chart: c.chart?.length ? c.chart : base.chart };
+}
+
+/** Every text pair that must be readable, with its minimum ratio. */
+export const READABLE: [string, string, number, string][] = [
+  ["ink", "panel", 7, "Text on panels"],
+  ["ink", "paper", 7, "Text on the background"],
+  ["ink", "select", 4.5, "Text on a selection"],
+  ["ink-soft", "panel", 4.5, "Secondary text on panels"],
+  ["ink-soft", "paper", 4.5, "Secondary text on the background"],
+  ["ink-faint", "panel", 4.5, "Hints on panels"],
+  ["ink-faint", "paper", 4.5, "Hints on the background"],
+  ["ink-faint", "select", 4.5, "Hints on a selection"],
+  ["fresh", "panel", 4.5, "Current"],
+  ["fresh", "fresh-wash", 4.5, "Current on its background"],
+  ["stale", "panel", 4.5, "Outdated"],
+  ["stale", "stale-wash", 4.5, "Outdated on its background"],
+  ["failed", "panel", 4.5, "Failed"],
+  ["failed", "failed-wash", 4.5, "Failed on its background"],
+  ["running", "panel", 4.5, "Running and links"],
+  ["running", "running-wash", 4.5, "Running on its background"],
+  ["review", "panel", 4.5, "Needs review"],
+  ["review", "review-wash", 4.5, "Needs review on its background"],
+  ["ink", "fresh-wash", 4.5, "Text on messages"],
+  ["ink", "stale-wash", 4.5, "Text on the outdated banner"],
+  ["rule-strong", "panel", 3, "Field and button edges"],
+];
+
+/** What in a set of colours is hard to read. */
+export function contrastProblems(colors: Record<string, string>): { what: string; ratio: number; min: number; tokens: [string, string] }[] {
+  return READABLE.filter(([a, b]) => colors[a] && colors[b])
+    .map(([a, b, min, what]) => ({ what, ratio: contrastRatio(colors[a]!, colors[b]!), min, tokens: [a, b] as [string, string] }))
+    .filter((p) => p.ratio < p.min);
+}
+
 export function themeById(id: ThemeId): Theme {
   return THEMES.find((t) => t.id === id) ?? paper;
 }

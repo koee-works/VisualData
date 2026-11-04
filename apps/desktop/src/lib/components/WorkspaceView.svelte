@@ -15,6 +15,8 @@
   import Console from "./Console.svelte";
   import StatusBar from "./StatusBar.svelte";
   import CodeConsole from "./CodeConsole.svelte";
+  import SettingsPage from "./SettingsPage.svelte";
+  import CommandPalette from "./CommandPalette.svelte";
   import { editorParameters } from "../editor/complete";
 
   let { ws }: { ws: Workspace } = $props();
@@ -113,6 +115,7 @@
 <PythonDialog {ws} />
 <RDialog {ws} />
 <ScheduleDialog {ws} />
+<CommandPalette {ws} />
 
 <div class="grid h-full grid-rows-[auto_1fr_auto]">
   <TopBar {ws} />
@@ -134,6 +137,12 @@
       <Tabs.List class="flex border-b border-rule bg-panel px-3">
         <Tabs.Trigger value="step" class="tab">{ws.selectedSource ? "Source" : "Step"}</Tabs.Trigger>
         <Tabs.Trigger value="notebook" class="tab">Notebook</Tabs.Trigger>
+        {#if ws.settingsOpen}
+          <span class="flex items-center">
+            <Tabs.Trigger value="settings" class="tab !pr-1">Settings</Tabs.Trigger>
+            <button class="btn btn-quiet !min-h-6 !min-w-6 justify-center !px-1" aria-label="Close settings" onclick={() => ws.closeSettings()}><X size={13} /></button>
+          </span>
+        {/if}
       </Tabs.List>
 
       {#if ws.notice && !ws.error}
@@ -183,6 +192,11 @@
       <Tabs.Content value="notebook" class="min-h-0 flex-1 overflow-y-auto">
         <Notebook {ws} />
       </Tabs.Content>
+      {#if ws.settingsOpen}
+        <Tabs.Content value="settings" class="min-h-0 min-w-0 flex-1 bg-panel">
+          <SettingsPage {ws} />
+        </Tabs.Content>
+      {/if}
       {#if ws.panes.activity}
         <button
           class="divider divider-h shrink-0"

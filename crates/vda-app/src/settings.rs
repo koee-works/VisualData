@@ -1,5 +1,8 @@
 //! Per-user settings, kept beside the approvals file (outside every project):
-//! for now, the Python interpreter chosen in the app.
+//! the Python and R chosen in the app, and the interface's preferences
+//! (theme, custom themes, editor keys, ...), which the app reads and writes
+//! as a whole and this layer keeps without interpreting, apart from the
+//! name comments are signed with.
 
 use crate::{fail, App, AppError, Result};
 use serde::Serialize;
@@ -12,7 +15,12 @@ pub struct Settings {
     pub python: Option<PathBuf>,
     /// `Rscript` for R steps.
     pub r: Option<PathBuf>,
+    /// The interface's preferences: a JSON object.
+    pub preferences: serde_json::Value,
 }
+
+/// Most a preferences object may take on disk (custom themes are small).
+const MAX_PREFERENCES: usize = 512 * 1024;
 
 impl Settings {
     pub fn in_memory() -> Self {
@@ -23,7 +31,8 @@ impl Settings {
     pub fn load(path: PathBuf) -> Self {
         let j = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
         let get = |k: &str| j.as_ref().and_then(|j| j[k].as_str().map(PathBuf::from));
-        Settings { python: get("python"), r: get("r"), path: Some(path) }
+        let preferences = j.as_ref().map(|j| j["preferences"].clone()).filter(|p| p.is_object()).unwrap_or_else(|| serde_json::json!({}));
+        Settings { python: get("python"), r: get("r"), preferences, path: Some(path) }
     }
 
     fn save(&self) -> Result<()> {
@@ -34,6 +43,7 @@ impl Settings {
         let j = serde_json::json!({
             "python": self.python.as_ref().map(|p| p.to_string_lossy()),
             "r": self.r.as_ref().map(|p| p.to_string_lossy()),
+            "preferences": self.preferences,
         });
         let tmp = path.with_extension("json.tmp");
         std::fs::write(&tmp, serde_json::to_string_pretty(&j).unwrap())?;
@@ -202,6 +212,34 @@ impl App {
             self.start(None, &dir)?;
         }
         Ok(self.r_view(env))
+    }
+
+    /// The interface's preferences, with `author` filled in.
+    pub fn preferences(&self) -> serde_json::Value {
+        let mut p = if self.settings.preferences.is_object() { self.settings.preferences.clone() } else { serde_json::json!({}) };
+        p["author"] = serde_json::Value::String(self.author.clone());
+        p
+    }
+
+    /// Replace the interface's preferences. A non-empty `author` signs comments.
+    pub fn set_preferences(&mut self, p: &serde_json::Value) -> Result<serde_json::Value> {
+        if !p.is_object() {
+            return fail("preferences must be an object");
+        }
+        if serde_json::to_string(p).map(|t| t.len()).unwrap_or(0) > MAX_PREFERENCES {
+            return fail("preferences are too large to keep (most is 512 KB)");
+        }
+        if let Some(name) = p["author"].as_str().map(str::trim) {
+            if !name.is_empty() {
+                if name.chars().count() > 80 {
+                    return fail("a name for comments is at most 80 characters");
+                }
+                self.author = name.to_string();
+            }
+        }
+        self.settings.preferences = p.clone();
+        self.settings.save()?;
+        Ok(self.preferences())
     }
 
     pub fn set_python(&mut self, path: &Path) -> Result<PythonView> {

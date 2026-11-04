@@ -1,7 +1,6 @@
 <script lang="ts">
   import { chartConfigFor } from "../chartConfig";
-  import { themeById } from "../theme";
-  import { themeState } from "../themeState.svelte";
+  import { prefs, themeFor } from "../prefs.svelte";
 
   let { spec }: { spec: unknown } = $props();
 
@@ -13,7 +12,8 @@
     // vega-embed clones the spec; reactive proxies cannot be cloned.
     const raw = $state.snapshot(spec) as Record<string, unknown> | null;
     // Drawn again when the theme changes.
-    const config = chartConfigFor(themeById(themeState.id));
+    void prefs.themeId;
+    const config = chartConfigFor(themeFor(prefs.value.theme));
     if (!target || !raw) return;
     // Fill the panel's width at a readable height.
     const s = { ...raw, width: "container", height: 280, autosize: { type: "fit", contains: "padding" } };

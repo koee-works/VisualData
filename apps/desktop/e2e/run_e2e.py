@@ -128,6 +128,12 @@ class Session:
         """Type keys into the focused element (WebDriver key codes, e.g. Enter)."""
         call("POST", f"/session/{self.id}/actions", {"actions": [{"type": "key", "id": "kb", "actions": [a for k in keys for a in ({"type": "keyDown", "value": k}, {"type": "keyUp", "value": k})]}]})
 
+    def chord(self, *keys):
+        """Press keys together (e.g. Control, Shift and P), then let go."""
+        down = [{"type": "keyDown", "value": k} for k in keys]
+        up = [{"type": "keyUp", "value": k} for k in reversed(keys)]
+        call("POST", f"/session/{self.id}/actions", {"actions": [{"type": "key", "id": "kb", "actions": down + up}]})
+
     def count(self, xpath):
         return len(call("POST", f"/session/{self.id}/elements", {"using": "xpath", "value": xpath}))
 
@@ -625,9 +631,49 @@ def slice4(s, shots, project):
     s.find("//section[@aria-label='Step editor']")
     s.find("//aside[@aria-label='Right dock']")
 
+    step(32, "The command palette finds commands by a few letters; settings and a custom theme")
+    palette = "//*[@role='dialog' and @aria-label='Command palette']"
+    s.chord("\ue009", "\ue008", "p")  # Ctrl+Shift+P
+    s.find(palette)
+    s.set_input(f"{palette}//input[@aria-label='Command']", "hide pip")
+    s.wait_text(f"{palette}//*[@role='option' and @aria-selected='true']", "Hide pipeline")
+    s.screenshot(f"{shots}/28-palette.png")
+    s.key("\ue007")
+    s.wait_gone("//nav[@aria-label='Pipeline']")
+    s.chord("\ue009", "k")  # Ctrl+K, as in Zed
+    s.set_input(f"{palette}//input[@aria-label='Command']", "show pipeline")
+    s.key("\ue007")
+    s.find("//nav[@aria-label='Pipeline']")
+    # Settings: Ctrl+, opens General; a choice is saved at once.
+    s.chord("\ue009", ",")
+    s.find("//nav[@aria-label='Settings sections']//button[@aria-current='page' and normalize-space()='General']")
+    general = "//label[.//span[contains(., 'Run the analysis after saving a step')]]//input"
+    s.click(general)
+    s.wait_text("//nav[@aria-label='Settings sections']", "Saved.")
+    s.screenshot(f"{shots}/29-settings.png")
+    s.click(general)
+    # A theme of one's own: a colour too faint to read is flagged before saving.
+    s.click("//nav[@aria-label='Settings sections']//button[normalize-space()='Appearance']")
+    s.click("//button[normalize-space()='New theme']")
+    s.set_input("//input[@aria-label='Theme name']", "Harbour")
+    s.set_input("//input[@aria-label='Hints and captions, hex']", "#c8cdd4")
+    s.wait_text("//ul[@aria-label='Contrast problems']", "Hints on panels")
+    s.set_input("//input[@aria-label='Hints and captions, hex']", "#56606e")
+    s.set_input("//input[@aria-label='Background, hex']", "#e4ecee")
+    s.wait_text("//*[@aria-label='Theme editor']", "All text is readable")
+    s.screenshot(f"{shots}/30-theme-editor.png")
+    s.click("//button[normalize-space()='Save and use']")
+    s.wait_text("//ul[@aria-label='Your themes']", "Harbour")
+    bg = call("POST", f"/session/{s.id}/execute/sync", {"script": "return getComputedStyle(document.documentElement).getPropertyValue('--color-paper').trim()", "args": []})
+    assert bg == "#e4ecee", bg
+    s.find("//button[@role='radio' and @aria-checked='true' and contains(., 'Harbour')]")
+    s.click("//button[@role='radio' and contains(., 'Paper')]")
+    s.click("//button[@aria-label='Close settings']")
+    s.wait_gone("//nav[@aria-label='Settings sections']")
+
 
 def refresh_without_the_app(app, project, approvals):
-    step(32, "vda-run refreshes the project without the app, and the run log says so")
+    step(33, "vda-run refreshes the project without the app, and the run log says so")
     runner = os.path.join(os.path.dirname(app), "vda-run")
     out = os.path.join(project, "latest.csv")
     r = subprocess.run([runner, project, "--export", f"by_region={out}"], env=dict(os.environ, VDA_APPROVALS=approvals), capture_output=True, text=True)

@@ -279,3 +279,26 @@ fn schedules_are_written_for_the_computers_scheduler() {
     assert!(app.schedule("monthly", 0, 0, &[]).unwrap_err().message.contains("hourly, daily, weekdays or weekly"));
     assert!(app.schedule("daily", 24, 0, &[]).is_err());
 }
+
+#[test]
+fn preferences_are_kept_per_user_and_sign_comments() {
+    let settings = fresh("prefs-settings.json");
+    let mut app = App::default().with_approvals_file(fresh("prefs-approvals.json")).with_settings_file(settings.clone());
+    let p = app.preferences();
+    assert!(p["author"].is_string());
+    let theme = json!({"id": "custom-1", "name": "Mine", "base": "night", "colors": {"ink": "#ffffff"}});
+    let saved = app.set_preferences(&json!({"theme": "custom-1", "customThemes": [theme], "author": "Karl"})).unwrap();
+    assert_eq!(saved["author"], "Karl");
+    assert!(app.set_preferences(&json!(["not", "an", "object"])).is_err());
+    assert!(app.set_preferences(&json!({"author": "x".repeat(81)})).is_err());
+    let big = "y".repeat(600 * 1024);
+    assert!(app.set_preferences(&json!({ "notes": big })).unwrap_err().message.contains("too large"));
+
+    // Another start of the app reads them back, and signs comments with the name.
+    let dir = fresh("prefs-project");
+    let mut again = App::default().with_approvals_file(fresh("prefs-approvals.json")).with_settings_file(settings);
+    assert_eq!(again.preferences()["customThemes"][0]["name"], "Mine");
+    again.create_project(&dir, &samples().join("sales.csv"), "Prefs").unwrap();
+    let c = again.add_comment("analysis", "Signed?", None).unwrap();
+    assert_eq!(c.last().unwrap().author, "Karl");
+}

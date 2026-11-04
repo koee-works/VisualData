@@ -5,6 +5,9 @@ export function exactCell(c: Cell): string {
   return c.t === "float" ? String(c.v) : formatCell(c);
 }
 
+/** How numbers are shown (from the user's preferences). */
+export const numberDisplay = { thousands: true, maxDecimals: 4 };
+
 /** How many decimals a column's decimal values need on screen, so they line
  *  up: as many as the most precise visible value, at least one, at most four
  *  (six for columns of small fractions). The exact value is in each cell's title. */
@@ -18,14 +21,15 @@ export function columnDecimals(cells: Cell[]): number {
     const dot = text.indexOf(".");
     if (dot >= 0 && !text.includes("e")) need = Math.max(need, text.length - dot - 1);
   }
-  return Math.min(need, big > 0 && big < 1 ? 6 : 4);
+  const cap = Math.max(numberDisplay.maxDecimals, 1);
+  return Math.min(need, big > 0 && big < 1 ? Math.max(cap, 6) : cap);
 }
 
 /** A decimal with a fixed number of decimals and thousands separators. */
 export function formatDecimal(v: number, decimals: number): string {
   if (!Number.isFinite(v)) return String(v);
   if (Math.abs(v) >= 1e15 || (v !== 0 && Math.abs(v) < 1e-6)) return String(v);
-  return v.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+  return v.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals, useGrouping: numberDisplay.thousands });
 }
 
 /** Display a cell the way the core does (whole floats keep one decimal).

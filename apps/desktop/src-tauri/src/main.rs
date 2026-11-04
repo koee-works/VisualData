@@ -121,6 +121,16 @@ async fn python_environment(s: State<'_, Shared>) -> Res<vda_app::PythonView> {
 }
 
 #[tauri::command]
+async fn preferences(s: State<'_, Shared>) -> Res<serde_json::Value> {
+    with(&s, |a| Ok(a.preferences()))
+}
+
+#[tauri::command]
+async fn set_preferences(s: State<'_, Shared>, preferences: serde_json::Value) -> Res<serde_json::Value> {
+    with(&s, |a| a.set_preferences(&preferences))
+}
+
+#[tauri::command]
 async fn r_environment(s: State<'_, Shared>) -> Res<vda_app::RView> {
     with(&s, |a| a.r_environment())
 }
@@ -419,6 +429,8 @@ fn main() {
             python_environment,
             set_python,
             r_environment,
+            preferences,
+            set_preferences,
             console_start,
             console_run,
             console_interrupt,

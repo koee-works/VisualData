@@ -1,5 +1,6 @@
 <script lang="ts">
   import { tick, untrack } from "svelte";
+  import { prefs } from "../prefs.svelte";
   import { ExternalLink, Trash2, X } from "@lucide/svelte";
   import type { Workspace } from "../workspace.svelte";
   import type { Column, Problem, StepOp, StepView } from "../api/types";
@@ -117,8 +118,10 @@
 
   async function save() {
     saving = true;
-    await ws.saveStep(step.id, label.trim() || null, $state.snapshot(draft) as StepOp, inputsChanged ? [...inputs] : undefined);
+    const saved = await ws.saveStep(step.id, label.trim() || null, $state.snapshot(draft) as StepOp, inputsChanged ? [...inputs] : undefined);
     saving = false;
+    // Settings → General: run after each save.
+    if (saved && prefs.value.runAfterSave) await ws.run();
   }
 
   let codeInputs = $derived(inputs.map((id) => ({ id, name: ws.nameOf(id), columns: ws.columnsOf(id) })));
@@ -144,8 +147,10 @@
       return;
     }
     if (saving || invalid) return;
-    if (dirty) await save();
-    await ws.run();
+    const wasDirty = dirty;
+    if (wasDirty) await save();
+    // Saving already ran it when the user asked for that in Settings.
+    if (!(wasDirty && prefs.value.runAfterSave)) await ws.run();
     await ws.codeConsole?.compare();
   }
 

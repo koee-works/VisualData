@@ -407,6 +407,9 @@ impl App {
         let (rscript, why) = settings::choose_rscript(&self.settings);
         self.rscript = rscript;
         self.r_chosen_by = why;
+        if let Some(name) = self.settings.preferences["author"].as_str().map(str::trim).filter(|n| !n.is_empty()) {
+            self.author = name.to_string();
+        }
         self
     }
 

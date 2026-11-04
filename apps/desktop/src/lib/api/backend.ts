@@ -93,6 +93,9 @@ export interface Backend {
   pythonEnvironment(): Promise<PythonView>;
   setPython(path: string): Promise<PythonView>;
   rEnvironment(): Promise<RView>;
+  /** The interface's preferences from the user's settings file. */
+  preferences(): Promise<unknown>;
+  setPreferences(p: unknown): Promise<unknown>;
   consoleStart(stepId: string): Promise<ConsoleView>;
   /** Write a code step as a notebook or .R file and open it in the user's app for it. */
   editExternally(stepId: string): Promise<ExternalView>;

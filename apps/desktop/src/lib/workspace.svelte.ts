@@ -1,19 +1,34 @@
 // Workspace state shared by the components (Svelte 5 runes).
 // The backend is the source of truth; every edit returns a fresh view.
 
+import { prefs } from "./prefs.svelte";
 import { ALL_PANES, loadPanes, savePanes, toggled, type PaneName, type Panes } from "./layout";
 import { errorMessage, type Backend } from "./api/backend";
 import type { AnalysisView, Column, Comment, NotebookCell, Problem, Problems, SourceView, StepEvent, StepOp, StepView, Parameter } from "./api/types";
 import { SOURCE_ID } from "./api/types";
 import { stepTitle } from "./format";
 
-export type CenterTab = "step" | "notebook";
+export type CenterTab = "step" | "notebook" | "settings";
 
 export class Workspace {
   view = $state<AnalysisView | null>(null);
   /** Selected node in the pipeline: a step id or "source". */
   selected = $state<string>(SOURCE_ID);
   centerTab = $state<CenterTab>("step");
+  /** The Settings tab is open (beside Step and Notebook), and which section to show. */
+  settingsOpen = $state(false);
+  settingsSection = $state<"general" | "appearance" | "editor" | "environments" | null>(null);
+
+  openSettings(section: "general" | "appearance" | "editor" | "environments" | null = null) {
+    this.settingsOpen = true;
+    this.settingsSection = section;
+    this.centerTab = "settings";
+  }
+
+  closeSettings() {
+    this.settingsOpen = false;
+    if (this.centerTab === "settings") this.centerTab = "step";
+  }
   running = $state(false);
   /** Progress of the current or last run, by step id. */
   progress = $state<Record<string, StepEvent>>({});
@@ -35,7 +50,7 @@ export class Workspace {
     this.#notice = text;
     if (this.#noticeTimer) clearTimeout(this.#noticeTimer);
     this.#noticeTimer = null;
-    if (text) {
+    if (text && prefs.value.autoHideMessages) {
       const ms = Math.min(15000, 5000 + text.length * 60);
       this.#noticeTimer = setTimeout(() => {
         if (this.#notice === text) this.#notice = null;
@@ -48,6 +63,11 @@ export class Workspace {
   panes = $state<Panes>(loadPanes());
   /** The Activity dock is open (kept equal to `panes.activity`). */
   consoleOpen = $state(this.panes.activity);
+  /** Kinds of step and how the pipeline adds one (registered by the pipeline). */
+  stepKinds: { type: StepOp["type"]; name: string; needsTwo: boolean }[] = [];
+  addStepKind: ((type: StepOp["type"]) => boolean) | null = null;
+  /** The command palette is open. */
+  paletteOpen = $state(false);
   /** The code console in the right dock, and the editor's "show this line". */
   codeConsole: { run(code: string, fromLine: number | null): Promise<void>; compare(): Promise<void> } | null = null;
   focusCodeLine: ((line: number) => void) | null = null;

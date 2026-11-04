@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import type { Backend } from "./lib/api/backend";
   import { Workspace } from "./lib/workspace.svelte";
+  import { initPrefs } from "./lib/prefs.svelte";
   import Welcome from "./lib/components/Welcome.svelte";
   import WorkspaceView from "./lib/components/WorkspaceView.svelte";
 
@@ -27,6 +28,7 @@
         });
       }
     }
+    await initPrefs(backend);
     const w = new Workspace(backend);
     const dir = await backend.startupProject().catch(() => null);
     if (dir) await w.open(dir);

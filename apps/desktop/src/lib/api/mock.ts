@@ -371,6 +371,19 @@ export class MockBackend implements Backend {
     return null;
   }
 
+  private prefs: Record<string, unknown> = { author: "you" };
+
+  async preferences(): Promise<unknown> {
+    return structuredClone(this.prefs);
+  }
+
+  async setPreferences(p: unknown): Promise<unknown> {
+    if (!p || typeof p !== "object" || Array.isArray(p)) throw { message: "preferences must be an object" };
+    this.prefs = { ...(p as Record<string, unknown>), author: (p as { author?: string }).author?.trim() || this.author };
+    if ((p as { author?: string }).author?.trim()) this.author = (p as { author: string }).author.trim();
+    return structuredClone(this.prefs);
+  }
+
   async rEnvironment(): Promise<RView> {
     return structuredClone(this.r);
   }

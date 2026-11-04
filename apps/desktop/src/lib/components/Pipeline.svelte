@@ -166,6 +166,17 @@
     { type: "r", name: "R", hint: "Code" },
   ];
 
+  // The command palette adds steps the same way as this menu.
+  $effect(() => {
+    ws.stepKinds = choices.map((c) => ({ type: c.type, name: c.name, needsTwo: c.type === "join" || c.type === "append" }));
+    ws.addStepKind = (type) => {
+      const needsTwo = type === "join" || type === "append";
+      if (needsTwo && !joinPartner) return false;
+      void ws.addStep(starter(type), null, needsTwo && joinPartner ? [joinPartner.id] : []);
+      return true;
+    };
+  });
+
   function isRunning(s: StepView) {
     return ws.running && !ws.progress[s.id];
   }

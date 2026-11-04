@@ -2,7 +2,8 @@
   import { onMount } from "svelte";
   import type { Problem } from "../api/types";
   import type { EditorContext, Lang } from "../editor/complete";
-  import { loadKeys, type Keys, type RunRequest } from "../editor/prefs";
+  import type { RunRequest } from "../editor/prefs";
+  import { prefs } from "../prefs.svelte";
   // CodeMirror loads with the first editor shown, not with the app.
   type CM = typeof import("../editor/setup");
   let cm: CM | undefined = $state();
@@ -19,7 +20,6 @@
     onrun,
     onenter,
     onhistory,
-    keys = loadKeys(),
   }: {
     value: string;
     lang: Lang;
@@ -32,13 +32,16 @@
     onrun?: (r: RunRequest) => void;
     onenter?: () => void;
     onhistory?: (step: -1 | 1) => string | null;
-    keys?: Keys;
   } = $props();
+  // From the user's preferences, so a change applies to every open editor.
+  let keys = $derived(prefs.value.editorKeys);
+  let wrap = $derived(prefs.value.wrapCode && !singleLine);
 
   let host: HTMLDivElement;
   let view: import("@codemirror/view").EditorView | undefined = $state();
   let keysC: import("@codemirror/state").Compartment;
   let langC: import("@codemirror/state").Compartment;
+  let wrapC: import("@codemirror/state").Compartment;
 
   onMount(() => {
     let gone = false;
@@ -58,6 +61,7 @@
     const { Compartment, EditorState, EditorView, extensions } = m;
     keysC = new Compartment();
     langC = new Compartment();
+    wrapC = new Compartment();
     view = new EditorView({
       parent: host,
       state: EditorState.create({
@@ -77,7 +81,7 @@
           onchange: (code) => {
             if (code !== value) value = code;
           },
-        }),
+        }).concat(wrapC.of(wrap ? EditorView.lineWrapping : [])),
       }),
     });
     // Replace the whole text from outside the editor (tests, tools), as if typed.
@@ -115,6 +119,11 @@
     const v = view;
     if (!v || !cm) return;
     void cm.keysExtension(k).then((ext) => v.dispatch({ effects: keysC.reconfigure(ext) }));
+  });
+
+  $effect(() => {
+    const w = wrap;
+    if (view && cm) view.dispatch({ effects: wrapC.reconfigure(w ? cm.EditorView.lineWrapping : []) });
   });
 
   $effect(() => {

@@ -1,10 +1,10 @@
 import { mount } from "svelte";
 import "./app.css";
 import App from "./App.svelte";
-import { initTheme } from "./lib/themeState.svelte";
+import { applyPrefs } from "./lib/prefs.svelte";
 
 // Before the first paint, so the app never flashes the wrong colours.
-initTheme();
+applyPrefs();
 
 const app = mount(App, { target: document.getElementById("app")! });
 export default app;

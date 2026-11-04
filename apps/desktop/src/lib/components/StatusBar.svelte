@@ -64,7 +64,7 @@
     {summary}
   </p>
   <div class="ml-auto flex items-center gap-0.5">
-    <ThemePicker />
+    <ThemePicker onedit={() => ws.openSettings("appearance")} />
     <span class="mx-1 h-4 border-l border-rule" aria-hidden="true"></span>
     {@render toggle("editor", ws.selectedSource ? "Source details" : "Step editor", PanelTop, "", !onStep)}
     {@render toggle("result", "Result", Table2, "", !onStep)}

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { CalendarClock, Ellipsis, Play, Redo2, ShieldAlert, ShieldOff, Square, Terminal, Undo2 } from "@lucide/svelte";
+  import { CalendarClock, Command, Ellipsis, Settings, Play, Redo2, ShieldAlert, ShieldOff, Square, Terminal, Undo2 } from "@lucide/svelte";
   import type { PaneName } from "../layout";
   import { DropdownMenu } from "bits-ui";
   import type { Workspace } from "../workspace.svelte";
@@ -29,6 +29,18 @@
   // their own undo.
   function onkeydown(e: KeyboardEvent) {
     if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+    // The command palette, as in VS Code (Ctrl+Shift+P) and Zed (Ctrl+K too).
+    if ((e.shiftKey && e.code === "KeyP") || (!e.shiftKey && e.code === "KeyK")) {
+      e.preventDefault();
+      ws.paletteOpen = !ws.paletteOpen;
+      return;
+    }
+    // Settings, as in Zed and VS Code.
+    if (e.key === "," && !e.shiftKey) {
+      e.preventDefault();
+      ws.openSettings();
+      return;
+    }
     // Panels, as in VS Code: these work from anywhere, even while typing.
     const pane: PaneName | null = e.shiftKey ? null : e.code === "KeyB" ? "pipeline" : e.code === "KeyJ" ? "activity" : e.code === "Backquote" ? "console" : null;
     if (pane && (pane !== "console" || codeStep)) {
@@ -113,7 +125,7 @@
           align="end"
           sideOffset={4}
         >
-          {#each [{ icon: Terminal, name: "Python environment", hint: "Which Python runs your steps", open: () => (ws.pythonOpen = true) }, { icon: Terminal, name: "R installation", hint: "Which R runs your steps", open: () => (ws.rOpen = true) }, { icon: CalendarClock, name: "Refresh on a schedule", hint: "Rerun and export without the app", open: () => (ws.scheduleOpen = true) }, { icon: Undo2, name: "History", hint: "Every saved version", open: () => ((ws.consoleTab = "history"), (ws.consoleOpen = true)) }] as item (item.name)}
+          {#each [{ icon: Command, name: "All commands", hint: `Find any action by name (${mac ? "⇧⌘P" : "Ctrl+Shift+P"})`, open: () => (ws.paletteOpen = true) }, { icon: Settings, name: "Settings", hint: `General, appearance, the code editor (${key},)`, open: () => ws.openSettings() }, { icon: Terminal, name: "Python environment", hint: "Which Python runs your steps", open: () => (ws.pythonOpen = true) }, { icon: Terminal, name: "R installation", hint: "Which R runs your steps", open: () => (ws.rOpen = true) }, { icon: CalendarClock, name: "Refresh on a schedule", hint: "Rerun and export without the app", open: () => (ws.scheduleOpen = true) }, { icon: Undo2, name: "History", hint: "Every saved version", open: () => ((ws.consoleTab = "history"), (ws.consoleOpen = true)) }] as item (item.name)}
             <DropdownMenu.Item
               class="flex cursor-pointer items-start gap-2 rounded px-2 py-1.5 outline-none data-[highlighted]:bg-select"
               onSelect={item.open}
