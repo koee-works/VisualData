@@ -1,3 +1,4 @@
+import { stepTitle } from "./format";
 import { describe, expect, it } from "vitest";
 import { flushSync } from "svelte";
 import { MockBackend } from "./api/mock";
@@ -490,11 +491,29 @@ describe("Parameters, checks and notebook export", () => {
       expect(html).toContain(s);
   });
 
-  it("exports a Jupyter notebook", async () => {
+  it("exports a Jupyter notebook in the chosen language", async () => {
     const { ws, mock } = await seeded();
-    await ws.exportNotebook("ipynb");
+    await ws.exportNotebook("python");
     expect(mock.documents.at(-1)![0]).toMatch(/\.ipynb$/);
+    expect(JSON.parse(mock.documents.at(-1)![1]).language).toBe("python");
     expect(ws.notice).toContain("reproduces the analysis");
+    await ws.exportNotebook("sql");
+    expect(JSON.parse(mock.documents.at(-1)![1]).language).toBe("sql");
+    expect(ws.notice).toContain("in SQL");
+  });
+
+  it("names the steps a SQL or R notebook cannot hold", async () => {
+    const { ws } = await seeded();
+    // Tests and charts go into SQL and R notebooks, so the sample blocks neither.
+    expect(ws.view!.steps.some((s) => s.op.type === "test" || s.op.type === "chart")).toBe(true);
+    // The sample's one Python step ("Share of revenue") is the only thing SQL and R cannot hold.
+    expect(ws.notebookBlockers("sql")).toEqual(["Share of revenue"]);
+    expect(ws.notebookBlockers("r")).toEqual(["Share of revenue"]);
+    expect(ws.notebookBlockers("python")).toEqual([]);
+    await ws.addStep({ type: "python", code: "result = df", timeout_ms: 60000 }, null, []);
+    expect(ws.notebookBlockers("python")).toEqual([]);
+    expect(ws.notebookBlockers("sql")).toEqual(["Share of revenue", stepTitle(ws.view!.steps.at(-1)!)]);
+    expect(ws.notebookBlockers("r")).toEqual(["Share of revenue", stepTitle(ws.view!.steps.at(-1)!)]);
   });
 });
 

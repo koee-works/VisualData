@@ -5,6 +5,7 @@ import type { Backend, RunHandlers } from "./backend";
 import type {
   AnalysisView,
   NotebookCell,
+  NotebookLanguage,
   Page,
   Problem,
   Problems,
@@ -89,7 +90,7 @@ export const tauriBackend: Backend = {
   cleanReport: (stepId) => invoke<CleanReport | null>("clean_report", { stepId }),
   compareFills: (stepId, op, column) => invoke<Comparison>("compare_fills", { stepId, op, column }),
   columnDetails: (id) => invoke<ColumnDetail[]>("column_details", { id }),
-  exportNotebook: (path) => invoke<void>("export_notebook", { path }),
+  exportNotebook: (path, language) => invoke<void>("export_notebook", { path, language }),
   saveReport: (path, html) => invoke<void>("save_report", { path, html }),
   setSourceRead: (id, table, query) => invoke<AnalysisView>("set_source_read", { id, table, query }),
   undo: () => invoke<AnalysisView>("undo"),

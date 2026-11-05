@@ -69,13 +69,17 @@
           align="end"
           sideOffset={4}
         >
-          {#each [["html", "Report", "A web page to share or print"], ["ipynb", "Jupyter notebook", "Reruns the analysis in Python"]] as [kind, name, hint] (kind)}
+          {#each [["html", "Report", "A web page to share or print"], ["python", "Jupyter notebook in Python", "Reruns the analysis with DuckDB and pandas"], ["sql", "Jupyter notebook in SQL", "SQL cells with ipython-sql and DuckDB"], ["r", "Jupyter notebook in R", "R code with DBI and duckdb"]] as [kind, name, hint] (kind)}
+            {@const blockers = ws.notebookBlockers(kind as "html" | "python" | "sql" | "r")}
             <DropdownMenu.Item
-              class="flex cursor-pointer flex-col rounded px-2 py-1.5 outline-none data-[highlighted]:bg-select"
-              onSelect={() => ws.exportNotebook(kind as "html" | "ipynb")}
+              class="flex cursor-pointer flex-col rounded px-2 py-1.5 outline-none data-[disabled]:cursor-default data-[disabled]:opacity-50 data-[highlighted]:bg-select"
+              disabled={blockers.length > 0}
+              onSelect={() => ws.exportNotebook(kind as "html" | "python" | "sql" | "r")}
             >
               <span>{name}</span>
-              <span class="text-xs text-ink-faint">{hint}</span>
+              <span class="max-w-80 truncate text-xs text-ink-faint" title={blockers.length ? `Steps it cannot hold: ${blockers.join(", ")}` : undefined}>
+                {blockers.length ? `Cannot include ${blockers.join(", ")}` : hint}
+              </span>
             </DropdownMenu.Item>
           {/each}
         </DropdownMenu.Content>

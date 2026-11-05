@@ -56,7 +56,9 @@
       { id: "add.source", group: "Actions", title: "Add a source", keywords: "csv excel parquet database file import", disabled: busy, run: () => ws.addSource() },
       { id: "review", group: "Actions", title: "Review code waiting for approval", keywords: "python r approve trust", disabled: ws.pendingReview.length ? undefined : "No code is waiting", run: () => (ws.reviewOpen = true) },
       { id: "export.html", group: "Actions", title: "Export notebook as a web page", keywords: "html report share", run: () => ws.exportNotebook("html") },
-      { id: "export.ipynb", group: "Actions", title: "Export notebook for Jupyter", keywords: "ipynb python", run: () => ws.exportNotebook("ipynb") },
+      { id: "export.ipynb", group: "Actions", title: "Export notebook for Jupyter (Python)", keywords: "ipynb python", run: () => ws.exportNotebook("python") },
+      { id: "export.ipynb-sql", group: "Actions", title: "Export notebook for Jupyter (SQL)", keywords: "ipynb sql duckdb", run: () => ws.exportNotebook("sql") },
+      { id: "export.ipynb-r", group: "Actions", title: "Export notebook for Jupyter (R)", keywords: "ipynb r", run: () => ws.exportNotebook("r") },
       ...(code
         ? [
             { id: "external", group: "Actions", title: `Open ${stepTitle(code)} in ${code.op.type === "r" ? "RStudio" : "Jupyter"}`, keywords: "edit externally other editor", run: () => ws.editExternally(code.id) } as Command,

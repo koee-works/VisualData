@@ -106,6 +106,9 @@ export interface WindowColumn {
   n: number | null;
 }
 
+/** The language of the code cells in a Jupyter notebook export. */
+export type NotebookLanguage = "python" | "sql" | "r";
+
 export type StepOp =
   | { type: "filter"; predicates: Predicate[] }
   | { type: "aggregate"; group_by: string[]; measures: Measure[] }
