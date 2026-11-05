@@ -1,6 +1,6 @@
 [package]
 name = "vda-app"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Command layer between the desktop UI and vda-core: serde types and commands, no Tauri dependency"
 

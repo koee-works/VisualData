@@ -1,6 +1,6 @@
 [package]
 name = "vda-core"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Analysis model, planning, staleness and execution orchestration for the visual data analysis app"
 
