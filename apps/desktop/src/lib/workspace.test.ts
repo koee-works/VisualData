@@ -504,14 +504,16 @@ describe("Parameters, checks and notebook export", () => {
 
   it("names the steps a SQL or R notebook cannot hold", async () => {
     const { ws } = await seeded();
-    // The sample analysis has charts, which SQL and R cannot hold.
-    const sql = ws.notebookBlockers("sql").length;
-    expect(sql).toBeGreaterThan(0);
+    // Tests and charts go into SQL and R notebooks, so the sample blocks neither.
+    expect(ws.view!.steps.some((s) => s.op.type === "test" || s.op.type === "chart")).toBe(true);
+    // The sample's one Python step ("Share of revenue") is the only thing SQL and R cannot hold.
+    expect(ws.notebookBlockers("sql")).toEqual(["Share of revenue"]);
+    expect(ws.notebookBlockers("r")).toEqual(["Share of revenue"]);
     expect(ws.notebookBlockers("python")).toEqual([]);
     await ws.addStep({ type: "python", code: "result = df", timeout_ms: 60000 }, null, []);
     expect(ws.notebookBlockers("python")).toEqual([]);
-    expect(ws.notebookBlockers("sql")).toHaveLength(sql + 1);
-    expect(ws.notebookBlockers("sql")).toContain(stepTitle(ws.view!.steps.at(-1)!));
+    expect(ws.notebookBlockers("sql")).toEqual(["Share of revenue", stepTitle(ws.view!.steps.at(-1)!)]);
+    expect(ws.notebookBlockers("r")).toEqual(["Share of revenue", stepTitle(ws.view!.steps.at(-1)!)]);
   });
 });
 

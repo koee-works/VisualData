@@ -59,8 +59,6 @@ fn unsupported(a: &Analysis, lang: Language) -> Vec<String> {
     for step in &a.steps {
         let why = match &step.kind {
             StepKind::Python { .. } => Some("Python step"),
-            StepKind::Test { .. } => Some("statistical test"),
-            StepKind::Chart { .. } => Some("chart"),
             StepKind::R { .. } if lang == Language::Sql => Some("R step"),
             _ => None,
         };
@@ -235,6 +233,153 @@ fn rule_sql(id: &str, rule: &Rule, what: String, input: &Schema) -> Result<RuleS
     })
 }
 
+/// The SQL notebook's first cell: ipython-sql on DuckDB, and the Python its tests use.
+const SQL_SETUP: &str = r#"%load_ext sql
+%sql duckdb:///:memory:
+import json, math
+import numpy as np
+import pandas as pd
+from scipy import stats
+
+def p_text(p):
+    return "p < 0.001" if p < 0.001 else f"p = {p:.3f}"
+
+def label(v):
+    return str(bool(v)).lower() if isinstance(v, (bool, np.bool_)) else str(v)
+
+def table(**cols):
+    """One row, typed as the app's result."""
+    out = pd.DataFrame({k: [v] for k, v in cols.items()})
+    for k, v in cols.items():
+        if isinstance(v, bool) or v is None:
+            out[k] = out[k].astype("Float64")
+        elif isinstance(v, (int, np.integer)):
+            out[k] = out[k].astype("Int64")
+    return out
+"#;
+
+/// The pairs a test compares, as SQL: both columns, nulls dropped, in group order.
+fn pairs_sql(a: &str, b: &str) -> String {
+    let (qa, qb) = (quote_ident(a), quote_ident(b));
+    format!("SELECT {qa} AS x, {qb} AS g FROM input WHERE {qa} IS NOT NULL AND {qb} IS NOT NULL ORDER BY 2")
+}
+
+/// A statistical test in the SQL notebook: the data from SQL, the statistics from SciPy.
+/// The same statistics as the Python notebook and the app (stat_test.rs).
+fn sql_test_cell(id: &str, test: &crate::model::TestKind, input: &str, a: &str, b: &str) -> String {
+    use crate::model::TestKind;
+    let body = match test {
+        TestKind::CompareMeans => {
+            r#"groups = [(g, d.x[d.g == g].tolist()) for g in d.g.unique()]
+assert len(groups) == 2, f"comparing two averages needs exactly two groups; there are {len(groups)}"
+(g1, x1), (g2, x2) = groups
+t = stats.ttest_ind(x1, x2, equal_var=False)  # Welch's t-test
+m1, m2 = float(np.mean(x1)), float(np.mean(x2))
+g1, g2 = label(g1), label(g2)
+reading = (f"The average of {A} differs between {g1} and {g2} ({p_text(t.pvalue)})." if t.pvalue < 0.05
+           else f"No clear difference in the average of {A} between {g1} and {g2} ({p_text(t.pvalue)}).")
+vda_result = table(group_1=g1, n_1=len(x1), mean_1=m1, group_2=g2, n_2=len(x2), mean_2=m2, difference=m1 - m2,
+                   t=float(t.statistic), df=float(t.df), p_value=float(t.pvalue), reading=reading)"#
+        }
+        TestKind::CompareGroups => {
+            r#"groups = [d.x[d.g == g].tolist() for g in d.g.unique()]
+f = stats.f_oneway(*groups)  # one-way analysis of variance
+k, n = len(groups), sum(len(xs) for xs in groups)
+reading = (f"The average of {A} differs among the {k} groups of {B} ({p_text(f.pvalue)})." if f.pvalue < 0.05
+           else f"No clear difference in the average of {A} among the {k} groups of {B} ({p_text(f.pvalue)}).")
+vda_result = table(groups=k, n=n, f=float(f.statistic), df_between=k - 1, df_within=n - k, p_value=float(f.pvalue), reading=reading)"#
+        }
+        TestKind::Independence => {
+            r#"tab = pd.crosstab(d.x, d.g)
+chi = stats.chi2_contingency(tab, correction=False)  # chi-square test of independence
+n = int(tab.values.sum())
+v = (chi.statistic / (n * (min(tab.shape) - 1))) ** 0.5
+smallest = float(chi.expected_freq.min())
+reading = (f"{A} and {B} are related ({p_text(chi.pvalue)}; strength {v:.2f} on a 0–1 scale)." if chi.pvalue < 0.05
+           else f"No clear relation between {A} and {B} ({p_text(chi.pvalue)}).")
+if smallest < 5:
+    reading += " Some expected counts are below 5, so the p-value is rough."
+vda_result = table(n=n, categories_1=tab.shape[0], categories_2=tab.shape[1], chi_square=float(chi.statistic), df=int(chi.dof),
+                   p_value=float(chi.pvalue), cramers_v=float(v), smallest_expected=smallest, reading=reading)"#
+        }
+        TestKind::Correlation => {
+            r#"r = stats.pearsonr(d.x.astype(float), d.g.astype(float))  # Pearson correlation
+rr, n = float(r.statistic), len(d)
+strength = "strong" if abs(rr) >= 0.7 else "moderate" if abs(rr) >= 0.4 else "weak" if abs(rr) >= 0.1 else "very weak"
+reading = (f"A {strength} correlation: {B} {'rises' if rr >= 0 else 'falls'} as {A} rises (r = {rr:.2f}, {p_text(r.pvalue)})." if r.pvalue < 0.05
+           else f"No clear correlation between {A} and {B} (r = {rr:.2f}, {p_text(r.pvalue)}).")
+t = rr * ((n - 2) / (1 - rr * rr)) ** 0.5 if abs(rr) < 1 else None
+vda_result = table(n=n, r=rr, t=t, df=n - 2, p_value=float(r.pvalue), reading=reading)"#
+        }
+    };
+    format!(
+        "A, B = {}, {}\n%sql CREATE OR REPLACE TEMP VIEW input AS SELECT * FROM {}\npairs = %sql {}\nd = pairs.DataFrame()\n{body}\n%sql --persist vda_result\n%sql CREATE OR REPLACE TABLE {} AS SELECT * FROM vda_result\n%sql DROP TABLE vda_result\n%sql SELECT * FROM {} LIMIT 10",
+        py(a),
+        py(b),
+        quote_ident(input),
+        pairs_sql(a, b),
+        quote_ident(id),
+        quote_ident(id)
+    )
+}
+
+/// A statistical test in the R notebook: base R's tests on the pairs DuckDB returns.
+fn r_test_cell(id: &str, test: &crate::model::TestKind, input: &str, a: &str, b: &str) -> String {
+    use crate::model::TestKind;
+    let body = match test {
+        TestKind::CompareMeans => {
+            r##"groups <- unique(d$g)
+xs <- lapply(groups, function(v) d$x[d$g == v])
+if (length(xs) != 2) stop(paste0("comparing two averages needs exactly two groups; there are ", length(xs)))
+x1 <- xs[[1]]; x2 <- xs[[2]]
+g1 <- label(groups[1]); g2 <- label(groups[2])
+tt <- t.test(x1, x2)  # Welch's t-test
+m1 <- mean(x1); m2 <- mean(x2)
+reading <- if (tt$p.value < 0.05) sprintf("The average of %s differs between %s and %s (%s).", A, g1, g2, p_text(tt$p.value)) else sprintf("No clear difference in the average of %s between %s and %s (%s).", A, g1, g2, p_text(tt$p.value))
+result <- data.frame(group_1 = g1, n_1 = length(x1), mean_1 = m1, group_2 = g2, n_2 = length(x2), mean_2 = m2, difference = m1 - m2,
+                     t = unname(tt$statistic), df = unname(tt$parameter), p_value = unname(tt$p.value), reading = reading, stringsAsFactors = FALSE)"##
+        }
+        TestKind::CompareGroups => {
+            r##"groups <- unique(d$g)
+k <- length(groups)
+n <- nrow(d)
+f <- summary(aov(d$x ~ factor(d$g)))[[1]]  # one-way analysis of variance
+Fv <- f[["F value"]][1]; p <- f[["Pr(>F)"]][1]
+reading <- if (p < 0.05) sprintf("The average of %s differs among the %d groups of %s (%s).", A, k, B, p_text(p)) else sprintf("No clear difference in the average of %s among the %d groups of %s (%s).", A, k, B, p_text(p))
+result <- data.frame(groups = k, n = n, f = Fv, df_between = k - 1, df_within = n - k, p_value = p, reading = reading, stringsAsFactors = FALSE)"##
+        }
+        TestKind::Independence => {
+            r##"tab <- table(d$x, d$g)
+chi <- suppressWarnings(chisq.test(tab, correct = FALSE))  # chi-square test of independence
+n <- sum(tab)
+v <- sqrt(unname(chi$statistic) / (n * (min(dim(tab)) - 1)))
+smallest <- min(chi$expected)
+reading <- if (chi$p.value < 0.05) sprintf("%s and %s are related (%s; strength %.2f on a 0–1 scale).", A, B, p_text(chi$p.value), v) else sprintf("No clear relation between %s and %s (%s).", A, B, p_text(chi$p.value))
+if (smallest < 5) reading <- paste(reading, "Some expected counts are below 5, so the p-value is rough.")
+result <- data.frame(n = n, categories_1 = nrow(tab), categories_2 = ncol(tab), chi_square = unname(chi$statistic), df = unname(chi$parameter),
+                     p_value = chi$p.value, cramers_v = unname(v), smallest_expected = smallest, reading = reading, stringsAsFactors = FALSE)"##
+        }
+        TestKind::Correlation => {
+            r##"xr <- as.numeric(d$x); gr <- as.numeric(d$g)
+r <- cor.test(xr, gr)  # Pearson correlation
+rr <- unname(r$estimate); n <- length(xr)
+strength <- if (abs(rr) >= 0.7) "strong" else if (abs(rr) >= 0.4) "moderate" else if (abs(rr) >= 0.1) "weak" else "very weak"
+reading <- if (r$p.value < 0.05) sprintf("A %s correlation: %s %s as %s rises (r = %.2f, %s).", strength, B, if (rr >= 0) "rises" else "falls", A, rr, p_text(r$p.value)) else sprintf("No clear correlation between %s and %s (r = %.2f, %s).", A, B, rr, p_text(r$p.value))
+tval <- if (abs(rr) < 1) rr * sqrt((n - 2) / (1 - rr * rr)) else NA_real_
+result <- data.frame(n = n, r = rr, t = tval, df = n - 2, p_value = unname(r$p.value), reading = reading, stringsAsFactors = FALSE)"##
+        }
+    };
+    format!(
+        "p_text <- function(p) if (p < 0.001) \"p < 0.001\" else sprintf(\"p = %.3f\", p)\nlabel <- function(v) if (is.logical(v)) tolower(as.character(v)) else as.character(v)\nA <- {}\nB <- {}\n{}\nd <- dbGetQuery(con, r\"---({})---\")\n{body}\nsave({}, result)\n{}",
+        rstr(a),
+        rstr(b),
+        run_sql(Language::R, &format!("CREATE OR REPLACE TEMP VIEW input AS SELECT * FROM {}", quote_ident(input)), None),
+        pairs_sql(a, b),
+        rstr(id),
+        preview(Language::R, id)
+    )
+}
+
 /// The source as SQL statements (SQL and R notebooks), each one cell.
 fn source_cells(a: &Analysis, lang: Language, project: &Path) -> Result<Vec<String>, Error> {
     let mut out = Vec::new();
@@ -301,6 +446,22 @@ impl Writer<'_> {
         Ok(())
     }
 
+    /// A chart as the app last drew it. SQL notebooks display it from Python (their
+    /// kernel); R notebooks display it with IRdisplay.
+    fn chart_cell(&self, lang: Language, id: &str) -> String {
+        match (self.charts.get(id), lang) {
+            (None, _) => "# Run the analysis in the app to include this chart.".into(),
+            (Some(spec), Language::R) => format!(
+                "# The chart as the app last drew it (Vega-Lite; JupyterLab displays it).\nIRdisplay::publish_mimebundle(list(\"application/vnd.vegalite.v5+json\" = jsonlite::fromJSON(r\"---({})---\", simplifyVector = FALSE)))",
+                spec.to_string_compact()
+            ),
+            (Some(spec), _) => format!(
+                "# The chart as the app last drew it (Vega-Lite; JupyterLab displays it).\nfrom IPython.display import display\ndisplay({{\"application/vnd.vegalite.v5+json\": json.loads({})}}, raw=True)",
+                py(&spec.to_string_compact())
+            ),
+        }
+    }
+
     /// The cells for a step in the SQL or R notebook: visual, SQL, clean and check steps, and R steps in R.
     fn portable_cells(&self, step: &Step) -> Result<Vec<String>, Error> {
         let lang = self.lang;
@@ -318,6 +479,11 @@ impl Writer<'_> {
                     preview(lang, id)
                 )])
             }
+            StepKind::Chart { .. } => Ok(vec![self.chart_cell(lang, id)]),
+            StepKind::Test { test, a, b } => Ok(vec![match lang {
+                Language::R => r_test_cell(id, test, step.input(), a, b),
+                _ => sql_test_cell(id, test, step.input(), a, b),
+            }]),
             StepKind::Check { rules, stop } => {
                 let schemas = self.input_schemas(step)?;
                 let written: Vec<Rule> = match self.written.step(id).map(|s| &s.kind) {
@@ -470,7 +636,7 @@ impl Writer<'_> {
                 format!(
                     "{input_view}import numpy as np\nfrom scipy import stats\nA, B = {pa}, {pb}\n\n\
                      def p_text(p):\n    return \"p < 0.001\" if p < 0.001 else f\"p = {{p:.3f}}\"\n\n\
-                     def label(v):\n    return str(v).lower() if isinstance(v, bool) else str(v)\n\n\
+                     def label(v):\n    return str(bool(v)).lower() if isinstance(v, (bool, np.bool_)) else str(v)\n\n\
                      def table(**cols):\n    \"\"\"One row, typed as the app's result.\"\"\"\n    \
                      out = pd.DataFrame({{k: [v] for k, v in cols.items()}})\n    \
                      for k, v in cols.items():\n        \
@@ -663,12 +829,14 @@ pub fn notebook_in(session: &mut Session, lang: Language) -> Result<Json, Error>
             opening.push(code(&sources));
         }
         Language::Sql => {
-            opening.push(markdown("This notebook runs its code as SQL cells with ipython-sql and DuckDB: `pip install ipython-sql duckdb-engine`."));
-            opening.push(code("%load_ext sql\n%sql duckdb:///:memory:"));
+            opening.push(markdown(
+                "This notebook runs its code as SQL cells with ipython-sql and DuckDB, and its statistical tests and charts in Python: `pip install ipython-sql duckdb-engine scipy pandas`. SQL computes the data; SciPy computes the p-values, which DuckDB has no functions for.",
+            ));
+            opening.push(code(SQL_SETUP));
             opening.extend(source_cells(&a, lang, &project)?.iter().map(|c| code(c)));
         }
         Language::R => {
-            opening.push(markdown("This notebook runs its code as R with DBI and duckdb: `install.packages(c(\"DBI\", \"duckdb\"))`."));
+            opening.push(markdown("This notebook runs its code as R with DBI and duckdb, and its charts with IRkernel: `install.packages(c(\"DBI\", \"duckdb\"))`."));
             let setup = format!(
                 "library(DBI)\nlibrary(duckdb)\ncon <- dbConnect(duckdb())\n\nframe <- function(name) dbReadTable(con, name)\nsave <- function(name, result) dbWriteTable(con, name, result, overwrite = TRUE)\n\n{}",
                 crate::rlang::params_r(&a.parameters)

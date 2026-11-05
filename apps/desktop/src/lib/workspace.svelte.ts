@@ -326,7 +326,7 @@ export class Workspace {
     const out: string[] = [];
     for (const s of this.view?.steps ?? []) {
       const t = s.op.type;
-      if (t === "python" || t === "test" || t === "chart" || (t === "r" && language === "sql")) out.push(stepTitle(s));
+      if (t === "python" || (t === "r" && language === "sql")) out.push(stepTitle(s));
     }
     for (const src of this.view?.sources ?? []) if (src.query) out.push(`${src.id} (database query)`);
     return out;
