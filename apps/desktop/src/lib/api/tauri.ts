@@ -12,6 +12,7 @@ import type {
   Problem,
   Problems,
   ProfileRow,
+  ResourceView,
   RunSummary,
   RunView,
   StepEvent,
@@ -61,6 +62,7 @@ export const tauriBackend: Backend = {
   approve: (stepIds: string[]) => invoke<AnalysisView>("approve", { stepIds }),
   setTrustAll: (on: boolean) => invoke<AnalysisView | null>("set_trust_all", { on }),
   about: () => invoke<AboutView>("about"),
+  resources: () => invoke<ResourceView>("resources"),
   forgetApprovals: () => invoke<AnalysisView | null>("forget_approvals"),
 
   async run({ onStep }: RunHandlers) {

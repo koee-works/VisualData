@@ -47,6 +47,8 @@ export interface Preferences {
 
   // Accessibility
   reduceMotion: boolean;
+  /** CPU and memory use in the status bar. */
+  showResources: boolean;
 
   // Running
   /** Run the analysis when a project opens. */
@@ -88,6 +90,7 @@ export const DEFAULTS: Preferences = {
   autoCloseBrackets: true,
   highlightActiveLine: true,
   reduceMotion: false,
+  showResources: true,
   runOnOpen: false,
   stepTimeoutSeconds: 60,
   versionsKept: 500,
@@ -140,6 +143,7 @@ export function normalize(raw: unknown): Preferences {
     autoCloseBrackets: pick("autoCloseBrackets", (v) => typeof v === "boolean"),
     highlightActiveLine: pick("highlightActiveLine", (v) => typeof v === "boolean"),
     reduceMotion: pick("reduceMotion", (v) => typeof v === "boolean"),
+    showResources: pick("showResources", (v) => typeof v === "boolean"),
     runOnOpen: pick("runOnOpen", (v) => typeof v === "boolean"),
     stepTimeoutSeconds: pick("stepTimeoutSeconds", (v) => typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 86400),
     codeMemoryMb: typeof p.codeMemoryMb === "number" && Number.isInteger(p.codeMemoryMb) && p.codeMemoryMb >= 0 && p.codeMemoryMb <= 262144 ? p.codeMemoryMb : undefined,

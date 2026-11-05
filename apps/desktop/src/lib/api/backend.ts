@@ -2,7 +2,7 @@
 // in-memory mock in tests and browser previews.
 
 import type {
-  AboutView,
+  AboutView, ResourceView,
   AnalysisView,
   NotebookCell,
   NotebookLanguage,
@@ -52,6 +52,8 @@ export interface Backend {
   setTrustAll(on: boolean): Promise<AnalysisView | null>;
   /** Version, and where settings and approvals are kept. */
   about(): Promise<AboutView>;
+  /** What the app and the programs it started use now. */
+  resources(): Promise<ResourceView>;
   /** Forget every approved piece of code, so Python and R steps ask for review again. */
   forgetApprovals(): Promise<AnalysisView | null>;
   /** Resolves when the run ends; progress arrives through `onStep`. */

@@ -400,6 +400,24 @@ export interface PythonPackage {
 }
 
 /** Where the app keeps what is yours, and what it holds. */
+/** One kind of process and what all of that kind use together. */
+export interface ResourcePart {
+  name: "App" | "Python" | "R" | "Web view" | "Other";
+  count: number;
+  /** Percent of the whole computer's processing power. */
+  cpu: number;
+  memory_bytes: number;
+}
+
+export interface ResourceView {
+  /** Percent of the whole computer's processing power, all parts together. */
+  cpu: number;
+  memory_bytes: number;
+  parts: ResourcePart[];
+  cores: number;
+  total_memory_bytes: number;
+}
+
 export interface AboutView {
   version: string;
   settings_path: string | null;

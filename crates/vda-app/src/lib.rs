@@ -13,6 +13,7 @@ mod external;
 pub use external::{ExternalView, SyncView};
 pub use console::{ConsoleReply, ConsoleView, ObjectView, TablePreview};
 mod history;
+pub mod monitor;
 pub mod refresh;
 mod settings;
 pub use comments::CommentView;

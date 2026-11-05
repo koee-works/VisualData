@@ -21,6 +21,8 @@ struct Shared {
     /// Interrupts the code running in the console.
     console_cancel: Mutex<Option<Arc<AtomicBool>>>,
     startup: Option<String>,
+    /// Reads resource use; separate from `app` so a long run does not block it.
+    monitor: Mutex<vda_app::monitor::Monitor>,
 }
 
 type Res<T> = Result<T, AppError>;
@@ -237,6 +239,13 @@ async fn about(s: State<'_, Shared>) -> Res<vda_app::AboutView> {
     with(&s, |a| a.about())
 }
 
+/// What the app and the programs it started use. Not behind the project's
+/// lock, so it answers during a long run.
+#[tauri::command]
+async fn resources(s: State<'_, Shared>) -> Res<vda_app::monitor::ResourceView> {
+    Ok(s.monitor.lock().map_err(|_| "the resource monitor stopped".to_string())?.sample())
+}
+
 #[tauri::command]
 async fn forget_approvals(s: State<'_, Shared>) -> Res<Option<AnalysisView>> {
     with(&s, |a| a.forget_approvals())
@@ -405,6 +414,7 @@ fn main() {
             cancel: Mutex::new(None),
             console_cancel: Mutex::new(None),
             startup: startup_project_arg(),
+            monitor: Mutex::new(vda_app::monitor::Monitor::default()),
         })
         .invoke_handler(tauri::generate_handler![
             startup_project,
@@ -421,6 +431,7 @@ fn main() {
             update_source,
             set_trust_all,
             about,
+            resources,
             forget_approvals,
             create_project,
             open_project,
