@@ -158,7 +158,7 @@
                   <button
                     class="btn btn-quiet !min-h-6 !min-w-6 justify-center !px-1.5"
                     title="Dismiss these notes; saved with the project"
-                    aria-label="Dismiss"
+                    aria-label="Dismiss these notes"
                     onclick={async () => {
                       for (const g of row.group) await ws.dismiss(g);
                     }}
@@ -190,7 +190,7 @@
                   <button
                     class="btn btn-quiet !min-h-6 !px-1.5 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100"
                     title="Dismiss for this step; saved with the project"
-                    aria-label="Dismiss"
+                    aria-label="Dismiss for this step"
                     onclick={() => ws.dismiss(p)}
                   >
                     <EyeOff size={14} />

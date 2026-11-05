@@ -1,15 +1,18 @@
 <script lang="ts">
-  import { untrack } from "svelte";
+  import { untrack, type Snippet } from "svelte";
   import type { Cell, Column, Page } from "../api/types";
   import { columnDecimals, exactCell, formatCell, formatCount, isNumericType, typeLabel } from "../format";
 
   let {
     fetchPage,
     resetKey,
+    empty,
   }: {
     fetchPage: (offset: number, limit: number) => Promise<Page>;
     /** Changing this discards cached pages (new result, new revision). */
     resetKey: string;
+    /** Shown when there are no rows: says why, and what to do. */
+    empty?: Snippet;
   } = $props();
 
   const ROW_H = 26;
@@ -110,7 +113,11 @@
 {:else if !loaded}
   <p class="p-4 text-sm text-ink-faint">Loading rows…</p>
 {:else if total === 0}
-  <p class="p-4 text-sm text-ink-soft">No rows. Every row was filtered out or the input is empty.</p>
+  {#if empty}
+    {@render empty()}
+  {:else}
+    <p class="p-4 text-sm text-ink-soft">No rows.</p>
+  {/if}
 {:else}
   <div class="grid-wrap flex h-full flex-col" role="table" aria-rowcount={total + 1} aria-colcount={columns.length}>
     <div class="row head" role="row" bind:this={headEl} style:grid-template-columns={template}>

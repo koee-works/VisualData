@@ -313,9 +313,11 @@
             <button
               class="btn btn-quiet mt-0.5 !min-h-7 !min-w-7 shrink-0 justify-center !px-1 text-ink-faint hover:text-failed"
               aria-label="Delete step {stepTitle(s)}"
-              title={readers ? "Another step reads this one. Remove or repoint that step first." : "Delete this step"}
-              disabled={readers || ws.running}
-              onclick={() => ws.removeStep(s.id)}
+              class:opacity-50={readers}
+              aria-disabled={readers}
+              title={readers ? "Another step reads this one. Click to see which." : "Delete this step"}
+              disabled={ws.running}
+              onclick={() => ws.deleteStepOrExplain(s.id)}
             >
               <X size={14} />
             </button>

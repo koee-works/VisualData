@@ -412,7 +412,7 @@ def joins(s, shots):
     s.screenshot(f"{shots}/13-console.png")
     # The list refreshes after each run; count it once it has settled.
     before = s.settled_count(problems + "/li")
-    s.click(f"({problems}/li[contains(., 'not read by another step')]//button[@aria-label='Dismiss'])[1]")
+    s.click(f"({problems}/li[contains(., 'not read by another step')]//button[@aria-label='Dismiss these notes'])[1]")
     s.wait_text("//section[@aria-label='Activity']", "dismissed")
     s.wait_count(problems + "/li", before - 1)
     s.click("//section[@aria-label='Activity']//button[normalize-space()='Run log']")

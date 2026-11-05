@@ -89,6 +89,51 @@ describe("Workspace", () => {
     expect(ws.error).toBeNull();
   });
 
+  it("says a deleted step is gone and offers Undo, then Redo", async () => {
+    const ws = await workspace();
+    await ws.addStep(filter);
+    await ws.addStep(aggregate);
+    const title = stepTitle(ws.view!.steps[1]!);
+    await ws.deleteStepOrExplain("aggregate_1");
+    expect(ws.view!.steps.map((s) => s.id)).toEqual(["filter_1"]);
+    expect(ws.notice).toBe(`Deleted ${title}.`);
+    expect(ws.noticeAction?.label).toBe("Undo");
+    await ws.noticeAction!.run();
+    expect(ws.view!.steps.map((s) => s.id)).toEqual(["filter_1", "aggregate_1"]);
+    expect(ws.notice).toContain("Undid");
+    expect(ws.noticeAction?.label).toBe("Redo");
+    await ws.noticeAction!.run();
+    expect(ws.view!.steps.map((s) => s.id)).toEqual(["filter_1"]);
+  });
+
+  it("explains which step reads one that cannot be deleted, and goes there", async () => {
+    const ws = await workspace();
+    await ws.addStep(filter);
+    await ws.addStep(aggregate);
+    const reader = stepTitle(ws.view!.steps[1]!);
+    ws.selected = "filter_1";
+    ws.centerTab = "notebook";
+    await ws.deleteStepOrExplain("filter_1");
+    expect(ws.view!.steps).toHaveLength(2);
+    expect(ws.error).toBeNull();
+    expect(ws.notice).toContain(`${reader} reads it`);
+    expect(ws.noticeAction?.label).toBe(`Go to ${reader}`);
+    await ws.noticeAction!.run();
+    expect(ws.selected).toBe("aggregate_1");
+    expect(ws.centerTab).toBe("step");
+  });
+
+  it("drops the notice button when a plain message replaces it", async () => {
+    const ws = await workspace();
+    ws.announce("Something happened.", { label: "Do it", run: () => {} });
+    expect(ws.noticeAction?.label).toBe("Do it");
+    ws.notice = "Something else.";
+    expect(ws.noticeAction).toBeNull();
+    ws.announce("Again.", { label: "Do it", run: () => {} });
+    ws.notice = null;
+    expect(ws.noticeAction).toBeNull();
+  });
+
   it("cancels a run in progress", async () => {
     const backend = new MockBackend();
     backend.stepDelay = 20;

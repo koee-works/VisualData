@@ -148,7 +148,20 @@
       {#if ws.notice && !ws.error}
         <div class="flex items-start gap-3 border-b border-fresh/40 bg-fresh-wash px-4 py-2 text-sm" role="status">
           <p class="min-w-0 flex-1 truncate" title={ws.notice}>{ws.notice}</p>
-          <button class="btn btn-quiet !min-h-6 !min-w-6 justify-center !px-1" aria-label="Dismiss" onclick={() => (ws.notice = null)}><X size={14} /></button>
+          {#if ws.noticeAction}
+            <button
+              class="btn !min-h-6 shrink-0 !py-0 text-sm"
+              onclick={() => {
+                // Read it before clearing the message, which clears the action.
+                const action = ws.noticeAction;
+                ws.notice = null;
+                void action?.run();
+              }}
+            >
+              {ws.noticeAction.label}
+            </button>
+          {/if}
+          <button class="btn btn-quiet !min-h-6 !min-w-6 justify-center !px-1" aria-label="Dismiss message" onclick={() => (ws.notice = null)}><X size={14} /></button>
         </div>
       {/if}
       {#if ws.error}
