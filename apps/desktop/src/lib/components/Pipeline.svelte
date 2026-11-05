@@ -21,6 +21,7 @@
     ListTree,
     ShieldCheck,
     FlaskConical,
+    PaintBucket,
     MessageSquare,
   } from "@lucide/svelte";
   import type { Workspace } from "../workspace.svelte";
@@ -45,6 +46,7 @@
     unpivot: ListTree,
     check: ShieldCheck,
     test: FlaskConical,
+    clean: PaintBucket,
     sql: Braces,
     python: Code,
     r: Code,
@@ -132,6 +134,18 @@
           ? { type, test: "compare_groups", a: nums[0], b: cats[0] }
           : { type, test: "correlation", a: nums[0] ?? first, b: nums[1] ?? first };
       }
+      case "clean": {
+        // Start with a measure (not an identifier); the editor shows which columns have gaps.
+        const measure = cols.find((c) => (c.type === "BIGINT" || c.type === "DOUBLE") && !/(^|_)id$/i.test(c.name))?.name;
+        const target = measure ?? text ?? first;
+        return {
+          type,
+          markers: ["N/A", "NA"],
+          flag: true,
+          seed: 1,
+          columns: target ? [{ column: target, as_type: null, missing_when: null, group_by: [], fill: { method: measure ? "median" : "mode" } }] : [],
+        };
+      }
       case "check": {
         const key = cols.find((c) => /(^|_)id$/i.test(c.name))?.name ?? first;
         return {
@@ -159,6 +173,7 @@
     { type: "join", name: "Join with another table", hint: "Visual" },
     { type: "append", name: "Append another table's rows", hint: "Visual" },
     { type: "check", name: "Check data quality", hint: "Visual" },
+    { type: "clean", name: "Clean missing values", hint: "Visual" },
     { type: "test", name: "Statistical test", hint: "Visual" },
     { type: "chart", name: "Chart", hint: "Visual" },
     { type: "sql", name: "SQL", hint: "Code" },

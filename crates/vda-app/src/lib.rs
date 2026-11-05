@@ -645,6 +645,21 @@ impl App {
         Ok(self.session()?.check_report(step_id).map(|r| to_serde(&r.to_json())))
     }
 
+    /// What a Clean step found and filled on its last run.
+    pub fn clean_report(&mut self, step_id: &str) -> Result<Option<J>> {
+        Ok(self.session()?.clean_report(step_id).map(|r| to_serde(&r.to_json())))
+    }
+
+    /// Test ways of filling one column of a Clean step, as drafted in the
+    /// editor (`op`), by hiding some known values and filling them.
+    pub fn compare_fills(&mut self, step_id: &str, op: &J, column: &str) -> Result<J> {
+        let kind = persist::step_kind_from_json(&from_serde(op)?)?;
+        let s = self.session()?;
+        let Some(step) = s.analysis.step(step_id).cloned() else { return fail(format!("unknown step `{step_id}`")) };
+        let draft = Step { kind, ..step };
+        Ok(to_serde(&s.compare_fills(&draft, column)?.to_json()))
+    }
+
     pub fn source_profile(&mut self, source_id: &str) -> Result<Vec<ProfileRow>> {
         let profile = self.session()?.source_profile(source_id)?;
         Ok(profile

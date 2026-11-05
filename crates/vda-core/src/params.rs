@@ -262,6 +262,13 @@ pub fn bind_step(step: &Step, params: &[Parameter]) -> Step {
             }
         }
         StepKind::Sql { sql } => *sql = bind_sql(sql, params),
+        StepKind::Clean { columns, .. } => {
+            for c in columns {
+                if let Some(f) = &mut c.missing_when {
+                    *f = bind_formula(f, params);
+                }
+            }
+        }
         StepKind::Check { rules, .. } => {
             for r in rules {
                 if let Some(f) = r.formula_mut() {

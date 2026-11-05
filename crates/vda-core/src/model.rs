@@ -152,6 +152,15 @@ pub enum StepKind {
     /// Visual: a statistical test of columns `a` and `b` (see [`TestKind`]),
     /// giving one row: the statistic, the p-value and a sentence reading it.
     Test { test: TestKind, a: String, b: String },
+    /// Visual: find missing values in some columns (empty cells, values that
+    /// stand for missing such as "N/A" or -999, and rows a formula picks
+    /// out) and fill them in, each column its own way (see clean.rs).
+    /// `markers` apply to every listed column; `flag` adds a `<column>_missing`
+    /// column per listed column; `seed` makes random draws repeatable.
+    /// `internal` (set by the app, never saved) keeps dropped rows and adds
+    /// the columns its report is counted from (`__vda_r`, `__vda_w<n>`,
+    /// `__vda_drop`).
+    Clean { markers: Vec<String>, columns: Vec<CleanColumn>, flag: bool, seed: u64, internal: bool },
     /// Custom SQL. Reads the first input as the relation `input`, and every
     /// input by its id.
     Sql { sql: String },
@@ -183,6 +192,7 @@ impl StepKind {
             StepKind::Unpivot { .. } => "unpivot",
             StepKind::Check { .. } => "check",
             StepKind::Test { .. } => "test",
+            StepKind::Clean { .. } => "clean",
             StepKind::Sql { .. } => "sql",
             StepKind::Python { .. } => "python",
             StepKind::R { .. } => "r",
@@ -208,6 +218,7 @@ impl StepKind {
                 | StepKind::Unpivot { .. }
                 | StepKind::Check { .. }
                 | StepKind::Test { .. }
+                | StepKind::Clean { .. }
                 | StepKind::Chart { .. }
         )
     }
@@ -282,6 +293,89 @@ pub struct Pick {
     pub column: String,
     /// New name, if renamed.
     pub rename: Option<String>,
+}
+
+/// One column a Clean step looks at.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CleanColumn {
+    pub column: String,
+    /// Read a text column as numbers (`Float`), whole numbers (`Int`) or
+    /// dates first; values that don't convert count as missing.
+    pub as_type: Option<crate::table::DataType>,
+    /// A formula over the input row: where it is true, the value counts as
+    /// missing too (`[age] < 0`).
+    pub missing_when: Option<String>,
+    pub fill: Fill,
+    /// Fill within groups of these columns (the mean per region). Random
+    /// draws and previous or next values also stay within a group.
+    pub group_by: Vec<String>,
+}
+
+impl CleanColumn {
+    pub fn new(column: impl Into<String>, fill: Fill) -> Self {
+        CleanColumn { column: column.into(), as_type: None, missing_when: None, fill, group_by: vec![] }
+    }
+}
+
+/// How a Clean step fills a column's missing values. Each is computed from
+/// the values found (after markers, conditions and conversion), within the
+/// column's groups.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Fill {
+    /// Only find them: missing values stay missing.
+    Keep,
+    /// The average of the known values (rounded for whole numbers).
+    Mean,
+    /// The middle known value (halfway between the two middle ones).
+    Median,
+    /// The most common known value; ties go to the smallest.
+    Mode,
+    /// A fixed value, as typed (read as the column's type).
+    Constant { value: String },
+    /// A known value drawn at random (repeatably, from the step's seed), so
+    /// the column keeps its spread of values.
+    Random,
+    /// The last known value before it, in this order (then input order).
+    Previous { order_by: Vec<SortKey> },
+    /// The next known value after it, in this order (then input order).
+    Next { order_by: Vec<SortKey> },
+    /// A straight line fitted to the rows where it and every predictor are
+    /// known (least squares, with an intercept).
+    Regression { predictors: Vec<String> },
+    /// The `k` most similar rows by the predictors (standardized distance):
+    /// their average, or their most common value for text.
+    Neighbours { predictors: Vec<String>, k: u32 },
+    /// Drop rows where the value is missing.
+    DropRows,
+    /// What a regression resolves to when the step runs (never saved).
+    Linear { intercept: f64, terms: Vec<(String, f64)> },
+    /// What nearest neighbours resolve to: row number (from 1, in input
+    /// order) → value (never saved).
+    Rows { values: Vec<(u64, Value)> },
+}
+
+impl Fill {
+    pub const NAMES: [&'static str; 11] =
+        ["keep", "mean", "median", "mode", "constant", "random", "previous", "next", "regression", "neighbours", "drop"];
+    pub fn name(&self) -> &'static str {
+        match self {
+            Fill::Keep => "keep",
+            Fill::Mean => "mean",
+            Fill::Median => "median",
+            Fill::Mode => "mode",
+            Fill::Constant { .. } => "constant",
+            Fill::Random => "random",
+            Fill::Previous { .. } => "previous",
+            Fill::Next { .. } => "next",
+            Fill::Regression { .. } | Fill::Linear { .. } => "regression",
+            Fill::Neighbours { .. } | Fill::Rows { .. } => "neighbours",
+            Fill::DropRows => "drop",
+        }
+    }
+    /// Whether the fill is fitted to the data before the step runs.
+    pub fn is_fitted(&self) -> bool {
+        matches!(self, Fill::Regression { .. } | Fill::Neighbours { .. })
+    }
 }
 
 /// The statistical tests: what `a` and `b` of a test step are.

@@ -106,6 +106,8 @@ struct Writer<'a> {
     written: &'a Analysis,
     schemas: HashMap<String, Schema>,
     charts: HashMap<String, Json>,
+    /// Clean steps with their fitted fills worked out.
+    resolved: HashMap<String, Step>,
     done: HashSet<String>,
     cells: Vec<Json>,
 }
@@ -279,9 +281,13 @@ impl Writer<'_> {
             }
             _ => {
                 let schemas = self.input_schemas(step)?;
+                let (step, note) = match self.resolved.get(id) {
+                    Some(r) => (r, "# The regression's coefficients and the neighbours' values are as the app fitted them to this step's input.\n"),
+                    None => (step, ""),
+                };
                 let sql = step_sql_for(step, &schemas)?.ok_or_else(|| Error::Unsupported(format!("step `{id}` has no SQL form")))?;
                 format!(
-                    "{input_view}con.sql({} + {})\n{show}",
+                    "{note}{input_view}con.sql({} + {})\n{show}",
                     py(&format!("CREATE OR REPLACE TABLE {} AS SELECT * FROM (", quote_ident(id))),
                     py_sql(&format!("{sql}\n)"))
                 )
@@ -297,6 +303,14 @@ pub fn notebook(session: &mut Session) -> Result<Json, Error> {
     let mut schemas = HashMap::new();
     let mut charts = HashMap::new();
     let ids: Vec<String> = a.sources.iter().map(|s| s.id.clone()).chain(a.steps.iter().map(|s| s.id.clone())).collect();
+    let mut resolved = HashMap::new();
+    for step in &a.steps {
+        if let StepKind::Clean { columns, .. } = &step.kind {
+            if columns.iter().any(|c| c.fill.is_fitted()) {
+                resolved.insert(step.id.clone(), session.resolved_clean(&step.id)?);
+            }
+        }
+    }
     for id in ids {
         if let Some(s) = session.schema_of(&id) {
             schemas.insert(id.clone(), s);
@@ -381,7 +395,7 @@ pub fn notebook(session: &mut Session) -> Result<Json, Error> {
     }
 
     let written = session.analysis.clone();
-    let mut w = Writer { a: &a, written: &written, schemas, charts, done: HashSet::new(), cells: vec![markdown(&format!("# {}", a.name)), code(&setup), code(&sources)] };
+    let mut w = Writer { a: &a, written: &written, schemas, charts, resolved, done: HashSet::new(), cells: vec![markdown(&format!("# {}", a.name)), code(&setup), code(&sources)] };
     for cell in &a.cells {
         match cell {
             Cell::Markdown { text } => w.cells.push(markdown(text.trim())),

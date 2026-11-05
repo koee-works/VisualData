@@ -120,6 +120,7 @@ export type StepOp =
   | { type: "unpivot"; columns: string[]; name: string; value: string }
   | { type: "check"; stop: boolean; rules: Rule[] }
   | { type: "test"; test: TestKind; a: string; b: string }
+  | { type: "clean"; markers: string[]; columns: CleanColumn[]; flag: boolean; seed: number }
   | { type: "sql"; sql: string }
   | { type: "python"; code: string; timeout_ms: number }
   | { type: "r"; code: string; timeout_ms: number }
@@ -134,6 +135,76 @@ export type StepOp =
       /** One value per x (and color), computed over every row. */
       summary?: AggFunc | null;
     };
+
+/** How a Clean step fills one column's missing values (clean.rs). */
+export type Fill =
+  | { method: "keep" }
+  | { method: "mean" }
+  | { method: "median" }
+  | { method: "mode" }
+  | { method: "constant"; value: string }
+  | { method: "random" }
+  | { method: "previous"; order_by: SortKey[] }
+  | { method: "next"; order_by: SortKey[] }
+  | { method: "regression"; predictors: string[] }
+  | { method: "neighbours"; predictors: string[]; k: number }
+  | { method: "drop" };
+export type FillMethod = Fill["method"];
+
+/** One column a Clean step looks at. */
+export interface CleanColumn {
+  column: string;
+  /** Read text as numbers, whole numbers or dates first. */
+  as_type: "DOUBLE" | "BIGINT" | "DATE" | null;
+  /** Where this formula is true the value counts as missing too. */
+  missing_when: string | null;
+  /** Fill within groups of these columns. */
+  group_by: string[];
+  fill: Fill;
+}
+
+export interface CleanColumnReport {
+  column: string;
+  empty: number;
+  markers: number;
+  condition: number;
+  conversion: number;
+  filled: number;
+  left: number;
+  method: FillMethod;
+  detail: string;
+}
+
+export interface CleanReport {
+  kind: "clean";
+  rows: number;
+  dropped: number;
+  columns: CleanColumnReport[];
+}
+
+/** How one fill method did on hidden known values. */
+export interface MethodScore {
+  fill: Fill;
+  label: string;
+  filled: number;
+  /** Numbers: average and root-mean-square distance from the truth. */
+  mae: number | null;
+  rmse: number | null;
+  /** Other types: share filled exactly right. */
+  accuracy: number | null;
+  /** Share of the true values' spread the fills keep (1 = all of it). */
+  spread: number | null;
+  problem: string | null;
+}
+
+export interface Comparison {
+  column: string;
+  rows: number;
+  known: number;
+  hidden: number;
+  predictors: string[];
+  methods: MethodScore[];
+}
 
 /** compare_means: Welch's t-test of `a` between the two groups of `b`;
  * compare_groups: one-way ANOVA; independence: chi-square of categories

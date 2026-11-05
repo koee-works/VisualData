@@ -13,6 +13,8 @@ import type {
   StepEvent,
   StepOp,
   CheckReport,
+  CleanReport,
+  Comparison,
   ColumnDetail,
   Parameter, Comment, Every, PythonView, RView, ConsoleView, ConsoleReply, ExternalView, SyncView, ScheduleView, VersionView } from "./types";
 
@@ -71,6 +73,10 @@ export interface Backend {
   renameParameter(old: string, name: string): Promise<[AnalysisView, string[]]>;
   /** The last report of a check step. */
   checkReport(stepId: string): Promise<CheckReport | null>;
+  /** What a Clean step found and filled on its last run. */
+  cleanReport(stepId: string): Promise<CleanReport | null>;
+  /** Hide some known values of `column`, fill them by each method, and score each (for the step as drafted). */
+  compareFills(stepId: string, op: StepOp, column: string): Promise<Comparison>;
   /** Columns of a source or step result with averages, spread, common values. */
   columnDetails(id: string): Promise<ColumnDetail[]>;
   /** Write a Jupyter notebook that reproduces the analysis. */

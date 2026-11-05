@@ -14,6 +14,8 @@ import type {
   StepEvent,
   StepOp,
   CheckReport,
+  CleanReport,
+  Comparison,
   ColumnDetail, Comment, PythonView, RView, ConsoleView, ConsoleReply, ExternalView, SyncView, ScheduleView, VersionView } from "./types";
 
 /** Commands registered in apps/desktop/src-tauri/src/main.rs. */
@@ -84,6 +86,8 @@ export const tauriBackend: Backend = {
   setParameters: (params) => invoke<AnalysisView>("set_parameters", { params }),
   renameParameter: (old, name) => invoke<[AnalysisView, string[]]>("rename_parameter", { old, new: name }),
   checkReport: (stepId) => invoke<CheckReport | null>("check_report", { stepId }),
+  cleanReport: (stepId) => invoke<CleanReport | null>("clean_report", { stepId }),
+  compareFills: (stepId, op, column) => invoke<Comparison>("compare_fills", { stepId, op, column }),
   columnDetails: (id) => invoke<ColumnDetail[]>("column_details", { id }),
   exportNotebook: (path) => invoke<void>("export_notebook", { path }),
   saveReport: (path, html) => invoke<void>("save_report", { path, html }),

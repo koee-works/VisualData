@@ -54,6 +54,24 @@ pub fn value_from_json(j: &Json) -> Result<Value, Error> {
 
 /// The executable meaning of a step, excluding display-only fields. Used for
 /// cache keys, so a rename never invalidates results.
+/// A Clean step's fill as saved: `{"method": "median"}` and its settings.
+pub fn fill_to_json(f: &Fill) -> Json {
+    let mut fill = vec![("method", Json::str(f.name()))];
+    match f {
+        Fill::Constant { value } => fill.push(("value", Json::str(value.clone()))),
+        Fill::Previous { order_by } | Fill::Next { order_by } => fill.push(("order_by", sort_keys(order_by))),
+        Fill::Regression { predictors } => fill.push(("predictors", strs(predictors))),
+        Fill::Neighbours { predictors, k } => {
+            fill.push(("predictors", strs(predictors)));
+            fill.push(("k", Json::Num(*k as f64)));
+        }
+        // Resolved fills are never saved; keep what can be recovered.
+        Fill::Linear { terms, .. } => fill.push(("predictors", strs(&terms.iter().map(|t| t.0.clone()).collect::<Vec<_>>()))),
+        _ => {}
+    }
+    Json::obj(fill)
+}
+
 fn strs(v: &[String]) -> Json {
     Json::Arr(v.iter().map(|s| Json::str(s.clone())).collect())
 }
@@ -234,6 +252,29 @@ pub fn step_kind_to_json(kind: &StepKind) -> Json {
             ("name", Json::str(name.clone())),
             ("value", Json::str(value.clone())),
         ]),
+        StepKind::Clean { markers, columns, flag, seed, .. } => Json::obj(vec![
+            ("type", Json::str("clean")),
+            ("markers", strs(markers)),
+            ("flag", Json::Bool(*flag)),
+            ("seed", Json::Num(*seed as f64)),
+            (
+                "columns",
+                Json::Arr(
+                    columns
+                        .iter()
+                        .map(|c| {
+                            Json::obj(vec![
+                                ("column", Json::str(c.column.clone())),
+                                ("as_type", c.as_type.map(|t| Json::str(t.name())).unwrap_or(Json::Null)),
+                                ("missing_when", c.missing_when.clone().map(Json::Str).unwrap_or(Json::Null)),
+                                ("group_by", strs(&c.group_by)),
+                                ("fill", fill_to_json(&c.fill)),
+                            ])
+                        })
+                        .collect(),
+                ),
+            ),
+        ]),
         StepKind::Test { test, a, b } => Json::obj(vec![
             ("type", Json::str("test")),
             ("test", Json::str(test.name())),
@@ -408,6 +449,46 @@ pub fn step_kind_from_json(j: &Json) -> Result<StepKind, Error> {
             columns: read_strs(j, "columns")?,
             name: j.req_str("name")?.to_string(),
             value: j.req_str("value")?.to_string(),
+        },
+        "clean" => StepKind::Clean {
+            markers: read_strs(j, "markers")?,
+            flag: j.get("flag") == Some(&Json::Bool(true)),
+            seed: j.get("seed").and_then(Json::as_f64).unwrap_or(1.0) as u64,
+            internal: false,
+            columns: j
+                .req_arr("columns")?
+                .iter()
+                .map(|c| {
+                    let f = c.get("fill").ok_or_else(|| Error::Format("a cleaned column has no fill".into()))?;
+                    let fill = match f.req_str("method")? {
+                        "keep" => Fill::Keep,
+                        "mean" => Fill::Mean,
+                        "median" => Fill::Median,
+                        "mode" => Fill::Mode,
+                        "constant" => Fill::Constant { value: f.req_str("value")?.to_string() },
+                        "random" => Fill::Random,
+                        "previous" => Fill::Previous { order_by: read_sort_keys(f, "order_by")? },
+                        "next" => Fill::Next { order_by: read_sort_keys(f, "order_by")? },
+                        "regression" => Fill::Regression { predictors: read_strs(f, "predictors")? },
+                        "neighbours" => Fill::Neighbours {
+                            predictors: read_strs(f, "predictors")?,
+                            k: f.get("k").and_then(Json::as_f64).unwrap_or(5.0) as u32,
+                        },
+                        "drop" => Fill::DropRows,
+                        m => return Err(Error::Format(format!("unknown way to fill missing values `{m}`"))),
+                    };
+                    Ok(CleanColumn {
+                        column: c.req_str("column")?.to_string(),
+                        as_type: match c.get("as_type").and_then(Json::as_str) {
+                            Some(t) => Some(crate::table::DataType::parse(t).ok_or_else(|| Error::Format(format!("unknown type `{t}`")))?),
+                            None => None,
+                        },
+                        missing_when: c.get("missing_when").and_then(Json::as_str).map(str::to_string),
+                        group_by: read_strs(c, "group_by")?,
+                        fill,
+                    })
+                })
+                .collect::<Result<_, Error>>()?,
         },
         "test" => StepKind::Test {
             test: crate::model::TestKind::parse(j.req_str("test")?).ok_or_else(|| Error::Format("unknown statistical test".into()))?,

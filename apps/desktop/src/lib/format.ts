@@ -161,6 +161,7 @@ export const kindWords: Record<StepOp["type"], string> = {
   append: "Append",
   check: "Check",
   test: "Test",
+  clean: "Clean",
   chart: "Chart",
   sql: "SQL",
   python: "Python",
@@ -228,6 +229,46 @@ export function describe(op: StepOp): string {
       return op.rules.length === 1 ? "Check 1 rule" : `Check ${op.rules.length} rules`;
     case "test":
       return testSentence(op.test, op.a, op.b);
+    case "clean":
+      return cleanSentence(op);
+  }
+}
+
+/** A Clean step in words (the same wording as describe.rs). */
+function cleanSentence(op: Extract<StepOp, { type: "clean" }>): string {
+  const cols = op.columns;
+  if (!cols.length) return "Clean missing values";
+  if (cols.length > 1) {
+    const names = cols.map((c) => c.column);
+    return names.length > 3 ? `Clean ${names.slice(0, 2).join(", ")} and ${names.length - 2} more` : `Clean ${names.join(", ")}`;
+  }
+  const c = cols[0]!;
+  const name = c.column || "a column";
+  const per = c.group_by?.length ? ` per ${c.group_by.join(", ")}` : "";
+  const f = c.fill;
+  switch (f.method) {
+    case "keep":
+      return `Find missing ${name}`;
+    case "drop":
+      return `Drop rows with no ${name}`;
+    case "mean":
+      return `Fill missing ${name} with the mean${per}`;
+    case "median":
+      return `Fill missing ${name} with the median${per}`;
+    case "mode":
+      return `Fill missing ${name} with the most common value${per}`;
+    case "constant":
+      return `Fill missing ${name} with "${f.value}"`;
+    case "random":
+      return `Fill missing ${name} with a random known value${per}`;
+    case "previous":
+      return `Fill missing ${name} with the previous value`;
+    case "next":
+      return `Fill missing ${name} with the next value`;
+    case "regression":
+      return `Fill missing ${name} with a regression`;
+    case "neighbours":
+      return `Fill missing ${name} with nearest neighbours`;
   }
 }
 

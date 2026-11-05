@@ -21,6 +21,10 @@ import type {
   StepStateLabel,
   StepView,
   CheckReport,
+  CleanReport,
+  Comparison,
+  Fill,
+  MethodScore,
   ColumnDetail,
   Parameter,
   Comment,
@@ -467,7 +471,7 @@ export class MockBackend implements Backend {
         inputs: s.inputs,
         label: s.label,
         op: s.op,
-        mode: ["filter", "aggregate", "join", "append", "derive", "select", "sort", "window", "dedupe", "pivot", "unpivot", "check", "test"].includes(s.op.type)
+        mode: ["filter", "aggregate", "join", "append", "derive", "select", "sort", "window", "dedupe", "pivot", "unpivot", "check", "test", "clean"].includes(s.op.type)
           ? "visual"
           : (s.op.type as "sql" | "python" | "r" | "chart"),
         state: this.state(s),
@@ -536,6 +540,39 @@ export class MockBackend implements Backend {
 
   async checkReport(stepId: string): Promise<CheckReport | null> {
     return this.checkReports.get(stepId) ?? null;
+  }
+
+  cleanReports = new Map<string, CleanReport>();
+
+  async cleanReport(stepId: string): Promise<CleanReport | null> {
+    return this.cleanReports.get(stepId) ?? null;
+  }
+
+  async compareFills(stepId: string, op: StepOp, column: string): Promise<Comparison> {
+    const s = this.steps.find((x) => x.id === stepId);
+    if (!s || op.type !== "clean") throw { message: "only a Clean step compares fills" };
+    const input = this.inputOf(s.inputs[0]!);
+    if (!input) throw { message: `\`${s.inputs[0]}\` has no result yet; run the analysis first` };
+    const ci = input.columns.findIndex((c) => c.name === column);
+    const numeric = ci >= 0 && (input.columns[ci]!.type === "BIGINT" || input.columns[ci]!.type === "DOUBLE");
+    const known = input.rows.filter((r) => r[ci]?.t !== "null").length;
+    const hidden = Math.max(1, Math.ceil(known * 0.1));
+    const predictors = input.columns.filter((c) => c.name !== column && (c.type === "BIGINT" || c.type === "DOUBLE")).map((c) => c.name).slice(0, 5);
+    // A stand-in: real scores come from hiding values and filling them (clean.rs).
+    const m = (fill: Fill, label: string, mae: number, spread: number, problem: string | null = null): MethodScore =>
+      problem
+        ? { fill, label, filled: 0, mae: null, rmse: null, accuracy: null, spread: null, problem }
+        : { fill, label, filled: hidden, mae: numeric ? mae : null, rmse: numeric ? mae * 1.3 : null, accuracy: numeric ? null : 1 - mae / 200, spread, problem: null };
+    const methods: MethodScore[] = [
+      ...(numeric ? [m({ method: "mean" }, "Mean", 96.4, 0), m({ method: "median" }, "Median", 94.1, 0)] : []),
+      m({ method: "mode" }, "Most common", 110.2, 0),
+      m({ method: "random" }, "Random draw", 131.8, 0.97),
+      m({ method: "previous", order_by: [] }, "Previous value (row order)", 120.5, 0.92),
+      m({ method: "next", order_by: [] }, "Next value (row order)", 118.9, 0.95),
+      ...(numeric ? [m({ method: "regression", predictors }, "Regression", 61.7, 0.64, predictors.length ? null : "no number columns to predict from")] : []),
+      m({ method: "neighbours", predictors, k: 5 }, "5 nearest neighbours", 72.3, 0.71, predictors.length ? null : "no number columns to compare rows by"),
+    ];
+    return { column, rows: input.rows.length, known, hidden, predictors, methods };
   }
 
   async columnDetails(id: string): Promise<ColumnDetail[]> {
@@ -1005,6 +1042,83 @@ export class MockBackend implements Backend {
         }),
       );
       return { def: this.def(s.id), columns: input.columns, rows };
+    }
+    if (op.type === "clean") {
+      // A stand-in for clean.rs: markers, conversion, and simple fills.
+      const markers = op.markers.map((m) => m.trim().toLowerCase());
+      const rows = input.rows.map((r) => [...r]);
+      const columns = input.columns.map((c) => ({ ...c }));
+      const flags: Cell[][] = rows.map(() => []);
+      const report: CleanReport = { kind: "clean", rows: rows.length, dropped: 0, columns: [] };
+      const drop = new Set<number>();
+      for (const c of op.columns) {
+        const i = columns.findIndex((x) => x.name === c.column);
+        if (i < 0) throw new Error(`step \`${s.id}\`: no column \`${c.column}\``);
+        const rep = { column: c.column, empty: 0, markers: 0, condition: 0, conversion: 0, filled: 0, left: 0, method: c.fill.method, detail: "" };
+        if (c.as_type) columns[i]!.type = c.as_type;
+        const missing: number[] = [];
+        rows.forEach((r, k) => {
+          const v = r[i]!;
+          const text = v.t === "null" ? "" : String((v as { v: unknown }).v).trim();
+          let why = 0;
+          if (v.t === "null") why = 1;
+          else if (markers.includes(text.toLowerCase())) why = 2;
+          else if (c.as_type && c.as_type !== "DATE" && !Number.isFinite(Number(text))) why = 4;
+          if (why) {
+            r[i] = { t: "null" };
+            missing.push(k);
+            if (why === 1) rep.empty++;
+            else if (why === 2) rep.markers++;
+            else rep.conversion++;
+          } else if (c.as_type === "DOUBLE") r[i] = { t: "float", v: Number(text) };
+          else if (c.as_type === "BIGINT") r[i] = { t: "int", v: String(Math.round(Number(text))) };
+          flags[k]!.push({ t: "bool", v: why > 0 });
+        });
+        const known = rows.map((r) => r[i]!).filter((v) => v.t !== "null");
+        const nums = known.map(num).filter((x): x is number => x !== null).sort((a, b) => a - b);
+        let value: Cell | null = null;
+        const f = c.fill;
+        if (f.method === "mean" || f.method === "regression") {
+          const mean = nums.reduce((a, b) => a + b, 0) / Math.max(1, nums.length);
+          value = columns[i]!.type === "BIGINT" ? { t: "int", v: String(Math.round(mean)) } : { t: "float", v: mean };
+          rep.detail = f.method === "mean" ? `the mean, ${mean.toFixed(2)}` : `a line fitted on ${nums.length} rows (mock)`;
+        } else if (f.method === "median") {
+          const mid = nums.length ? (nums[Math.floor((nums.length - 1) / 2)]! + nums[Math.ceil((nums.length - 1) / 2)]!) / 2 : 0;
+          value = columns[i]!.type === "BIGINT" ? { t: "int", v: String(Math.round(mid)) } : { t: "float", v: mid };
+          rep.detail = `the median, ${mid}`;
+        } else if (f.method === "mode" || f.method === "neighbours" || f.method === "random") {
+          const counts = new Map<string, { c: Cell; n: number }>();
+          for (const v of known) {
+            const key = JSON.stringify(v);
+            counts.set(key, { c: v, n: (counts.get(key)?.n ?? 0) + 1 });
+          }
+          value = [...counts.values()].sort((a, b) => b.n - a.n)[0]?.c ?? null;
+          rep.detail = f.method === "mode" ? "the most common value" : f.method === "random" ? `a random known value (seed ${op.seed})` : "the most common value of the 5 most similar rows (mock)";
+        } else if (f.method === "constant") {
+          value = columns[i]!.type === "VARCHAR" ? { t: "text", v: f.value } : columns[i]!.type === "BIGINT" ? { t: "int", v: f.value } : { t: "float", v: Number(f.value) };
+          rep.detail = `"${f.value}"`;
+        }
+        for (const k of missing) {
+          if (f.method === "drop") drop.add(k);
+          else if (f.method === "previous" || f.method === "next") {
+            const step = f.method === "previous" ? -1 : 1;
+            let j = k + step;
+            while (j >= 0 && j < rows.length && rows[j]![i]!.t === "null") j += step;
+            if (j >= 0 && j < rows.length) rows[k]![i] = rows[j]![i]!;
+          } else if (value && f.method !== "keep") rows[k]![i] = value;
+          if (rows[k]![i]!.t === "null") rep.left++;
+          else rep.filled++;
+        }
+        if (f.method === "previous" || f.method === "next") rep.detail = `the ${f.method} known value (in row order)`;
+        if (f.method === "keep") rep.detail = "nothing (left missing)";
+        if (f.method === "drop") rep.detail = "nothing (rows dropped)";
+        report.columns.push(rep);
+      }
+      if (op.flag) for (const c of op.columns) columns.push({ name: `${c.column}_missing`, type: "BOOLEAN" });
+      const kept = rows.map((r, k) => (op.flag ? [...r, ...flags[k]!] : r)).filter((_, k) => !drop.has(k));
+      report.dropped = drop.size;
+      this.cleanReports.set(s.id, report);
+      return { def: this.def(s.id), columns, rows: kept };
     }
     if (op.type === "test") {
       // A stand-in: real statistics are computed in Rust (stat_test.rs).

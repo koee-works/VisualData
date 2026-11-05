@@ -24,7 +24,8 @@
   import TestEditor from "./TestEditor.svelte";
   import Comments from "./Comments.svelte";
   import CheckEditor from "./CheckEditor.svelte";
-  import type { CheckReport } from "../api/types";
+  import CleanEditor from "./CleanEditor.svelte";
+  import type { CheckReport, CleanReport, ColumnDetail } from "../api/types";
 
   let { ws, step }: { ws: Workspace; step: StepView } = $props();
 
@@ -108,6 +109,22 @@
       return;
     }
     ws.backend.checkReport(id).then((r) => id === step.id && (report = r), () => (report = null));
+  });
+  // A Clean step's last report, and its input's columns with missing counts.
+  let cleanReport = $state<CleanReport | null>(null);
+  let inputDetails = $state<ColumnDetail[] | null>(null);
+  $effect(() => {
+    void ws.revision;
+    const id = step.id;
+    const from = inputs[0]!;
+    if (step.op.type !== "clean") {
+      cleanReport = null;
+      inputDetails = null;
+      return;
+    }
+    if (step.state === "not run") cleanReport = null;
+    else ws.backend.cleanReport(id).then((r) => id === step.id && (cleanReport = r), () => (cleanReport = null));
+    ws.backend.columnDetails(from).then((d) => id === step.id && (inputDetails = d), () => (inputDetails = null));
   });
   let byField = $derived.by(() => {
     const m: Record<string, Problem[]> = {};
@@ -260,6 +277,18 @@
       <UnpivotEditor bind:picked={draft.columns} bind:name={draft.name} bind:value={draft.value} columns={inputColumns} />
     {:else if draft.type === "test"}
       <TestEditor bind:test={draft.test} bind:a={draft.a} bind:b={draft.b} columns={inputColumns} />
+    {:else if draft.type === "clean"}
+      <CleanEditor
+        bind:markers={draft.markers}
+        bind:columns={draft.columns}
+        bind:flag={draft.flag}
+        bind:seed={draft.seed}
+        {inputColumns}
+        details={inputDetails}
+        parameters={ws.view?.parameters ?? []}
+        report={dirty ? null : cleanReport}
+        compare={(column) => ws.backend.compareFills(step.id, $state.snapshot(draft) as StepOp, column)}
+      />
     {:else if draft.type === "check"}
       <CheckEditor bind:rules={draft.rules} bind:stop={draft.stop} columns={inputColumns} parameters={ws.view?.parameters ?? []} problems={byField} report={dirty ? null : report} />
     {:else if draft.type === "append"}

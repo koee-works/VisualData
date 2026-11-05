@@ -111,6 +111,7 @@ pub fn step_sql(kind: &StepKind) -> Option<String> {
         | StepKind::Python { .. }
         | StepKind::R { .. }
         | StepKind::Test { .. }
+        | StepKind::Clean { .. }
         | StepKind::Chart { .. } => None,
     }
 }
@@ -320,6 +321,10 @@ pub fn step_sql_for(step: &Step, inputs: &[Schema]) -> Result<Option<String>, Er
                 );
             }
             Ok(Some(sql))
+        }
+        StepKind::Clean { .. } => {
+            let input = inputs.first().ok_or_else(|| Error::Validation(format!("step `{}` has no input", step.id)))?;
+            Ok(Some(crate::clean::sql(step, input)?))
         }
         kind => Ok(step_sql(kind)),
     }
@@ -821,6 +826,7 @@ pub fn output_schema(step: &Step, inputs: &[Schema]) -> Result<Option<Schema>, E
             Ok(None)
         }
         StepKind::Test { .. } => Ok(Some(crate::stat_test::validate(step, input)?)),
+        StepKind::Clean { .. } => Ok(Some(crate::clean::validate(step, input)?)),
         StepKind::Chart { .. } => {
             crate::chart::validate(step, input)?;
             Ok(None)
@@ -867,7 +873,8 @@ pub fn pipeline_sql_with(
                 | StepKind::Window { .. }
                 | StepKind::Dedupe { .. }
                 | StepKind::Pivot { .. }
-                | StepKind::Unpivot { .. },
+                | StepKind::Unpivot { .. }
+                | StepKind::Clean { .. },
                 None,
             ) => Err(Error::Unsupported(format!(
                 "step `{}`: its SQL is shown once its inputs have run",
@@ -920,7 +927,8 @@ pub fn pipeline_sql_with(
             return Ok(());
         }
         let step = a.step(id).ok_or_else(|| Error::Validation(format!("unknown step `{id}`")))?;
-        if let StepKind::Python { .. } | StepKind::R { .. } | StepKind::Test { .. } = step.kind {
+        let fitted = matches!(&step.kind, StepKind::Clean { columns, .. } if columns.iter().any(|c| c.fill.is_fitted()));
+        if fitted || matches!(step.kind, StepKind::Python { .. } | StepKind::R { .. } | StepKind::Test { .. }) {
             ctes.push(format!(
                 "{} AS (SELECT * FROM {} /* materialized output of {} step `{id}` */)",
                 quote_ident(id),
@@ -928,6 +936,7 @@ pub fn pipeline_sql_with(
                 match step.kind {
                     StepKind::Python { .. } => "Python",
                     StepKind::R { .. } => "R",
+                    StepKind::Clean { .. } => "clean",
                     _ => "test",
                 }
             ));

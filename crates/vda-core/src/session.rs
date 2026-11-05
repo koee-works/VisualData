@@ -601,6 +601,57 @@ impl Session {
         self.engine.profile(&ds)
     }
 
+    /// Test ways of filling `column` for a Clean step (as drafted, which may
+    /// differ from the saved one): hide some known values, fill them by each
+    /// method, and score each. Reads the step's input as it was last run.
+    pub fn compare_fills(&mut self, draft: &crate::model::Step, column: &str) -> Result<crate::clean::Comparison, Error> {
+        let step = crate::params::bind_step(draft, &self.analysis.parameters);
+        let input = step.input().to_string();
+        let ds = if self.analysis.is_source(&input) {
+            self.source_dataset(&input)?
+        } else {
+            self.output(&input).and_then(Output::as_dataset).cloned().ok_or_else(|| {
+                Error::Validation(format!("`{input}` has no result yet; run the analysis first"))
+            })?
+        };
+        let artifacts = &self.artifacts;
+        let mut n = 0;
+        let mut scratch = || {
+            n += 1;
+            artifacts.temp_path(&format!("compare-{}-{n}", std::process::id()))
+        };
+        crate::clean::compare(self.engine.as_mut(), &step, &ds, column, &mut scratch)
+    }
+
+    /// A Clean step with its regressions and neighbour searches fitted to its
+    /// input as last run (for the Jupyter export).
+    pub fn resolved_clean(&mut self, step_id: &str) -> Result<crate::model::Step, Error> {
+        let written = self.analysis.step(step_id).ok_or_else(|| Error::Validation(format!("unknown step `{step_id}`")))?.clone();
+        let step = crate::params::bind_step(&written, &self.analysis.parameters);
+        let input = step.input().to_string();
+        let ds = if self.analysis.is_source(&input) {
+            self.source_dataset(&input)?
+        } else {
+            self.output(&input).and_then(Output::as_dataset).cloned().ok_or_else(|| {
+                Error::Validation(format!("run the analysis before exporting a notebook: `{input}` has no result yet"))
+            })?
+        };
+        let artifacts = &self.artifacts;
+        let mut n = 0;
+        let mut scratch = || {
+            n += 1;
+            artifacts.temp_path(&format!("resolve-{step_id}-{n}"))
+        };
+        Ok(crate::clean::resolve(self.engine.as_mut(), &step, &ds, &mut scratch)?.0)
+    }
+
+    /// What a Clean step found and filled on its last run.
+    pub fn clean_report(&self, step_id: &str) -> Option<crate::clean::CleanReport> {
+        let key = self.plan().ok()?.keys.get(step_id)?.clone();
+        let j = self.artifacts.load_check(&key)?;
+        (j.get("kind").and_then(crate::json::Json::as_str) == Some("clean")).then(|| crate::clean::CleanReport::from_json(&j).ok())?
+    }
+
     /// The report of a check step's current result (or of its last run, if
     /// it stopped there).
     pub fn check_report(&self, step_id: &str) -> Option<crate::check::CheckReport> {
@@ -922,6 +973,18 @@ impl Session {
                     let adopted = self.engine.adopt_parquet(&raw, &tmp);
                     let _ = fs::remove_file(&raw);
                     Ok(Output::Table(self.artifacts.commit_table(key, adopted?)?))
+                }
+                StepKind::Clean { .. } => {
+                    let artifacts = &self.artifacts;
+                    let mut n = 0;
+                    let mut scratch = || {
+                        n += 1;
+                        artifacts.temp_path(&format!("{key}-clean{n}"))
+                    };
+                    let (ds, report) = crate::clean::evaluate(self.engine.as_mut(), &step, &input, &mut scratch, &tmp)?;
+                    self.step_output = Some(report.text());
+                    self.artifacts.save_check(key, &report.to_json())?;
+                    Ok(Output::Table(self.artifacts.commit_table(key, ds)?))
                 }
                 StepKind::Python { code, timeout_ms } => {
                     let runner = self.python.as_ref().ok_or_else(|| {

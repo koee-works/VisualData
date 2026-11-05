@@ -275,6 +275,16 @@ async fn check_report(s: State<'_, Shared>, step_id: String) -> Res<Option<Value
 }
 
 #[tauri::command]
+async fn clean_report(s: State<'_, Shared>, step_id: String) -> Res<Option<Value>> {
+    with(&s, |a| a.clean_report(&step_id))
+}
+
+#[tauri::command]
+async fn compare_fills(s: State<'_, Shared>, step_id: String, op: Value, column: String) -> Res<Value> {
+    with(&s, |a| a.compare_fills(&step_id, &op, &column))
+}
+
+#[tauri::command]
 async fn run(window: tauri::Window, s: State<'_, Shared>) -> Res<RunSummary> {
     let flag = with(&s, |a| a.cancel_handle())?;
     *s.cancel.lock().unwrap() = Some(flag);
@@ -415,6 +425,8 @@ fn main() {
             set_parameters,
             rename_parameter,
             check_report,
+            clean_report,
+            compare_fills,
             column_details,
             export_notebook,
             save_report,

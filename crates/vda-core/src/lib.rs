@@ -5,6 +5,7 @@
 pub mod artifacts;
 pub mod chart;
 pub mod check;
+pub mod clean;
 pub mod compile;
 pub mod console;
 pub mod csv;

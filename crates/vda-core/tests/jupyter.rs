@@ -104,6 +104,21 @@ fn the_notebook_reproduces_every_step() {
             step("related", &["kept"], StepKind::Test { test: TestKind::Independence, a: "region".into(), b: "product".into() }),
             step("moves", &["kept"], StepKind::Test { test: TestKind::Correlation, a: "units".into(), b: "revenue".into() }),
             step(
+                "tidy",
+                &["source"],
+                StepKind::Clean {
+                    markers: vec!["N/A".into()],
+                    flag: true,
+                    seed: 3,
+                    internal: false,
+                    columns: vec![
+                        CleanColumn { missing_when: Some("units > @min_units + 2".into()), ..CleanColumn::new("units", Fill::Regression { predictors: vec!["revenue".into()] }) },
+                        CleanColumn::new("region", Fill::Neighbours { predictors: vec!["units".into(), "revenue".into()], k: 3 }),
+                        CleanColumn { group_by: vec!["product".into()], ..CleanColumn::new("revenue", Fill::Random) },
+                    ],
+                },
+            ),
+            step(
                 "chart",
                 &["kept"],
                 StepKind::Chart { mark: Mark::Bar, x: "region".into(), y: "revenue".into(), title: None, color: None, summary: Some(AggFunc::Sum) },
@@ -147,7 +162,8 @@ fn the_notebook_reproduces_every_step() {
         .map(|c| text(c) + "\n\n")
         .collect::<String>()
         .replace("from IPython.display import display\n", "display = lambda *a, **k: None\n");
-    let tables = ["kept", "calc", "joined", "running", "latest", "wide", "long", "big", "py", "rs", "quality", "by_product", "related", "moves"];
+    let tables = ["kept", "calc", "joined", "running", "latest", "wide", "long", "big", "py", "rs", "quality", "by_product", "related", "moves", "tidy"];
+    assert!(script.contains("as the app fitted them"), "fitted fills are written in");
     for t in tables {
         script.push_str(&format!("con.sql(f'COPY (SELECT * FROM \"{t}\") TO {{lit({:?})}} (FORMAT parquet)')\n", out.join(format!("{t}.parquet")).to_string_lossy()));
     }

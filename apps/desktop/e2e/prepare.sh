@@ -77,13 +77,33 @@ INSERT INTO notes VALUES ('Central', 'new region');
 """)
 c.commit()
 PY
+  # A survey with the usual gaps: -999 ages, incomes as text with "N/A",
+  # "unknown" and blanks, and missing scores and answers.
+  python3 - "$s4/survey.csv" <<'PY'
+import csv, sys
+regions = ["North", "South", "East", "West"]
+with open(sys.argv[1], "w", newline="") as f:
+    w = csv.writer(f)
+    w.writerow(["respondent_id", "region", "age", "income", "score", "satisfaction"])
+    for i in range(1, 121):
+        age = 20 + (i * 7) % 50
+        income = 18000 + age * 900 + (i * 37) % 4000
+        score = round(2 + 0.05 * age + ((i * 13) % 7) / 10, 2)
+        sat = "high" if score > 4.2 else "mid" if score > 3.4 else "low"
+        a = "-999" if i % 17 == 0 else "" if i % 23 == 0 else str(age)
+        inc = ["N/A", "n/a", "unknown", ""][i % 4] if i % 9 == 0 else str(income)
+        sc = "" if i % 11 == 0 else str(score)
+        st = "" if i % 13 == 0 else sat
+        w.writerow([i, regions[i % 4], a, inc, sc, st])
+PY
   cat > "$s4/analysis.json" <<'JSON'
 {
   "format_version": 2,
   "name": "Orders and targets",
   "sources": [
     {"id": "source", "path": "sales.csv", "format": "csv"},
-    {"id": "shop", "path": "shop.sqlite", "format": "sqlite", "table": "targets"}
+    {"id": "shop", "path": "shop.sqlite", "format": "sqlite", "table": "targets"},
+    {"id": "survey", "path": "survey.csv", "format": "csv"}
   ],
   "parameters": [],
   "steps": [

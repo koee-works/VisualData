@@ -68,6 +68,24 @@ Charts can be bars, lines, areas, points, histograms or box plots, split by a co
 
 ![A check that finds orders with no region, with the rows that break it](docs/screenshots/17-check.png)
 
+### Cleaning missing values
+
+A **Clean missing values** step finds the gaps in a data set and fills them, one rule per column. Empty cells always count. So do values you mark as meaning missing (`N/A`, `-999`, blank text; the editor suggests the ones it sees in the data), rows a formula picks out (`[age] < 0`), and text that won't read as a number or date.
+
+A column can be filled with:
+
+- the mean or median, optionally per group;
+- the most common value, or a fixed value;
+- a repeatable random draw from the known values;
+- the previous or next known value, in an order you choose;
+- a regression on other columns, or the values of its nearest neighbours.
+
+Rows with a gap can also be dropped. An optional `<column>_missing` column records what was filled.
+
+**Compare methods** hides some known values, fills them every way and shows how close each method came and how much of the column's spread it keeps, so you can pick the one that does least harm. See [ADR-0012](docs/adr/0012-cleaning-missing-values.md).
+
+![Comparing ways to fill missing incomes: the regression comes closest](docs/screenshots/32-clean-compare.png)
+
 ### Statistical tests and databases
 
 A **Statistical test** step compares two averages (Welch's t-test), averages across groups (analysis of variance), whether two categories are related (chi-square) or whether two numbers move together (correlation). It gives the statistic, the p-value and a sentence reading it, and matches SciPy. **SQLite and DuckDB database files** are sources too, read by table or by a read-only query.

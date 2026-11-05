@@ -63,11 +63,20 @@ class Session:
         raise AssertionError(f"not found within {timeout}s: {xpath}\n{last}")
 
     def click(self, xpath):
-        el = self.find(xpath)
-        # Panels scroll on their own; WebKit's driver does not scroll inside them.
-        ref = {"element-6066-11e4-a52e-4f735466cecf": el}
-        call("POST", f"/session/{self.id}/execute/sync", {"script": "arguments[0].scrollIntoView({block: 'nearest'})", "args": [ref]})
-        call("POST", f"/session/{self.id}/element/{el}/click", {})
+        # An element can be briefly "not interactable" while a menu closes or
+        # the layout settles; try again a few times before failing.
+        for attempt in range(6):
+            el = self.find(xpath)
+            # Panels scroll on their own; WebKit's driver does not scroll inside them.
+            ref = {"element-6066-11e4-a52e-4f735466cecf": el}
+            call("POST", f"/session/{self.id}/execute/sync", {"script": "arguments[0].scrollIntoView({block: 'nearest'})", "args": [ref]})
+            try:
+                call("POST", f"/session/{self.id}/element/{el}/click", {})
+                return
+            except RuntimeError as e:
+                if "not interactable" not in str(e) or attempt == 5:
+                    raise
+                time.sleep(0.4)
 
     def text(self, xpath):
         # textContent, not WebDriver's visible text: WebKit's driver drops
@@ -459,6 +468,7 @@ def joins(s, shots):
     s.wait_text("//body", "Typical values")
     s.click("//button[@aria-label='Add a step']")
     s.click("//div[@role='menuitem' and contains(., 'Check data quality')]")
+    s.wait_gone("//*[@role='menu']")
     s.set_code("//*[@role='textbox' and @aria-label='Rule formula']", "region is not missing")
     s.click("//button[normalize-space()='Save step']")
     s.click("//button[normalize-space()='Run analysis']")
@@ -473,6 +483,7 @@ def joins(s, shots):
     s.click(node("sales.csv"))
     s.click("//button[@aria-label='Add a step']")
     s.click("//div[@role='menuitem' and normalize-space(.//span[1])='Chart']")
+    s.wait_gone("//*[@role='menu']")
     s.driver_select("//select[@id='chart-mark']", "histogram")
     s.driver_select("//select[@aria-label='Column to count']", "revenue")
     s.click("//button[normalize-space()='Save step']")
@@ -696,9 +707,49 @@ def slice4(s, shots, project):
     s.click("//button[@aria-label='Close settings']")
     s.wait_gone("//nav[@aria-label='Settings sections']")
 
+    step(33, "Clean a survey: find gaps and values meaning missing, fill them, compare methods on hidden values")
+    s.click(node("survey.csv"))
+    s.click("//button[@aria-label='Add a step']")
+    s.click("//div[@role='menuitem' and contains(., 'Clean missing values')]")
+    s.wait_gone("//*[@role='menu']")
+    gaps = "//table[@aria-label='Missing values by column']"
+    s.wait_text(gaps, "numbers stored as text")
+    # "unknown" appears among income's values: one click makes it a marker.
+    s.click("//button[contains(., '“unknown”')]")
+    s.set_input("//input[@aria-label='Add a value that means missing']", "-999")
+    s.key("\ue007")
+    s.find("//div[@aria-label='Markers']//code[normalize-space()='-999']")
+    s.click("//button[@aria-label='Clean income']")
+    # Its values are mostly numbers, so it is read as numbers.
+    read_as = call("POST", f"/session/{s.id}/execute/sync", {"script": "return document.querySelector('[aria-label=\"Read income as\"]').value", "args": []})
+    assert read_as == "DOUBLE", read_as
+    s.screenshot(f"{shots}/31-clean.png")
+    s.click("//button[normalize-space()='Save step']")
+    s.find("//button[normalize-space()='Save step' and @disabled]")  # saved before running
+    s.click("//header//button[normalize-space()='Run analysis']")
+    s.wait_text(STATUS, "All results current")
+    s.wait_text("//*[@aria-label='Last run of age']", "marked")
+    s.wait_text("//*[@aria-label='Last run of income']", "filled")
+    s.wait_text(table, "income_missing")
+    # Hide known incomes, fill them each way, and keep the closest.
+    s.click("//section[@aria-label='Clean income']//button[contains(., 'Compare methods')]")
+    methods = "//table[@aria-label='Methods for income']"
+    s.wait_text(methods, "closest")
+    s.call_js("document.querySelector('[aria-label=\"Methods for income\"]').scrollIntoView({block: 'center'})")
+    s.screenshot(f"{shots}/32-clean-compare.png")
+    best = s.text(f"{methods}//tr[contains(., 'closest')]/td[1]")
+    assert best.startswith("Regression"), best
+    s.click("//button[@aria-label='Use Regression for income']")
+    s.click("//button[normalize-space()='Save step']")
+    s.find("//button[normalize-space()='Save step' and @disabled]")  # saved before running
+    s.click("//header//button[normalize-space()='Run analysis']")
+    s.wait_text(STATUS, "All results current")
+    s.wait_text("//*[@aria-label='Last run of income']", "a line fitted on")
+    s.screenshot(f"{shots}/33-clean-regression.png")
+
 
 def refresh_without_the_app(app, project, approvals):
-    step(33, "vda-run refreshes the project without the app, and the run log says so")
+    step(34, "vda-run refreshes the project without the app, and the run log says so")
     # The program the schedule entry names (step 30); it must outlive the app,
     # so not inside an AppImage's temporary mount.
     runner = SCHEDULED["runner"]

@@ -231,6 +231,41 @@ pub fn describe_json(op: &Json) -> String {
             let n = arr("rules").len();
             if n == 1 { "Check 1 rule".into() } else { format!("Check {n} rules") }
         }
+        "clean" => {
+            let cols = arr("columns");
+            match cols.as_slice() {
+                [] => "Clean missing values".into(),
+                [c] => {
+                    let name = or(s(c, "column"), "a column");
+                    let fill = c.get("fill").cloned().unwrap_or(Json::Null);
+                    let per = strs(c, "group_by");
+                    let per = if per.is_empty() { String::new() } else { format!(" per {}", per.join(", ")) };
+                    match s(&fill, "method") {
+                        "keep" => format!("Find missing {name}"),
+                        "drop" => format!("Drop rows with no {name}"),
+                        m => {
+                            let how = match m {
+                                "mean" => format!("the mean{per}"),
+                                "median" => format!("the median{per}"),
+                                "mode" => format!("the most common value{per}"),
+                                "constant" => format!("\"{}\"", s(&fill, "value")),
+                                "random" => format!("a random known value{per}"),
+                                "previous" => "the previous value".into(),
+                                "next" => "the next value".into(),
+                                "regression" => "a regression".into(),
+                                "neighbours" => "nearest neighbours".into(),
+                                _ => "a value".into(),
+                            };
+                            format!("Fill missing {name} with {how}")
+                        }
+                    }
+                }
+                cs => {
+                    let names: Vec<String> = cs.iter().map(|c| s(c, "column").to_string()).collect();
+                    if names.len() > 3 { format!("Clean {} and {} more", names[..2].join(", "), names.len() - 2) } else { format!("Clean {}", names.join(", ")) }
+                }
+            }
+        }
         "test" => {
             let (a, b) = (s(op, "a"), s(op, "b"));
             match s(op, "test") {

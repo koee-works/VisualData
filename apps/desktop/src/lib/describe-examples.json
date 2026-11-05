@@ -27,5 +27,9 @@
   { "op": { "type": "chart", "mark": "line", "x": "day", "y": "units", "title": null, "color": "region", "summary": "COUNT" }, "words": "Line chart of rows by day and region" },
   { "op": { "type": "check", "stop": false, "rules": [{ "rule": "unique", "columns": ["id"] }] }, "words": "Check 1 rule" },
   { "op": { "type": "test", "test": "compare_groups", "a": "units", "b": "region" }, "words": "Compare the average of units across region" },
-  { "op": { "type": "test", "test": "correlation", "a": "units", "b": "revenue" }, "words": "Correlation of units and revenue" }
+  { "op": { "type": "test", "test": "correlation", "a": "units", "b": "revenue" }, "words": "Correlation of units and revenue" },
+  { "op": { "type": "clean", "markers": ["N/A"], "flag": true, "seed": 1, "columns": [{ "column": "price", "as_type": "DOUBLE", "missing_when": null, "group_by": ["region"], "fill": { "method": "median" } }] }, "words": "Fill missing price with the median per region" },
+  { "op": { "type": "clean", "markers": [], "flag": false, "seed": 1, "columns": [{ "column": "size", "as_type": null, "missing_when": null, "group_by": [], "fill": { "method": "constant", "value": "unknown" } }] }, "words": "Fill missing size with \"unknown\"" },
+  { "op": { "type": "clean", "markers": [], "flag": false, "seed": 1, "columns": [{ "column": "units", "as_type": null, "missing_when": null, "group_by": [], "fill": { "method": "drop" } }] }, "words": "Drop rows with no units" },
+  { "op": { "type": "clean", "markers": [], "flag": false, "seed": 1, "columns": [{ "column": "a", "group_by": [], "fill": { "method": "mean" } }, { "column": "b", "group_by": [], "fill": { "method": "keep" } }, { "column": "c", "group_by": [], "fill": { "method": "random" } }, { "column": "d", "group_by": [], "fill": { "method": "next", "order_by": [] } }] }, "words": "Clean a, b and 2 more" }
 ]
