@@ -632,6 +632,15 @@ impl App {
         write_file(path, &nb.to_string_pretty())
     }
 
+    /// Write a Jupyter notebook whose code cells are in `language` ("python", "sql" or "r").
+    pub fn export_notebook_in(&mut self, path: &Path, language: &str) -> Result<()> {
+        let Some(lang) = vda_core::jupyter::Language::from_name(language) else {
+            return fail(format!("choose Python, SQL or R, not {language}"));
+        };
+        let nb = vda_core::jupyter::notebook_in(self.session()?, lang)?;
+        write_file(path, &nb.to_string_pretty())
+    }
+
     /// Write the notebook as rendered in the app (a self-contained HTML page).
     pub fn save_report(&mut self, path: &Path, html: &str) -> Result<()> {
         if path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() != Some("html") {

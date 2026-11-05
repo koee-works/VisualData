@@ -1,3 +1,4 @@
+import { stepTitle } from "./format";
 import { describe, expect, it } from "vitest";
 import { flushSync } from "svelte";
 import { MockBackend } from "./api/mock";
@@ -490,11 +491,27 @@ describe("Parameters, checks and notebook export", () => {
       expect(html).toContain(s);
   });
 
-  it("exports a Jupyter notebook", async () => {
+  it("exports a Jupyter notebook in the chosen language", async () => {
     const { ws, mock } = await seeded();
-    await ws.exportNotebook("ipynb");
+    await ws.exportNotebook("python");
     expect(mock.documents.at(-1)![0]).toMatch(/\.ipynb$/);
+    expect(JSON.parse(mock.documents.at(-1)![1]).language).toBe("python");
     expect(ws.notice).toContain("reproduces the analysis");
+    await ws.exportNotebook("sql");
+    expect(JSON.parse(mock.documents.at(-1)![1]).language).toBe("sql");
+    expect(ws.notice).toContain("in SQL");
+  });
+
+  it("names the steps a SQL or R notebook cannot hold", async () => {
+    const { ws } = await seeded();
+    // The sample analysis has charts, which SQL and R cannot hold.
+    const sql = ws.notebookBlockers("sql").length;
+    expect(sql).toBeGreaterThan(0);
+    expect(ws.notebookBlockers("python")).toEqual([]);
+    await ws.addStep({ type: "python", code: "result = df", timeout_ms: 60000 }, null, []);
+    expect(ws.notebookBlockers("python")).toEqual([]);
+    expect(ws.notebookBlockers("sql")).toHaveLength(sql + 1);
+    expect(ws.notebookBlockers("sql")).toContain(stepTitle(ws.view!.steps.at(-1)!));
   });
 });
 

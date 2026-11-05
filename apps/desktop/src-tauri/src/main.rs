@@ -260,8 +260,8 @@ async fn column_details(s: State<'_, Shared>, id: String) -> Res<Value> {
 }
 
 #[tauri::command]
-async fn export_notebook(s: State<'_, Shared>, path: PathBuf) -> Res<()> {
-    with(&s, |a| a.export_notebook(&path))
+async fn export_notebook(s: State<'_, Shared>, path: PathBuf, language: String) -> Res<()> {
+    with(&s, |a| a.export_notebook_in(&path, &language))
 }
 
 #[tauri::command]

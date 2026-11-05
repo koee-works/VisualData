@@ -4,7 +4,7 @@
 import { prefs } from "./prefs.svelte";
 import { ALL_PANES, loadPanes, savePanes, toggled, type PaneName, type Panes } from "./layout";
 import { errorMessage, type Backend } from "./api/backend";
-import type { AnalysisView, Column, Comment, NotebookCell, Problem, Problems, SourceView, StepEvent, StepOp, StepView, Parameter } from "./api/types";
+import type { AnalysisView, Column, Comment, NotebookCell, NotebookLanguage, Problem, Problems, SourceView, StepEvent, StepOp, StepView, Parameter } from "./api/types";
 import { SOURCE_ID } from "./api/types";
 import { stepTitle } from "./format";
 
@@ -317,19 +317,38 @@ export class Workspace {
     return true;
   }
 
-  /** Save the notebook as an HTML report or a Jupyter notebook. */
-  async exportNotebook(kind: "html" | "ipynb") {
+  /**
+   * What a notebook in this language cannot hold, by name (empty when it can hold all of it).
+   * Python holds everything; SQL and R cannot run Python, statistical tests, charts or database queries.
+   */
+  notebookBlockers(language: "html" | NotebookLanguage): string[] {
+    if (language === "html" || language === "python") return [];
+    const out: string[] = [];
+    for (const s of this.view?.steps ?? []) {
+      const t = s.op.type;
+      if (t === "python" || t === "test" || t === "chart" || (t === "r" && language === "sql")) out.push(stepTitle(s));
+    }
+    for (const src of this.view?.sources ?? []) if (src.query) out.push(`${src.id} (database query)`);
+    return out;
+  }
+
+  /** Save the notebook as an HTML report, or as a Jupyter notebook with its code in Python, SQL or R. */
+  async exportNotebook(kind: "html" | NotebookLanguage) {
     const base = (this.view?.name || "notebook").replace(/[\\/:*?"<>|]+/g, "-");
-    const path = await this.backend.pickDocumentPath(`${base}.${kind}`, kind);
+    const file = kind === "html" ? "html" : "ipynb";
+    const path = await this.backend.pickDocumentPath(`${base}.${file}`, file);
     if (!path) return;
+    const language = { python: "Python", sql: "SQL", r: "R" } as const;
     const ok = await this.act(kind === "html" ? "Save report" : "Export notebook", async () => {
       if (kind === "html") {
         const { buildReport } = await import("./report");
         await this.backend.saveReport(path, await buildReport(this));
-      } else await this.backend.exportNotebook(path);
+      } else await this.backend.exportNotebook(path, kind);
       return true;
     });
-    if (ok) this.notice = kind === "html" ? `Saved the report to ${path}` : `Saved a Jupyter notebook that reproduces the analysis to ${path}`;
+    if (ok)
+      this.notice =
+        kind === "html" ? `Saved the report to ${path}` : `Saved a Jupyter notebook in ${language[kind]} that reproduces the analysis to ${path}`;
   }
 
   /** "Trust all in this session": run all Python without review until the app quits. */

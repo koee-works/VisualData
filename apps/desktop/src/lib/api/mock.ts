@@ -10,6 +10,7 @@ import type {
   Column,
   Literal,
   NotebookCell,
+  NotebookLanguage,
   Page,
   Problem,
   Problems,
@@ -615,8 +616,8 @@ export class MockBackend implements Backend {
     });
   }
 
-  async exportNotebook(path: string): Promise<void> {
-    this.documents.push([path, JSON.stringify({ nbformat: 4, cells: [] })]);
+  async exportNotebook(path: string, language: NotebookLanguage): Promise<void> {
+    this.documents.push([path, JSON.stringify({ nbformat: 4, language, cells: [] })]);
   }
 
   async saveReport(path: string, html: string): Promise<void> {

@@ -11,12 +11,104 @@
 //!   just before it, and steps no cell shows come at the end.
 
 use crate::compile::{quote_ident, step_sql_for, CSV_OPTIONS, JSON_OPTIONS};
+use crate::describe;
 use crate::json::Json;
 use crate::model::{Analysis, Cell, Rule, SourceFormat, Step, StepKind};
 use crate::session::{Output, Session};
 use crate::table::Schema;
 use crate::Error;
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
+
+/// The language of the code cells in an exported notebook.
+///
+/// Python runs every kind of step. SQL and R run the data steps (visual, SQL,
+/// clean, check; R also runs R steps) and say which steps they cannot hold.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Language {
+    Python,
+    Sql,
+    R,
+}
+
+impl Language {
+    pub fn from_name(name: &str) -> Option<Language> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "python" => Some(Language::Python),
+            "sql" => Some(Language::Sql),
+            "r" => Some(Language::R),
+            _ => None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Language::Python => "Python",
+            Language::Sql => "SQL",
+            Language::R => "R",
+        }
+    }
+}
+
+/// Steps and sources a notebook in `lang` cannot hold, described for a message.
+fn unsupported(a: &Analysis, lang: Language) -> Vec<String> {
+    let mut out = Vec::new();
+    if lang == Language::Python {
+        return out;
+    }
+    for step in &a.steps {
+        let why = match &step.kind {
+            StepKind::Python { .. } => Some("Python step"),
+            StepKind::Test { .. } => Some("statistical test"),
+            StepKind::Chart { .. } => Some("chart"),
+            StepKind::R { .. } if lang == Language::Sql => Some("R step"),
+            _ => None,
+        };
+        if let Some(why) = why {
+            out.push(format!("`{}` ({why})", step.id));
+        }
+    }
+    for src in &a.sources {
+        if matches!(src.format, SourceFormat::Sqlite | SourceFormat::DuckDb) && src.query.is_some() {
+            out.push(format!("source `{}` (database query)", src.id));
+        }
+    }
+    out
+}
+
+/// A SQL string literal holding `s`.
+fn sql_lit(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "''"))
+}
+
+/// An R string literal holding `s`.
+fn rstr(s: &str) -> String {
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n"))
+}
+
+/// An R raw string holding `s`, so SQL needs no escaping.
+fn raw(s: &str) -> String {
+    format!("r\"---({s})---\"")
+}
+
+/// A cell that runs one SQL statement in the SQL or R notebook; `note` goes above it.
+fn run_sql(lang: Language, sql: &str, note: Option<&str>) -> String {
+    match lang {
+        Language::Sql => format!("%%sql\n{}{}", note.map(|n| format!("-- {n}\n")).unwrap_or_default(), sql.trim().trim_end_matches(';')),
+        Language::R => format!("{}dbExecute(con, {})", note.map(|n| format!("# {n}\n")).unwrap_or_default(), raw(sql)),
+        Language::Python => format!("con.sql({})", py(sql)),
+    }
+}
+
+/// A cell that shows the first rows of a step's table.
+fn preview(lang: Language, id: &str) -> String {
+    let sql = format!("SELECT * FROM {} LIMIT 10", quote_ident(id));
+    match lang {
+        Language::Sql => format!("%%sql\n{sql}"),
+        Language::R => format!("print(dbGetQuery(con, {}))", raw(&sql)),
+        Language::Python => format!("con.table({}).df().head(10)", py(&quote_ident(id))),
+    }
+}
 
 /// A Python string literal holding `s`.
 const R_HELPER: &str = r#"
@@ -89,19 +181,100 @@ fn code(text: &str) -> Json {
     ])
 }
 
+/// The step's name as a heading (its label, or what it does), as the app shows it.
 fn title(step: &Step) -> String {
-    match &step.label {
-        Some(l) => format!("### {l}\n\nStep `{}` ({}), reading {}.", step.id, step.kind.type_name(), reads(step)),
-        None => format!("### Step `{}`\n\n{} step, reading {}.", step.id, step.kind.type_name(), reads(step)),
-    }
+    format!("### {}\n\nStep `{}`, reads {}.", describe::title(step), step.id, reads(step))
 }
 
 fn reads(step: &Step) -> String {
     step.inputs.iter().map(|i| format!("`{i}`")).collect::<Vec<_>>().join(", ")
 }
 
+/// One check rule as SQL: how many rows break it, and whether it passes.
+struct RuleSql {
+    what: String,
+    /// A count expression (or, for a row count, the number of rows).
+    count: String,
+    /// The pass condition, with `count` in it (SQL).
+    ok_sql: String,
+    /// The pass condition, with `n` holding the count (R).
+    ok_r: String,
+}
+
+fn rule_sql(id: &str, rule: &Rule, what: String, input: &Schema) -> Result<RuleSql, Error> {
+    Ok(match rule {
+        Rule::Expect { formula } => {
+            let expr = crate::formula::parse(formula).map_err(|m| Error::Validation(format!("step `{id}`: {m}")))?;
+            let cond = crate::formula::to_sql(&expr, input).map_err(|m| Error::Validation(format!("step `{id}`: {m}")))?;
+            let count = format!("(SELECT count(*) FROM input WHERE NOT coalesce(({cond}), false))");
+            RuleSql { what, ok_sql: format!("{count} = 0"), count, ok_r: "n == 0".into() }
+        }
+        Rule::Unique { columns } => {
+            let cols: Vec<String> = columns.iter().map(|c| quote_ident(c)).collect();
+            let count = format!("(SELECT count(*) FROM (SELECT {} FROM input GROUP BY ALL HAVING count(*) > 1))", cols.join(", "));
+            RuleSql { what, ok_sql: format!("{count} = 0"), count, ok_r: "n == 0".into() }
+        }
+        Rule::RowCount { min, max } => {
+            let count = "(SELECT count(*) FROM input)".to_string();
+            let (mut sql, mut r) = (Vec::new(), Vec::new());
+            if let Some(m) = min {
+                sql.push(format!("{count} >= {m}"));
+                r.push(format!("n >= {m}"));
+            }
+            if let Some(m) = max {
+                sql.push(format!("{count} <= {m}"));
+                r.push(format!("n <= {m}"));
+            }
+            RuleSql {
+                what,
+                ok_sql: if sql.is_empty() { "true".into() } else { sql.join(" AND ") },
+                ok_r: if r.is_empty() { "TRUE".into() } else { r.join(" && ") },
+                count,
+            }
+        }
+    })
+}
+
+/// The source as SQL statements (SQL and R notebooks), each one cell.
+fn source_cells(a: &Analysis, lang: Language, project: &Path) -> Result<Vec<String>, Error> {
+    let mut out = Vec::new();
+    for (n, src) in a.sources.iter().enumerate() {
+        let file = project.join(&src.path);
+        let path = sql_lit(&file.to_string_lossy());
+        let table = quote_ident(&src.id);
+        let stmts: Vec<String> = match src.format {
+            SourceFormat::Csv => vec![format!("CREATE OR REPLACE TABLE {table} AS SELECT * FROM read_csv({path}, {CSV_OPTIONS})")],
+            SourceFormat::Parquet => vec![format!("CREATE OR REPLACE TABLE {table} AS SELECT * FROM read_parquet({path})")],
+            SourceFormat::Json => vec![format!("CREATE OR REPLACE TABLE {table} AS SELECT * FROM read_json({path}, {JSON_OPTIONS})")],
+            SourceFormat::Excel => {
+                let sheet = src.sheet.as_deref().map(|s| format!(", sheet = {}", sql_lit(s))).unwrap_or_default();
+                vec![format!("CREATE OR REPLACE TABLE {table} AS SELECT * FROM read_xlsx({path}{sheet})")]
+            }
+            SourceFormat::Sqlite | SourceFormat::DuckDb => {
+                let Some(t) = src.sheet.as_deref() else {
+                    return Err(Error::Validation(format!("source `{}`: choose its table before exporting a notebook", src.id)));
+                };
+                let db = format!("vda_source_{n}");
+                let mut v = Vec::new();
+                if src.format == SourceFormat::Sqlite {
+                    v.push("INSTALL sqlite".to_string());
+                    v.push("LOAD sqlite".to_string());
+                    v.push(format!("ATTACH IF NOT EXISTS {path} AS {db} (TYPE sqlite, READ_ONLY)"));
+                } else {
+                    v.push(format!("ATTACH IF NOT EXISTS {path} AS {db} (READ_ONLY)"));
+                }
+                v.push(format!("CREATE OR REPLACE TABLE {table} AS SELECT * FROM {db}.{}", quote_ident(t)));
+                v
+            }
+        };
+        out.extend(stmts.iter().map(|s| run_sql(lang, s, None)));
+    }
+    Ok(out)
+}
+
 struct Writer<'a> {
     a: &'a Analysis,
+    lang: Language,
     /// As written, before parameters were filled in (for messages).
     written: &'a Analysis,
     schemas: HashMap<String, Schema>,
@@ -123,8 +296,83 @@ impl Writer<'_> {
         }
         self.done.insert(id.to_string());
         self.cells.push(markdown(&title(&step)));
-        self.cells.push(code(&self.step_code(&step)?));
+        let code_cells = if self.lang == Language::Python { vec![self.step_code(&step)?] } else { self.portable_cells(&step)? };
+        self.cells.extend(code_cells.iter().map(|c| code(c)));
         Ok(())
+    }
+
+    /// The cells for a step in the SQL or R notebook: visual, SQL, clean and check steps, and R steps in R.
+    fn portable_cells(&self, step: &Step) -> Result<Vec<String>, Error> {
+        let lang = self.lang;
+        let id = &step.id;
+        let input_view = run_sql(lang, &format!("CREATE OR REPLACE TEMP VIEW input AS SELECT * FROM {}", quote_ident(step.input())), None);
+        match &step.kind {
+            StepKind::R { code, .. } => {
+                let frames: Vec<String> = step.inputs.iter().map(|i| format!("{} = frame({})", rstr(i), rstr(i))).collect();
+                Ok(vec![format!(
+                    "dfs <- list({})\ndf <- dfs[[{}]]\n\n{}\n\nsave({}, result)\n{}",
+                    frames.join(", "),
+                    rstr(step.input()),
+                    code.trim_end(),
+                    rstr(id),
+                    preview(lang, id)
+                )])
+            }
+            StepKind::Check { rules, stop } => {
+                let schemas = self.input_schemas(step)?;
+                let written: Vec<Rule> = match self.written.step(id).map(|s| &s.kind) {
+                    Some(StepKind::Check { rules, .. }) => rules.clone(),
+                    _ => rules.clone(),
+                };
+                let mut sums = Vec::new();
+                for (r, w) in rules.iter().zip(&written) {
+                    sums.push(rule_sql(id, r, crate::check::describe(w), &schemas[0])?);
+                }
+                let mut cells = vec![input_view, run_sql(lang, &format!("CREATE OR REPLACE TABLE {} AS SELECT * FROM input", quote_ident(id)), None)];
+                match lang {
+                    Language::R => {
+                        let mut body = String::from("failed <- character(0)\n");
+                        for s in &sums {
+                            body.push_str(&format!(
+                                "n <- dbGetQuery(con, {})$n[1]\ncat(if ({}) \"passed\" else \"FAILED\", {}, \"-\", n, \"\\n\")\nif (!({})) failed <- c(failed, {})\n",
+                                raw(&format!("SELECT {} AS n", s.count)),
+                                s.ok_r,
+                                rstr(&s.what),
+                                s.ok_r,
+                                rstr(&s.what)
+                            ));
+                        }
+                        if *stop {
+                            body.push_str("if (length(failed) > 0) stop(\"checks failed: \", paste(failed, collapse = \"; \"))\n");
+                        }
+                        cells.push(body);
+                    }
+                    Language::Sql if !sums.is_empty() => {
+                        let union: Vec<String> = sums.iter().map(|s| format!("SELECT {} AS rule, {} AS n, {} AS passed", sql_lit(&s.what), s.count, s.ok_sql)).collect();
+                        cells.push(format!(
+                            "%%sql\n-- Each rule: the rows that break it (n) and whether it passes. A check that stops a run cannot stop this notebook.\n{}",
+                            union.join("\nUNION ALL\n")
+                        ));
+                    }
+                    _ => {}
+                }
+                cells.push(preview(lang, id));
+                Ok(cells)
+            }
+            _ => {
+                let schemas = self.input_schemas(step)?;
+                let (shown, note) = match self.resolved.get(id) {
+                    Some(r) => (r, Some("The regression's coefficients and the neighbours' values are as the app fitted them to this step's input.")),
+                    None => (step, None),
+                };
+                let sql = step_sql_for(shown, &schemas)?.ok_or_else(|| Error::Unsupported(format!("step `{id}` has no SQL form")))?;
+                Ok(vec![
+                    input_view,
+                    run_sql(lang, &format!("CREATE OR REPLACE TABLE {} AS SELECT * FROM (\n{sql}\n)", quote_ident(id)), note),
+                    preview(lang, id),
+                ])
+            }
+        }
     }
 
     fn input_schemas(&self, step: &Step) -> Result<Vec<Schema>, Error> {
@@ -296,10 +544,23 @@ impl Writer<'_> {
     }
 }
 
-/// The notebook (nbformat 4) for the session's analysis. Needs a result
-/// (current or not) for every step whose SQL depends on its inputs' columns.
+/// The notebook (nbformat 4) in Python: the app's default export.
 pub fn notebook(session: &mut Session) -> Result<Json, Error> {
+    notebook_in(session, Language::Python)
+}
+
+/// The notebook (nbformat 4) for the session's analysis, with its code in `lang`.
+/// Needs a result (current or not) for every step whose SQL depends on its inputs' columns.
+pub fn notebook_in(session: &mut Session, lang: Language) -> Result<Json, Error> {
     let a = session.analysis.bound();
+    let missing = unsupported(&a, lang);
+    if !missing.is_empty() {
+        return Err(Error::Validation(format!(
+            "the {} notebook can't include {}. Export the Python notebook to keep them, or change them to visual or SQL steps.",
+            lang.label(),
+            missing.join(", ")
+        )));
+    }
     let mut schemas = HashMap::new();
     let mut charts = HashMap::new();
     let ids: Vec<String> = a.sources.iter().map(|s| s.id.clone()).chain(a.steps.iter().map(|s| s.id.clone())).collect();
@@ -394,8 +655,30 @@ pub fn notebook(session: &mut Session) -> Result<Json, Error> {
         sources.push_str(&format!("path = {path}\ncon.sql(f\"\"\"CREATE OR REPLACE TABLE {table} AS SELECT * FROM {read}\"\"\")\n"));
     }
 
+    // Python keeps its setup and sources in two cells; SQL and R write one statement per cell.
+    let mut opening = vec![markdown(&format!("# {}", a.name))];
+    match lang {
+        Language::Python => {
+            opening.push(code(&setup));
+            opening.push(code(&sources));
+        }
+        Language::Sql => {
+            opening.push(markdown("This notebook runs its code as SQL cells with ipython-sql and DuckDB: `pip install ipython-sql duckdb-engine`."));
+            opening.push(code("%load_ext sql\n%sql duckdb:///:memory:"));
+            opening.extend(source_cells(&a, lang, &project)?.iter().map(|c| code(c)));
+        }
+        Language::R => {
+            opening.push(markdown("This notebook runs its code as R with DBI and duckdb: `install.packages(c(\"DBI\", \"duckdb\"))`."));
+            let setup = format!(
+                "library(DBI)\nlibrary(duckdb)\ncon <- dbConnect(duckdb())\n\nframe <- function(name) dbReadTable(con, name)\nsave <- function(name, result) dbWriteTable(con, name, result, overwrite = TRUE)\n\n{}",
+                crate::rlang::params_r(&a.parameters)
+            );
+            opening.push(code(&setup));
+            opening.extend(source_cells(&a, lang, &project)?.iter().map(|c| code(c)));
+        }
+    }
     let written = session.analysis.clone();
-    let mut w = Writer { a: &a, written: &written, schemas, charts, resolved, done: HashSet::new(), cells: vec![markdown(&format!("# {}", a.name)), code(&setup), code(&sources)] };
+    let mut w = Writer { a: &a, lang, written: &written, schemas, charts, resolved, done: HashSet::new(), cells: opening };
     for cell in &a.cells {
         match cell {
             Cell::Markdown { text } => w.cells.push(markdown(text.trim())),
@@ -409,6 +692,11 @@ pub fn notebook(session: &mut Session) -> Result<Json, Error> {
             w.ensure(&id)?;
         }
     }
+    // SQL cells run on the Python kernel through ipython-sql; R cells need the R kernel (IRkernel).
+    let (kernel, language) = match lang {
+        Language::Python | Language::Sql => (("Python 3", "python", "python3"), "python"),
+        Language::R => (("R", "R", "ir"), "R"),
+    };
     Ok(Json::obj(vec![
         ("nbformat", Json::Num(4.0)),
         ("nbformat_minor", Json::Num(5.0)),
@@ -417,9 +705,9 @@ pub fn notebook(session: &mut Session) -> Result<Json, Error> {
             Json::obj(vec![
                 (
                     "kernelspec",
-                    Json::obj(vec![("display_name", Json::str("Python 3")), ("language", Json::str("python")), ("name", Json::str("python3"))]),
+                    Json::obj(vec![("display_name", Json::str(kernel.0)), ("language", Json::str(kernel.1)), ("name", Json::str(kernel.2))]),
                 ),
-                ("language_info", Json::obj(vec![("name", Json::str("python"))])),
+                ("language_info", Json::obj(vec![("name", Json::str(language))])),
             ]),
         ),
         ("cells", Json::Arr(w.cells)),

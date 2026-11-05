@@ -4,6 +4,7 @@
 import type {
   AnalysisView,
   NotebookCell,
+  NotebookLanguage,
   Page,
   Problem,
   Problems,
@@ -79,8 +80,8 @@ export interface Backend {
   compareFills(stepId: string, op: StepOp, column: string): Promise<Comparison>;
   /** Columns of a source or step result with averages, spread, common values. */
   columnDetails(id: string): Promise<ColumnDetail[]>;
-  /** Write a Jupyter notebook that reproduces the analysis. */
-  exportNotebook(path: string): Promise<void>;
+  /** Write a Jupyter notebook that reproduces the analysis, with its code in this language. */
+  exportNotebook(path: string, language: NotebookLanguage): Promise<void>;
   /** Write an HTML report of the notebook. */
   saveReport(path: string, html: string): Promise<void>;
   /** Ask where to save a report or notebook. */

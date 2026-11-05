@@ -112,7 +112,7 @@ A **Statistical test** step compares two averages (Welch's t-test), averages acr
 
 **Writing code.** SQL, Python and **R** steps are written in a code editor that suggests the columns, inputs and parameters the step can use, with the keys of RStudio and Jupyter: **Ctrl+Enter** runs the line or selection in the step's **console**, where the inputs stay loaded, printed output, tables and plots show at once, and an Environment pane lists what you have made; **Shift+Enter** saves and runs the step, and the app says if the step's result differs from the console's. **Open in Jupyter** or **Open in RStudio** opens a step as a notebook or an `.R` file with its inputs loaded; saving it there updates the step. R steps use the R and packages you use in RStudio (**R installation** in the ⋯ menu; `VDA_R` overrides). See [ADR-0011](docs/adr/0011-code-editing-r-console-round-trip.md).
 
-**Export** on the notebook saves a **report**, one web page with the text, tables, check results and charts that opens anywhere and prints as it is, or a **Jupyter notebook** that reruns the analysis with DuckDB and pandas outside the app. With `VDA_SAVE_DIR` set, notebooks are saved into that folder without a dialog (for scripted use).
+**Export** on the notebook saves a **report**, one web page with the text, tables, check results and charts that opens anywhere and prints as it is, or a **Jupyter notebook** that reruns the analysis outside the app with DuckDB, its code in **Python**, **SQL** or **R**. Each step is headed by its name. The SQL and R notebooks cannot hold Python steps, statistical tests or charts, so the menu says which steps block them. With `VDA_SAVE_DIR` set, notebooks are saved into that folder without a dialog (for scripted use).
 
 ### Combining data
 

@@ -13,6 +13,7 @@
     Rows3,
     Sheet,
     Calculator,
+    X,
     Columns3,
     ArrowDownUp,
     TrendingUp,
@@ -257,56 +258,68 @@
         {#each t.steps as { step: s, depth } (s.id)}
           {@const Icon = icons[s.op.type]}
           {@const ev = ws.progress[s.id]}
+          {@const readers = ws.view?.steps.some((x) => x.inputs.includes(s.id)) ?? false}
           <li style:padding-left="{depth * 14}px" class="relative">
             <span class="branch" style:left="{depth * 14 - 7}px"></span>
-            <button class="node" aria-current={ws.selected === s.id} onclick={() => (ws.selected = s.id)}>
-              <StateMark state={s.state} running={isRunning(s)} />
-              <Icon size={15} class="mt-0.5 shrink-0 text-ink-soft" />
-              <span class="min-w-0 flex-1">
-                <span class="node-title line-clamp-2 break-words" title={stepTitle(s)}>{stepTitle(s)}</span>
-                {#if s.inputs.length > 1}
-                  <span class="block truncate text-xs text-ink-soft" title="Also reads {s.inputs.slice(1).map((i) => ws.nameOf(i)).join(', ')}">
-                    with {s.inputs.slice(1).map((i) => ws.nameOf(i)).join(", ")}
+            <div class="flex items-start gap-1">
+              <button class="node min-w-0 flex-1" aria-current={ws.selected === s.id} onclick={() => (ws.selected = s.id)}>
+                <StateMark state={s.state} running={isRunning(s)} />
+                <Icon size={15} class="mt-0.5 shrink-0 text-ink-soft" />
+                <span class="min-w-0 flex-1">
+                  <span class="node-title line-clamp-2 break-words" title={stepTitle(s)}>{stepTitle(s)}</span>
+                  {#if s.inputs.length > 1}
+                    <span class="block truncate text-xs text-ink-soft" title="Also reads {s.inputs.slice(1).map((i) => ws.nameOf(i)).join(', ')}">
+                      with {s.inputs.slice(1).map((i) => ws.nameOf(i)).join(", ")}
+                    </span>
+                  {/if}
+                  <span class="block text-xs text-ink-faint">
+                    {#if isRunning(s)}
+                      Running…
+                    {:else if s.state === "failed"}
+                      <span class="text-failed">Failed</span>
+                    {:else if ws.problemsFor(s.id).some((p) => p.severity === "error")}
+                      <span class="text-failed">Has a problem</span>
+                    {:else if s.state === "blocked"}
+                      Waiting on a failed step
+                    {:else if s.state === "needs review"}
+                      <span class="text-review">Needs your review</span>
+                    {:else if s.state === "waiting on review"}
+                      Waiting on a review
+                    {:else if s.rows !== null && s.mode !== "chart"}
+                      {formatCount(s.rows)} {s.rows === 1 ? "row" : "rows"}{s.state === "stale"
+                        ? ", outdated"
+                        : ev?.cached === false
+                          ? `, ${ev.duration_ms} ms`
+                          : ""}
+                    {:else if s.state === "stale"}
+                      Outdated
+                    {:else if s.mode === "chart" && s.state === "fresh"}
+                      Chart ready
+                    {:else}
+                      Not run
+                    {/if}
+                  </span>
+                </span>
+                {#if ws.openComments(`step:${s.id}`)}
+                  <span class="flex items-center gap-0.5 text-xs text-ink-soft" title="Open comments">
+                    <MessageSquare size={12} aria-hidden="true" />{ws.openComments(`step:${s.id}`)}
+                    <span class="sr-only">open comments</span>
                   </span>
                 {/if}
-                <span class="block text-xs text-ink-faint">
-                  {#if isRunning(s)}
-                    Running…
-                  {:else if s.state === "failed"}
-                    <span class="text-failed">Failed</span>
-                  {:else if ws.problemsFor(s.id).some((p) => p.severity === "error")}
-                    <span class="text-failed">Has a problem</span>
-                  {:else if s.state === "blocked"}
-                    Waiting on a failed step
-                  {:else if s.state === "needs review"}
-                    <span class="text-review">Needs your review</span>
-                  {:else if s.state === "waiting on review"}
-                    Waiting on a review
-                  {:else if s.rows !== null && s.mode !== "chart"}
-                    {formatCount(s.rows)} {s.rows === 1 ? "row" : "rows"}{s.state === "stale"
-                      ? ", outdated"
-                      : ev?.cached === false
-                        ? `, ${ev.duration_ms} ms`
-                        : ""}
-                  {:else if s.state === "stale"}
-                    Outdated
-                  {:else if s.mode === "chart" && s.state === "fresh"}
-                    Chart ready
-                  {:else}
-                    Not run
-                  {/if}
-                </span>
-              </span>
-              {#if ws.openComments(`step:${s.id}`)}
-                <span class="flex items-center gap-0.5 text-xs text-ink-soft" title="Open comments">
-                  <MessageSquare size={12} aria-hidden="true" />{ws.openComments(`step:${s.id}`)}
-                  <span class="sr-only">open comments</span>
-                </span>
-              {/if}
-              {#if s.mode === "sql" || s.mode === "python" || s.mode === "r"}
-                <span class="tag" title="Edited as code, not with visual controls">{{ sql: "SQL", python: "Py", r: "R" }[s.mode]}</span>
-              {/if}
+                {#if s.mode === "sql" || s.mode === "python" || s.mode === "r"}
+                  <span class="tag" title="Edited as code, not with visual controls">{{ sql: "SQL", python: "Py", r: "R" }[s.mode]}</span>
+                {/if}
+              </button>
+            <button
+              class="btn btn-quiet mt-0.5 !min-h-7 !min-w-7 shrink-0 justify-center !px-1 text-ink-faint hover:text-failed"
+              aria-label="Delete step {stepTitle(s)}"
+              title={readers ? "Another step reads this one. Remove or repoint that step first." : "Delete this step"}
+              disabled={readers || ws.running}
+              onclick={() => ws.removeStep(s.id)}
+            >
+              <X size={14} />
             </button>
+            </div>
           </li>
         {/each}
       </ol>

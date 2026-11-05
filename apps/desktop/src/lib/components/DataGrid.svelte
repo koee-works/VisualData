@@ -31,6 +31,8 @@
   let scrollTop = $state(0);
   let viewportH = $state(320);
   let generation = 0;
+  // The header scrolls sideways with the rows (it sits outside the scrolling body).
+  let headEl = $state<HTMLDivElement>();
 
   async function load(page: number, gen: number) {
     if (pending.has(page) || pages.has(page)) return;
@@ -111,7 +113,7 @@
   <p class="p-4 text-sm text-ink-soft">No rows. Every row was filtered out or the input is empty.</p>
 {:else}
   <div class="grid-wrap flex h-full flex-col" role="table" aria-rowcount={total + 1} aria-colcount={columns.length}>
-    <div class="row head" role="row" style:grid-template-columns={template}>
+    <div class="row head" role="row" bind:this={headEl} style:grid-template-columns={template}>
       <span class="num" role="columnheader">#</span>
       {#each columns as c (c.name)}
         <span role="columnheader" class:right={isNumericType(c.type)}>
@@ -123,7 +125,10 @@
     <div
       class="relative flex-1 overflow-auto"
       bind:clientHeight={viewportH}
-      onscroll={(e) => (scrollTop = e.currentTarget.scrollTop)}
+      onscroll={(e) => {
+        scrollTop = e.currentTarget.scrollTop;
+        if (headEl) headEl.scrollLeft = e.currentTarget.scrollLeft;
+      }}
     >
       <div style:height="{spacerH}px" aria-hidden="true"></div>
       <div class="absolute inset-x-0" style:top="{scrollTop - (virtualTop % ROW_H)}px">
@@ -173,6 +178,7 @@
     padding: 0.35rem 0;
     background: var(--color-paper);
     border-bottom: 1px solid var(--color-rule-strong);
+    overflow: hidden;
   }
   .head > span {
     line-height: 1.2;
