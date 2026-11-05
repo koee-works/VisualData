@@ -1,3 +1,4 @@
 target/
 *.tmp
 .work/
+__pycache__/
