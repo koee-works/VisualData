@@ -327,6 +327,15 @@ export function stepTitle(s: StepView): string {
   return s.label?.trim() || describe(s.op);
 }
 
+/** Memory or file size for people: 820 MB, 1.4 GB. */
+export function formatBytes(n: number): string {
+  const mb = n / 1_048_576;
+  if (mb < 1) return "<1 MB";
+  if (mb < 1024) return `${Math.round(mb)} MB`;
+  const gb = mb / 1024;
+  return `${gb < 10 && Math.abs(gb - Math.round(gb)) >= 0.05 ? gb.toFixed(1) : Math.round(gb)} GB`;
+}
+
 export function formatCount(n: number): string {
   return n.toLocaleString("en-US");
 }

@@ -6,6 +6,7 @@
 import type { Backend, RunHandlers } from "./backend";
 import type {
   AboutView,
+  ResourceView,
   AnalysisView,
   Cell,
   Column,
@@ -802,6 +803,26 @@ export class MockBackend implements Backend {
 
   async about(): Promise<AboutView> {
     return { version: "demo", settings_path: "~/.config/vda/settings.json", approvals_path: "~/.config/vda/approvals.json", approvals: this.approved.size };
+  }
+
+  #samples = 0;
+  /** Steady, plausible numbers that move a little, with a Python program now and then. */
+  async resources(): Promise<ResourceView> {
+    const n = this.#samples++;
+    const wave = (k: number) => Math.sin(n / k);
+    const MB = 1_048_576;
+    const parts: ResourceView["parts"] = [
+      { name: "App", count: 1, cpu: Math.max(0.2, 2 + 1.5 * wave(2)), memory_bytes: Math.round((380 + 20 * wave(5)) * MB) },
+      { name: "Web view", count: 3, cpu: Math.max(0.1, 0.8 + 0.5 * wave(3)), memory_bytes: Math.round(260 * MB) },
+    ];
+    if (n % 12 < 4) parts.splice(1, 0, { name: "Python", count: 1, cpu: 9 + 3 * wave(1.5), memory_bytes: Math.round((210 + n * 3) * MB) });
+    return {
+      cpu: parts.reduce((a, p) => a + p.cpu, 0),
+      memory_bytes: parts.reduce((a, p) => a + p.memory_bytes, 0),
+      parts,
+      cores: 8,
+      total_memory_bytes: 16 * 1024 * MB,
+    };
   }
 
   async forgetApprovals(): Promise<AnalysisView | null> {

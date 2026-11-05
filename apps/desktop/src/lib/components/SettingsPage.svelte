@@ -77,6 +77,7 @@
     { section: "editor", id: "brackets", words: "brackets quotes auto close pairs" },
     { section: "editor", id: "activeLine", words: "highlight current line" },
     { section: "environments", id: "runAfterSave", words: "run after save automatically" },
+    { section: "environments", id: "showResources", words: "resources processor cpu memory ram usage monitor status bar show hide" },
     { section: "environments", id: "runOnOpen", words: "run when open start project automatically" },
     { section: "environments", id: "timeout", words: "timeout time limit seconds python r new step default" },
     { section: "environments", id: "memory", words: "memory limit ram gigabytes python r console" },
@@ -601,6 +602,16 @@
           <span>
             <span class="font-semibold">Run the analysis after saving a step</span>
             <span class="block text-sm text-ink-soft">What the change affects reruns at once; nothing else does. Off: results show as outdated until you run.</span>
+          </span>
+        </label>
+      {/if}
+
+      {#if shown("showResources", "environments")}
+        <label class="setting setting-check">
+          <input type="checkbox" checked={prefs.value.showResources} onchange={(e) => set({ showResources: e.currentTarget.checked })} />
+          <span>
+            <span class="font-semibold">Show resource use in the status bar</span>
+            <span class="block text-sm text-ink-soft">The processor and memory used by this app and its Python and R programs, with a breakdown when you click it. Not read while hidden.</span>
           </span>
         </label>
       {/if}
