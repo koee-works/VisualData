@@ -80,6 +80,14 @@
       transition: none !important;
     }
   }
+  /* The same, chosen in Settings. */
+  :root[data-reduce-motion="true"] *,
+  :root[data-reduce-motion="true"] *::before,
+  :root[data-reduce-motion="true"] *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 @layer components {

@@ -1,7 +1,7 @@
 // Workspace state shared by the components (Svelte 5 runes).
 // The backend is the source of truth; every edit returns a fresh view.
 
-import { prefs } from "./prefs.svelte";
+import { prefs, updatePrefs } from "./prefs.svelte";
 import { ALL_PANES, loadPanes, savePanes, toggled, type PaneName, type Panes } from "./layout";
 import { errorMessage, type Backend } from "./api/backend";
 import type { AnalysisView, Column, Comment, NotebookCell, NotebookLanguage, Problem, Problems, SourceView, StepEvent, StepOp, StepView, Parameter } from "./api/types";
@@ -9,6 +9,7 @@ import { SOURCE_ID } from "./api/types";
 import { stepTitle } from "./format";
 
 export type CenterTab = "step" | "notebook" | "settings";
+export type SettingsSection = "general" | "data" | "appearance" | "editor" | "environments" | "safety" | "projects" | "keyboard" | "about";
 /** A button shown beside a passing message. */
 export type NoticeAction = { label: string; run: () => void | Promise<void> };
 
@@ -19,9 +20,9 @@ export class Workspace {
   centerTab = $state<CenterTab>("step");
   /** The Settings tab is open (beside Step and Notebook), and which section to show. */
   settingsOpen = $state(false);
-  settingsSection = $state<"general" | "appearance" | "editor" | "environments" | null>(null);
+  settingsSection = $state<SettingsSection | null>(null);
 
-  openSettings(section: "general" | "appearance" | "editor" | "environments" | null = null) {
+  openSettings(section: SettingsSection | null = null) {
     this.settingsOpen = true;
     this.settingsSection = section;
     this.centerTab = "settings";
@@ -244,6 +245,10 @@ export class Workspace {
     this.progress = {};
     // Code someone else wrote is shown before anything can run it.
     this.reviewOpen = this.pendingReview.length > 0;
+    if (!this.view) return;
+    // Remember it for "reopen the last project".
+    if (prefs.value.lastProject !== dir) void updatePrefs({ lastProject: dir });
+    if (prefs.value.runOnOpen && this.view.steps.length && !this.pendingReview.length) await this.run();
   }
 
   /** Ask where to save, then export a source or a current result. */
@@ -362,6 +367,12 @@ export class Workspace {
     if (ok)
       this.notice =
         kind === "html" ? `Saved the report to ${path}` : `Saved a Jupyter notebook in ${language[kind]} that reproduces the analysis to ${path}`;
+  }
+
+  /** Forget every approved piece of code: Python and R steps ask for review again. */
+  async forgetApprovals() {
+    const v = await this.backend.forgetApprovals();
+    if (v) this.apply(v);
   }
 
   /** "Trust all in this session": run all Python without review until the app quits. */

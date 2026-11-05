@@ -2,6 +2,7 @@
 // in-memory mock in tests and browser previews.
 
 import type {
+  AboutView,
   AnalysisView,
   NotebookCell,
   NotebookLanguage,
@@ -49,13 +50,18 @@ export interface Backend {
   approve(stepIds: string[]): Promise<AnalysisView>;
   /** Run all Python without review until the app quits, or stop. */
   setTrustAll(on: boolean): Promise<AnalysisView | null>;
+  /** Version, and where settings and approvals are kept. */
+  about(): Promise<AboutView>;
+  /** Forget every approved piece of code, so Python and R steps ask for review again. */
+  forgetApprovals(): Promise<AnalysisView | null>;
   /** Resolves when the run ends; progress arrives through `onStep`. */
   run(handlers: RunHandlers): Promise<RunSummary>;
   cancel(): Promise<void>;
   /** Project folder passed on the command line, if any. */
   startupProject(): Promise<string | null>;
   pickCsv(): Promise<string | null>;
-  pickFolder(): Promise<string | null>;
+  /** Ask for a folder, starting at `start` (else the projects folder from Settings). */
+  pickFolder(start?: string | null): Promise<string | null>;
   /** Ask where to save a file; `null` if cancelled. */
   pickSavePath(defaultName: string): Promise<string | null>;
   /** Everything the linter finds, errors first. */

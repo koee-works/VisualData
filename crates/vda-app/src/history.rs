@@ -4,7 +4,7 @@
 //! - **Undo and redo** for this session, in memory (the last
 //!   [`MAX_UNDO`] changes). Undo and redo are themselves saved changes.
 //! - **History** in the project's `history/` folder: one file per saved
-//!   version (the last [`MAX_VERSIONS`]), each with what changed and when,
+//!   version (the last 500 by default, or what Settings says), each with what changed and when,
 //!   so earlier versions can be restored after the app is closed, and by
 //!   anyone the project is shared with. Restoring is a change like any
 //!   other, so it can be undone.
@@ -22,6 +22,8 @@ use vda_core::persist;
 
 pub const MAX_UNDO: usize = 100;
 pub const MAX_VERSIONS: usize = 500;
+/// Fewest and most versions the setting may ask to keep.
+pub const KEEP_RANGE: std::ops::RangeInclusive<usize> = 10..=5000;
 
 #[derive(Debug, Clone)]
 pub struct Edit {
@@ -191,7 +193,7 @@ fn read_version(path: &Path) -> Result<(u64, u64, String, Json)> {
 
 /// Record a saved change in the project's history. The first change of a
 /// project with no history also records how it was before.
-pub fn record(project: &Path, before: &Analysis, after: &Analysis, what: &str) -> Result<()> {
+pub fn record(project: &Path, before: &Analysis, after: &Analysis, what: &str, keep: usize) -> Result<()> {
     let existing = versions(project);
     let mut next = existing.last().map(|v| v.0 + 1).unwrap_or(1);
     if existing.is_empty() {
@@ -200,8 +202,8 @@ pub fn record(project: &Path, before: &Analysis, after: &Analysis, what: &str) -
     }
     write_version(project, next, what, after)?;
     let all = versions(project);
-    if all.len() > MAX_VERSIONS {
-        for (_, p) in &all[..all.len() - MAX_VERSIONS] {
+    if all.len() > keep {
+        for (_, p) in &all[..all.len() - keep] {
             let _ = std::fs::remove_file(p);
         }
     }
@@ -222,6 +224,7 @@ impl App {
             self.retarget_comments(&old, &new)?;
         }
         let project = self.session()?.project_dir().to_path_buf();
+        let keep = self.versions_kept();
         match undoing {
             None => {
                 self.edits.undo.push(Edit { analysis: before, what: what.clone() });
@@ -230,15 +233,15 @@ impl App {
                 }
                 self.edits.redo.clear();
                 // History is a convenience: the change itself is already saved.
-                let _ = record(&project, &self.edits.undo.last().unwrap().analysis, after, &what);
+                let _ = record(&project, &self.edits.undo.last().unwrap().analysis, after, &what, keep);
             }
             Some(true) => {
                 let what = format!("Undid: {}", self.edits.redo.last().map(|e| e.what.as_str()).unwrap_or("a change"));
-                let _ = record(&project, &before, after, &what);
+                let _ = record(&project, &before, after, &what, keep);
             }
             Some(false) => {
                 let what = format!("Redid: {}", self.edits.undo.last().map(|e| e.what.as_str()).unwrap_or("a change"));
-                let _ = record(&project, &before, after, &what);
+                let _ = record(&project, &before, after, &what, keep);
             }
         }
         Ok(())

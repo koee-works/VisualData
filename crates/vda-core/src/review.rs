@@ -105,6 +105,18 @@ impl Approvals {
         self.save()
     }
 
+    /// How many pieces of code are approved (not counting "trust all").
+    pub fn count(&self) -> usize {
+        self.approved.len()
+    }
+
+    /// Forget every approval, in this list and in the file. Nothing is
+    /// merged back from disk first: that would bring them back.
+    pub fn clear(&mut self) -> Result<(), Error> {
+        self.approved.clear();
+        self.save()
+    }
+
     pub fn revoke(&mut self, fingerprint: &str) -> Result<(), Error> {
         self.merge_from_disk()?;
         self.approved.remove(fingerprint);

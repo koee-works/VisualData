@@ -79,6 +79,8 @@ impl App {
     pub fn console_start(&mut self, step_id: &str) -> Result<ConsoleView> {
         self.console = None;
         let interpreter = self.interpreter.clone();
+        // The limit chosen in Settings, else the console's own.
+        let memory_limit_mb = self.code_memory_limit().unwrap_or(Some(4096));
         let s = self.session()?;
         let step = s.analysis.step(step_id).ok_or_else(|| crate::AppError::from(format!("unknown step `{step_id}`")))?.clone();
         let language = match step.kind {
@@ -94,7 +96,7 @@ impl App {
             Language::R => (s.r_program().unwrap_or_else(vda_core::rlang::default_rscript), s.r_runner_libraries()),
         };
         let console = Console::start(
-            Start { language, program: &program, inputs: &inputs, params: &params, libraries: &libraries, work_root: &work, memory_limit_mb: Some(4096) },
+            Start { language, program: &program, inputs: &inputs, params: &params, libraries: &libraries, work_root: &work, memory_limit_mb },
             Duration::from_secs(120),
         )?;
         let view = ConsoleView {

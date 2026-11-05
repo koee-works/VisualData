@@ -17,7 +17,7 @@ pub mod refresh;
 mod settings;
 pub use comments::CommentView;
 pub use history::VersionView;
-pub use settings::{PackageView, PythonView, RView};
+pub use settings::{AboutView, PackageView, PythonView, RView};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value as J;
@@ -435,12 +435,21 @@ impl App {
         allowed.extend(sources.iter().map(|s| PathBuf::from(&s.path)).filter(|p| p.is_absolute()));
         let options = EngineOptions { allowed_paths: Some(allowed), ..self.engine_options.clone() };
         let engine = Box::new(DuckDbEngine::with_options(options)?);
-        let python = Some(PythonRunner::new(self.interpreter.clone(), dir.join(".work")));
+        let limit = self.code_memory_limit();
+        let mut python = PythonRunner::new(self.interpreter.clone(), dir.join(".work"));
+        if let Some(mb) = limit {
+            python.memory_limit_mb = mb;
+        }
+        let python = Some(python);
         let mut session = match analysis {
             Some(a) => Session::new(a, dir, engine, python)?,
             None => Session::open(dir, engine, python)?,
         };
-        session.set_r(Some(vda_core::rlang::RRunner::new(self.rscript.clone(), dir.join(".work"))));
+        let mut r = vda_core::rlang::RRunner::new(self.rscript.clone(), dir.join(".work"));
+        if let Some(mb) = limit {
+            r.memory_limit_mb = mb;
+        }
+        session.set_r(Some(r));
         let mut approvals = match &self.approvals_path {
             Some(p) => Approvals::load(p.clone())?,
             None => self.memory_approvals.clone(),

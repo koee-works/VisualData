@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import type { Backend } from "./lib/api/backend";
   import { Workspace } from "./lib/workspace.svelte";
-  import { initPrefs } from "./lib/prefs.svelte";
+  import { initPrefs, prefs, updatePrefs } from "./lib/prefs.svelte";
   import Welcome from "./lib/components/Welcome.svelte";
   import WorkspaceView from "./lib/components/WorkspaceView.svelte";
 
@@ -32,6 +32,14 @@
     const w = new Workspace(backend);
     const dir = await backend.startupProject().catch(() => null);
     if (dir) await w.open(dir);
+    else if (prefs.value.reopenLastProject && prefs.value.lastProject) {
+      // The project may have moved since: then start on the welcome page, not an error.
+      await w.open(prefs.value.lastProject);
+      if (!w.view) {
+        w.error = null;
+        void updatePrefs({ lastProject: undefined });
+      }
+    }
     const select = new URLSearchParams(location.search).get("select");
     if (select) w.selected = select;
     if (new URLSearchParams(location.search).get("tab") === "notebook") w.centerTab = "notebook";

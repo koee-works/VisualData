@@ -237,8 +237,16 @@ impl App {
                 self.author = name.to_string();
             }
         }
+        let before = self.code_memory_limit();
         self.settings.preferences = p.clone();
         self.settings.save()?;
+        // Python and R programs start with their limit, so a new limit
+        // applies from a fresh session (nothing is lost: it is all saved).
+        if before != self.code_memory_limit() {
+            if let Some(dir) = self.session.as_ref().map(|s| s.project_dir().to_path_buf()) {
+                self.start(None, &dir)?;
+            }
+        }
         Ok(self.preferences())
     }
 
@@ -259,5 +267,87 @@ impl App {
             self.start(None, &dir)?;
         }
         Ok(self.python_view(env))
+    }
+}
+
+/// Where the app keeps what is yours, and what it holds.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct AboutView {
+    /// This build's version.
+    pub version: String,
+    pub settings_path: Option<String>,
+    pub approvals_path: Option<String>,
+    /// Pieces of Python and R code approved to run.
+    pub approvals: usize,
+}
+
+impl App {
+    /// The memory limit for Python and R programs from Settings: `None` when
+    /// unset (each language keeps its own), `Some(None)` for no limit, and
+    /// `Some(Some(mb))` for a limit.
+    pub(crate) fn code_memory_limit(&self) -> Option<Option<u64>> {
+        let mb = self.settings.preferences["codeMemoryMb"].as_u64()?;
+        Some(if mb == 0 { None } else { Some(mb.clamp(256, 262_144)) })
+    }
+
+    /// How many saved versions a project's history keeps.
+    pub(crate) fn versions_kept(&self) -> usize {
+        match self.settings.preferences["versionsKept"].as_u64() {
+            Some(n) => (n as usize).clamp(*crate::history::KEEP_RANGE.start(), *crate::history::KEEP_RANGE.end()),
+            None => crate::history::MAX_VERSIONS,
+        }
+    }
+
+    /// Approvals: from the file when there is one, else this App's own.
+    fn approvals_now(&self) -> Result<vda_core::review::Approvals> {
+        Ok(match &self.approvals_path {
+            Some(p) => vda_core::review::Approvals::load(p.clone())?,
+            None => self.memory_approvals.clone(),
+        })
+    }
+
+    pub fn about(&self) -> Result<AboutView> {
+        Ok(AboutView {
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            settings_path: self.settings.path.as_ref().map(|p| p.display().to_string()),
+            approvals_path: self.approvals_path.as_ref().map(|p| p.display().to_string()),
+            approvals: self.approvals_now()?.count(),
+        })
+    }
+
+    /// Forget every approval: Python and R steps ask for review again. With a
+    /// project open, returns it as it now is.
+    pub fn forget_approvals(&mut self) -> Result<Option<crate::AnalysisView>> {
+        match &self.approvals_path {
+            Some(p) => vda_core::review::Approvals::load(p.clone())?.clear()?,
+            None => self.memory_approvals.clear()?,
+        }
+        let Some(dir) = self.session.as_ref().map(|s| s.project_dir().to_path_buf()) else { return Ok(None) };
+        self.start(None, &dir)?;
+        self.view().map(Some)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn memory_limit_and_versions_read_from_preferences() {
+        // In memory: `App::default()` would write the real settings file.
+        let mut app = App::new(Default::default(), "python3".into());
+        assert_eq!(app.code_memory_limit(), None);
+        assert_eq!(app.versions_kept(), crate::history::MAX_VERSIONS);
+        app.set_preferences(&json!({"codeMemoryMb": 2048, "versionsKept": 100})).unwrap();
+        assert_eq!(app.code_memory_limit(), Some(Some(2048)));
+        assert_eq!(app.versions_kept(), 100);
+        app.set_preferences(&json!({"codeMemoryMb": 0, "versionsKept": 1})).unwrap();
+        assert_eq!(app.code_memory_limit(), Some(None));
+        assert_eq!(app.versions_kept(), 10);
+        // Too small a limit to run anything is raised; text is ignored.
+        app.set_preferences(&json!({"codeMemoryMb": 5, "versionsKept": "many"})).unwrap();
+        assert_eq!(app.code_memory_limit(), Some(Some(256)));
+        assert_eq!(app.versions_kept(), crate::history::MAX_VERSIONS);
     }
 }

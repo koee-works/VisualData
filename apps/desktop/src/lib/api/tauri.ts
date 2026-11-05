@@ -2,7 +2,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import type { Backend, RunHandlers } from "./backend";
+import { prefs } from "../prefs.svelte";
 import type {
+  AboutView,
   AnalysisView,
   NotebookCell,
   NotebookLanguage,
@@ -18,6 +20,24 @@ import type {
   CleanReport,
   Comparison,
   ColumnDetail, Comment, PythonView, RView, ConsoleView, ConsoleReply, ExternalView, SyncView, ScheduleView, VersionView } from "./types";
+
+/** A file name inside the exports folder chosen in Settings, if there is one. */
+function inExportsFolder(name: string): string {
+  const dir = prefs.value.exportsFolder;
+  if (!dir) return name;
+  return `${dir.replace(/[\\/]+$/, "")}${dir.includes("\\") && !dir.includes("/") ? "\\" : "/"}${name}`;
+}
+
+/** Filters with the chosen export format first, which is the one a save dialog starts on. */
+function exportFilters() {
+  const all = [
+    { id: "csv", name: "CSV", extensions: ["csv"] },
+    { id: "xlsx", name: "Excel workbook", extensions: ["xlsx"] },
+    { id: "parquet", name: "Parquet", extensions: ["parquet"] },
+  ];
+  const first = all.find((f) => f.id === prefs.value.exportFormat);
+  return (first ? [first, ...all.filter((f) => f !== first)] : all).map(({ name, extensions }) => ({ name, extensions }));
+}
 
 /** Commands registered in apps/desktop/src-tauri/src/main.rs. */
 export const tauriBackend: Backend = {
@@ -40,6 +60,8 @@ export const tauriBackend: Backend = {
   rename: (name) => invoke<AnalysisView>("rename", { name }),
   approve: (stepIds: string[]) => invoke<AnalysisView>("approve", { stepIds }),
   setTrustAll: (on: boolean) => invoke<AnalysisView | null>("set_trust_all", { on }),
+  about: () => invoke<AboutView>("about"),
+  forgetApprovals: () => invoke<AnalysisView | null>("forget_approvals"),
 
   async run({ onStep }: RunHandlers) {
     // Listen before starting so no event is missed; the command itself
@@ -69,12 +91,8 @@ export const tauriBackend: Backend = {
   },
   async pickSavePath(defaultName) {
     const p = await save({
-      defaultPath: defaultName,
-      filters: [
-        { name: "CSV", extensions: ["csv"] },
-        { name: "Excel workbook", extensions: ["xlsx"] },
-        { name: "Parquet", extensions: ["parquet"] },
-      ],
+      defaultPath: inExportsFolder(defaultName),
+      filters: exportFilters(),
     });
     return typeof p === "string" ? p : null;
   },
@@ -119,13 +137,14 @@ export const tauriBackend: Backend = {
     const preset = await invoke<string | null>("preset_save_path", { name: defaultName });
     if (preset) return preset;
     const p = await save({
-      defaultPath: defaultName,
+      defaultPath: inExportsFolder(defaultName),
       filters: [kind === "html" ? { name: "Web page", extensions: ["html"] } : { name: "Jupyter notebook", extensions: ["ipynb"] }],
     });
     return typeof p === "string" ? p : null;
   },
-  async pickFolder() {
-    const p = await open({ multiple: false, directory: true });
+  async pickFolder(start) {
+    const defaultPath = start ?? prefs.value.projectsFolder;
+    const p = await open({ multiple: false, directory: true, ...(defaultPath ? { defaultPath } : {}) });
     return typeof p === "string" ? p : null;
   },
 };

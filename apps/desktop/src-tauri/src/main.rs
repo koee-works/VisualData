@@ -232,6 +232,16 @@ async fn approve(s: State<'_, Shared>, step_ids: Vec<String>) -> Res<AnalysisVie
     with(&s, |a| a.approve(&step_ids))
 }
 
+#[tauri::command]
+async fn about(s: State<'_, Shared>) -> Res<vda_app::AboutView> {
+    with(&s, |a| a.about())
+}
+
+#[tauri::command]
+async fn forget_approvals(s: State<'_, Shared>) -> Res<Option<AnalysisView>> {
+    with(&s, |a| a.forget_approvals())
+}
+
 /// "Trust all in this session": Python runs without review until the app
 /// quits. Kept in memory only.
 #[tauri::command]
@@ -410,6 +420,8 @@ fn main() {
             source_sheets,
             update_source,
             set_trust_all,
+            about,
+            forget_approvals,
             create_project,
             open_project,
             view,
