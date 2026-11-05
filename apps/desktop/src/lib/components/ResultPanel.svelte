@@ -2,6 +2,7 @@
   import { DropdownMenu, Tabs } from "bits-ui";
   import { Download } from "@lucide/svelte";
   import { formatCount, stepTitle } from "../format";
+  import { prefs } from "../prefs.svelte";
   import type { Workspace } from "../workspace.svelte";
   import { errorMessage } from "../api/backend";
   import DataGrid from "./DataGrid.svelte";
@@ -16,6 +17,14 @@
   let isChart = $derived(step?.mode === "chart");
   let hasResult = $derived(isSource || (step !== null && (step.rows !== null || (isChart && step.state !== "not run"))));
   let stale = $derived(!!step && step.state === "stale");
+
+  // The format chosen in Settings comes first.
+  const FORMATS = [
+    ["csv", "CSV", "Opens anywhere"],
+    ["xlsx", "Excel workbook", "Up to 1,048,575 rows"],
+    ["parquet", "Parquet", "Exact types, any size"],
+  ] as const;
+  let formats = $derived([...FORMATS].sort((a, b) => Number(b[0] === prefs.value.exportFormat) - Number(a[0] === prefs.value.exportFormat)));
 
   /** Why a table is empty, when the app can tell: what this step took in and
    *  where the rows went. */
@@ -129,12 +138,12 @@
                 align="end"
                 sideOffset={4}
               >
-                {#each [["csv", "CSV", "Opens anywhere"], ["xlsx", "Excel workbook", "Up to 1,048,575 rows"], ["parquet", "Parquet", "Exact types, any size"]] as [ext, name, hint] (ext)}
+                {#each formats as [ext, name, hint] (ext)}
                   <DropdownMenu.Item
                     class="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 outline-none data-[highlighted]:bg-select"
                     onSelect={() => ws.exportResult(ws.selected, ext as "csv" | "xlsx" | "parquet")}
                   >
-                    <span class="flex-1">{name}</span>
+                    <span class="flex-1">{name}{#if ext === prefs.value.exportFormat}<span class="text-xs text-ink-faint"> (default)</span>{/if}</span>
                     <span class="text-xs text-ink-faint">{hint}</span>
                   </DropdownMenu.Item>
                 {/each}

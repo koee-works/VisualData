@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describe as describeStep, formatCell, parseLiteral } from "./format";
+import { cellDisplay, describe as describeStep, exactCell, formatCell, formatDateText, missingLabel, parseLiteral } from "./format";
 import { renderMarkdown } from "./markdown";
 
 describe("numbers in a column line up", () => {
@@ -77,5 +77,37 @@ describe("renderMarkdown", () => {
     expect(html).not.toContain("<img");
     expect(html).not.toContain("<script");
     expect(html).toContain("&lt;img");
+  });
+});
+
+describe("dates and missing values follow the settings", () => {
+  it("writes dates in the chosen format and leaves anything else alone", () => {
+    expect(formatDateText("2026-07-02", "iso")).toBe("2026-07-02");
+    expect(formatDateText("2026-07-02", "us")).toBe("7/2/2026");
+    expect(formatDateText("2026-07-02", "eu")).toBe("02.07.2026");
+    expect(formatDateText("2026-07-02", "long")).toBe("2 Jul 2026");
+    expect(formatDateText("2026-07-02 13:45:00", "long")).toBe("2 Jul 2026 13:45:00");
+    expect(formatDateText("2026-07-02T13:45:00", "us")).toBe("7/2/2026 13:45:00");
+    expect(formatDateText("not a date", "us")).toBe("not a date");
+    expect(formatDateText("2026-13-02", "us")).toBe("2026-13-02");
+  });
+
+  it("applies the format to date cells but keeps the exact value for tooltips", () => {
+    const before = cellDisplay.dates;
+    cellDisplay.dates = "us";
+    expect(formatCell({ t: "date", v: "2026-07-02" })).toBe("7/2/2026");
+    expect(formatCell({ t: "timestamp", v: "2026-07-02 09:30:00" })).toBe("7/2/2026 09:30:00");
+    expect(exactCell({ t: "date", v: "2026-07-02" })).toBe("2026-07-02");
+    expect(formatCell({ t: "text", v: "2026-07-02" })).toBe("2026-07-02");
+    cellDisplay.dates = before;
+  });
+
+  it("shows missing cells as chosen", () => {
+    const before = cellDisplay.missing;
+    for (const [choice, shown] of [["missing", "missing"], ["dash", "—"], ["blank", ""], ["null", "null"]] as const) {
+      cellDisplay.missing = choice;
+      expect(missingLabel()).toBe(shown);
+    }
+    cellDisplay.missing = before;
   });
 });

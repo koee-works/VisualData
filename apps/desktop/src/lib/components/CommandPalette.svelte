@@ -26,6 +26,8 @@
     const step = ws.centerTab === "step" ? ws.selectedStep : null;
     const code = step && (step.op.type === "python" || step.op.type === "r") ? step : null;
     const busy = running ? "Wait for the run to finish" : undefined;
+    // A table with a current result can be exported (the same rule as the Export button).
+    const exportable = !!ws.selectedSource || (!!ws.selectedStep && ws.selectedStep.rows !== null && ws.selectedStep.state !== "stale" && ws.selectedStep.mode !== "chart");
     const pane = (name: PaneName, title: string, shortcut?: string, disabled?: string): Command => ({
       id: `pane.${name}`,
       group: "Actions",
@@ -55,6 +57,14 @@
       ),
       { id: "add.source", group: "Actions", title: "Add a source", keywords: "csv excel parquet database file import", disabled: busy, run: () => ws.addSource() },
       { id: "review", group: "Actions", title: "Review code waiting for approval", keywords: "python r approve trust", disabled: ws.pendingReview.length ? undefined : "No code is waiting", run: () => (ws.reviewOpen = true) },
+      {
+        id: "export.table",
+        group: "Actions",
+        title: `Export this table as ${{ csv: "CSV", xlsx: "Excel", parquet: "Parquet" }[prefs.value.exportFormat]}`,
+        keywords: "save csv excel xlsx parquet file download",
+        disabled: !exportable ? "Select a table with a current result first" : undefined,
+        run: () => ws.exportResult(ws.selected, prefs.value.exportFormat),
+      },
       { id: "export.html", group: "Actions", title: "Export notebook as a web page", keywords: "html report share", run: () => ws.exportNotebook("html") },
       { id: "export.ipynb", group: "Actions", title: "Export notebook for Jupyter (Python)", keywords: "ipynb python", run: () => ws.exportNotebook("python") },
       { id: "export.ipynb-sql", group: "Actions", title: "Export notebook for Jupyter (SQL)", keywords: "ipynb sql duckdb", run: () => ws.exportNotebook("sql") },
@@ -84,10 +94,15 @@
       { id: "r", group: "Actions", title: "Choose the R installation", keywords: "rscript", run: () => (ws.rOpen = true) },
       { id: "schedule", group: "Actions", title: "Refresh on a schedule", keywords: "cron vda-run automate", run: () => (ws.scheduleOpen = true) },
       { id: "go.settings", group: "Go to", title: "Settings", shortcut: `${key},`, keywords: "preferences options", run: () => ws.openSettings() },
-      { id: "go.settings.general", group: "Go to", title: "Settings: General", keywords: "author numbers run after save", run: () => ws.openSettings("general") },
-      { id: "go.settings.appearance", group: "Go to", title: "Settings: Appearance", keywords: "theme text size", run: () => ws.openSettings("appearance") },
-      { id: "go.settings.editor", group: "Go to", title: "Settings: Code editor", keywords: "vim wrap keys", run: () => ws.openSettings("editor") },
-      { id: "go.settings.environments", group: "Go to", title: "Settings: Python and R", run: () => ws.openSettings("environments") },
+      { id: "go.settings.general", group: "Go to", title: "Settings: General", keywords: "author name messages layout", run: () => ws.openSettings("general") },
+      { id: "go.settings.data", group: "Go to", title: "Settings: Data", keywords: "numbers decimals row height missing dates markers", run: () => ws.openSettings("data") },
+      { id: "go.settings.appearance", group: "Go to", title: "Settings: Appearance", keywords: "theme text size motion", run: () => ws.openSettings("appearance") },
+      { id: "go.settings.editor", group: "Go to", title: "Settings: Code editor", keywords: "vim wrap keys font tab indent line numbers", run: () => ws.openSettings("editor") },
+      { id: "go.settings.environments", group: "Go to", title: "Settings: Running", keywords: "python r timeout memory run after save open", run: () => ws.openSettings("environments") },
+      { id: "go.settings.safety", group: "Go to", title: "Settings: Safety", keywords: "review trust approve forget code", run: () => ws.openSettings("safety") },
+      { id: "go.settings.projects", group: "Go to", title: "Settings: Projects", keywords: "versions history export format reopen folders", run: () => ws.openSettings("projects") },
+      { id: "go.settings.keyboard", group: "Go to", title: "Settings: Keyboard shortcuts", keywords: "keys hotkeys list", run: () => ws.openSettings("keyboard") },
+      { id: "go.settings.about", group: "Go to", title: "Settings: About", keywords: "version diagnostics reset back up import export settings", run: () => ws.openSettings("about") },
       { id: "go.notebook", group: "Go to", title: "Notebook", keywords: "report cells", run: () => (ws.centerTab = "notebook") },
       { id: "go.problems", group: "Go to", title: "Problems", keywords: "lint warnings errors", run: () => openActivity("problems") },
       { id: "go.history", group: "Go to", title: "History", keywords: "versions restore", run: () => openActivity("history") },

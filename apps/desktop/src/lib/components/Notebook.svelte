@@ -3,7 +3,7 @@
   import { DropdownMenu } from "bits-ui";
   import type { Workspace } from "../workspace.svelte";
   import type { NotebookCell, Page } from "../api/types";
-  import { columnDecimals, formatCell, formatCount, stepTitle } from "../format";
+  import { columnDecimals, formatCell, formatCount, missingLabel, stepTitle } from "../format";
   import { renderMarkdown } from "../markdown";
   import StateMark from "./StateMark.svelte";
   import ChartView from "./ChartView.svelte";
@@ -151,7 +151,7 @@
                       <tr class="border-t border-rule/60">
                         {#each r as v, vi (vi)}
                           <td class="px-3 py-1" class:text-right={v.t === "int" || v.t === "float"} class:text-ink-faint={v.t === "null"}>
-                            {v.t === "null" ? "missing" : formatCell(v, columnDecimals(p.rows.map((row) => row[vi]!)))}
+                            {v.t === "null" ? missingLabel() : formatCell(v, columnDecimals(p.rows.map((row) => row[vi]!)))}
                           </td>
                         {/each}
                       </tr>

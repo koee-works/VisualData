@@ -399,6 +399,15 @@ export interface PythonPackage {
   version: string | null;
 }
 
+/** Where the app keeps what is yours, and what it holds. */
+export interface AboutView {
+  version: string;
+  settings_path: string | null;
+  approvals_path: string | null;
+  /** Pieces of Python and R code approved to run. */
+  approvals: number;
+}
+
 export interface PythonView {
   interpreter: string;
   executable: string | null;

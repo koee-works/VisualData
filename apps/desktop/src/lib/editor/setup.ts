@@ -44,7 +44,7 @@ const highlight = HighlightStyle.define([
 
 const theme = EditorView.theme({
   "&": {
-    fontSize: "0.8125rem",
+    fontSize: "var(--editor-font-size, 0.8125rem)",
     backgroundColor: "var(--color-panel)",
     border: "1px solid var(--color-rule-strong)",
     borderRadius: "5px",
@@ -104,7 +104,7 @@ function language(lang: Lang, ctx: () => EditorContext): Extension {
     }
     case "r": {
       const lang = StreamLanguage.define(rMode);
-      return [lang, lang.data.of({ autocomplete: own }), indentUnit.of("  ")];
+      return [lang, lang.data.of({ autocomplete: own })];
     }
     case "formula":
       return [EditorState.languageData.of(() => [{ autocomplete: own }])];
@@ -183,6 +183,29 @@ export interface Options {
   keys: Keys;
   keysCompartment: Compartment;
   languageCompartment: Compartment;
+  /** Holds what the editor preferences change (see `prefExtensions`). */
+  prefsCompartment: Compartment;
+  editor: EditorPrefs;
+}
+
+/** The preferences that shape an editor, applied without rebuilding it. */
+export interface EditorPrefs {
+  lineNumbers: boolean;
+  activeLine: boolean;
+  closeBrackets: boolean;
+  tabWidth: number;
+}
+
+export function prefExtensions(p: EditorPrefs, singleLine: boolean): Extension[] {
+  const multi = !singleLine;
+  return [
+    multi && p.lineNumbers ? [lineNumbers(), highlightActiveLineGutter()] : [],
+    multi && p.activeLine ? highlightActiveLine() : [],
+    multi ? lintGutter() : [],
+    p.closeBrackets ? [closeBrackets(), keymap.of(closeBracketsKeymap)] : [],
+    indentUnit.of(" ".repeat(p.tabWidth)),
+    EditorState.tabSize.of(p.tabWidth),
+  ];
 }
 
 /** Vim keys are loaded the first time someone turns them on. */
@@ -199,7 +222,7 @@ export function extensions(o: Options): Extension[] {
     o.keysCompartment.of([]),
     runKeys(o.lang, o.onrun, !!o.singleLine),
     consoleKeys(o),
-    multi ? [lineNumbers(), highlightActiveLineGutter(), highlightActiveLine(), lintGutter()] : [],
+    o.prefsCompartment.of(prefExtensions(o.editor, !!o.singleLine)),
     highlightSpecialChars(),
     history(),
     drawSelection(),
@@ -208,13 +231,12 @@ export function extensions(o: Options): Extension[] {
     indentOnInput(),
     syntaxHighlighting(highlight),
     bracketMatching(),
-    closeBrackets(),
     autocompletion({ icons: false, activateOnTyping: true }),
     rectangularSelection(),
     crosshairCursor(),
     highlightSelectionMatches(),
     search({ top: true }),
-    keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap, ...completionKeymap, ...(multi ? [indentWithTab] : [])]),
+    keymap.of([...defaultKeymap, ...searchKeymap, ...historyKeymap, ...completionKeymap, ...(multi ? [indentWithTab] : [])]),
     o.languageCompartment.of(language(o.lang, o.context)),
     theme,
     o.placeholder ? placeholderText(o.placeholder) : [],

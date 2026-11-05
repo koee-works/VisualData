@@ -302,3 +302,48 @@ fn preferences_are_kept_per_user_and_sign_comments() {
     let c = again.add_comment("analysis", "Signed?", None).unwrap();
     assert_eq!(c.last().unwrap().author, "Karl");
 }
+
+#[test]
+fn history_keeps_as_many_versions_as_settings_say() {
+    let (mut app, _dir) = app("keep");
+    app.set_preferences(&json!({"versionsKept": 10})).unwrap();
+    app.add_step(&["source".into()], Some("Orders".into()), &filter(1)).unwrap();
+    for n in 2..=20 {
+        app.update_step("filter_1", Some("Orders".into()), &filter(n), None).unwrap();
+    }
+    assert_eq!(app.history(100).unwrap().len(), 10);
+    // Asking for fewer than the least allowed keeps the least, not none.
+    app.set_preferences(&json!({"versionsKept": 1})).unwrap();
+    app.update_step("filter_1", Some("Orders".into()), &filter(30), None).unwrap();
+    assert_eq!(app.history(100).unwrap().len(), 10);
+}
+
+#[test]
+fn approved_code_can_be_forgotten_and_is_counted() {
+    let (mut app, _dir) = app("forget");
+    assert_eq!(app.about().unwrap().approvals, 0);
+    app.add_step(&["source".into()], None, &json!({"type": "python", "code": "result = df", "timeout_ms": 30000})).unwrap();
+    // Code you write is approved, and counted.
+    assert!(app.view().unwrap().review.is_empty());
+    let about = app.about().unwrap();
+    assert_eq!(about.approvals, 1);
+    assert!(about.settings_path.is_some() && about.approvals_path.is_some());
+    assert!(!about.version.is_empty());
+
+    // Forgetting asks for review again, in the open project and after a restart.
+    let v = app.forget_approvals().unwrap().expect("a project is open");
+    assert_eq!(v.review.len(), 1);
+    assert_eq!(app.about().unwrap().approvals, 0);
+}
+
+#[test]
+fn a_new_memory_limit_keeps_the_open_project_working() {
+    let (mut app, _dir) = app("memory");
+    app.add_step(&["source".into()], Some("Orders".into()), &filter(1)).unwrap();
+    app.set_preferences(&json!({"codeMemoryMb": 1024})).unwrap();
+    assert_eq!(app.view().unwrap().steps.len(), 1);
+    // "No limit" and "each language's own" are also accepted.
+    app.set_preferences(&json!({"codeMemoryMb": 0})).unwrap();
+    app.set_preferences(&json!({})).unwrap();
+    assert_eq!(app.view().unwrap().steps.len(), 1);
+}

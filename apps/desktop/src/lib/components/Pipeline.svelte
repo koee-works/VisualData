@@ -28,6 +28,7 @@
   import type { Workspace } from "../workspace.svelte";
   import type { StepOp, StepView } from "../api/types";
   import { formatCount, stepTitle } from "../format";
+  import { prefs } from "../prefs.svelte";
   import StateMark from "./StateMark.svelte";
   import ParametersPanel from "./ParametersPanel.svelte";
 
@@ -122,9 +123,9 @@
       case "sql":
         return { type, sql: "SELECT *\nFROM input\nLIMIT 100" };
       case "python":
-        return { type, code: "# `df` is the input as a pandas DataFrame.\nresult = df", timeout_ms: 60000 };
+        return { type, code: "# `df` is the input as a pandas DataFrame.\nresult = df", timeout_ms: prefs.value.stepTimeoutSeconds * 1000 };
       case "r":
-        return { type, code: "# `df` is the input as a data frame.\nresult <- df", timeout_ms: 60000 };
+        return { type, code: "# `df` is the input as a data frame.\nresult <- df", timeout_ms: prefs.value.stepTimeoutSeconds * 1000 };
       case "chart":
         return { type, mark: "bar", x: text, y: numeric, title: null, color: null, summary: "SUM" };
       case "test": {
@@ -141,7 +142,7 @@
         const target = measure ?? text ?? first;
         return {
           type,
-          markers: ["N/A", "NA"],
+          markers: [...prefs.value.missingMarkers],
           flag: true,
           seed: 1,
           columns: target ? [{ column: target, as_type: null, missing_when: null, group_by: [], fill: { method: measure ? "median" : "mode" } }] : [],

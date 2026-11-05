@@ -2,11 +2,38 @@ import type { Cell, ColumnType, Literal, StepOp, StepView, TestKind, WindowFunc 
 
 /** A cell's full value, for tooltips. */
 export function exactCell(c: Cell): string {
+  if (c.t === "date" || c.t === "timestamp") return c.v;
   return c.t === "float" ? String(c.v) : formatCell(c);
 }
 
 /** How numbers are shown (from the user's preferences). */
 export const numberDisplay = { thousands: true, maxDecimals: 4 };
+
+export type MissingText = "missing" | "dash" | "blank" | "null";
+export type DateFormat = "iso" | "us" | "eu" | "long";
+
+/** How missing cells and dates are shown (from the user's preferences). */
+export const cellDisplay: { missing: MissingText; dates: DateFormat } = { missing: "missing", dates: "iso" };
+
+/** What a missing cell shows in a table. */
+export function missingLabel(): string {
+  return { missing: "missing", dash: "—", blank: "", null: "null" }[cellDisplay.missing];
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** A date or date and time (as DuckDB prints them: 2026-07-02 or
+ *  2026-07-02 13:45:00) in the chosen format. Anything else is left alone. */
+export function formatDateText(text: string, format: DateFormat = cellDisplay.dates): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](.+))?$/.exec(text);
+  if (!m || format === "iso") return text;
+  const [, y, mo, d, time] = m;
+  const month = Number(mo);
+  const day = Number(d);
+  if (month < 1 || month > 12) return text;
+  const date = { us: `${month}/${day}/${y}`, eu: `${d}.${mo}.${y}`, long: `${day} ${MONTHS[month - 1]} ${y}` }[format];
+  return time ? `${date} ${time}` : date;
+}
 
 /** How many decimals a column's decimal values need on screen, so they line
  *  up: as many as the most precise visible value, at least one, at most four
@@ -39,6 +66,9 @@ export function formatCell(c: Cell, decimals?: number): string {
   switch (c.t) {
     case "null":
       return "";
+    case "date":
+    case "timestamp":
+      return formatDateText(c.v);
     case "bool":
       return c.v ? "true" : "false";
     case "float":

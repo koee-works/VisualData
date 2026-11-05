@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { flushSync } from "svelte";
 import { MockBackend } from "./api/mock";
 import { Workspace } from "./workspace.svelte";
+import { prefs, updatePrefs } from "./prefs.svelte";
 import type { StepOp } from "./api/types";
 
 const filter: StepOp = {
@@ -132,6 +133,40 @@ describe("Workspace", () => {
     ws.announce("Again.", { label: "Do it", run: () => {} });
     ws.notice = null;
     expect(ws.noticeAction).toBeNull();
+  });
+
+  it("remembers the open project, and runs it on open when asked", async () => {
+    await updatePrefs({ runOnOpen: false, lastProject: undefined });
+    const open = async () => {
+      const mock = new MockBackend();
+      await mock.seedDemo({ run: false, editAfterRun: false });
+      const ws = new Workspace(mock);
+      await ws.open("/projects/x");
+      return ws;
+    };
+    try {
+      const ws = await open();
+      expect(prefs.value.lastProject).toBe("/projects/x");
+      expect(ws.runs).toBe(0);
+      expect(ws.view!.steps.some((s) => s.state !== "fresh")).toBe(true);
+
+      await updatePrefs({ runOnOpen: true });
+      const again = await open();
+      expect(again.runs).toBe(1);
+      expect(again.view!.steps.every((s) => s.state === "fresh")).toBe(true);
+    } finally {
+      await updatePrefs({ runOnOpen: false });
+    }
+  });
+
+  it("forgets approved code and asks for review again", async () => {
+    const ws = await workspace();
+    await ws.addStep({ type: "python", code: "result = df", timeout_ms: 1000 });
+    expect(ws.pendingReview).toHaveLength(0);
+    expect((await ws.backend.about()).approvals).toBe(1);
+    await ws.forgetApprovals();
+    expect(ws.pendingReview).toHaveLength(1);
+    expect((await ws.backend.about()).approvals).toBe(0);
   });
 
   it("cancels a run in progress", async () => {

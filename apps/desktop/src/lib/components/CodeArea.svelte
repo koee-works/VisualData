@@ -42,6 +42,14 @@
   let keysC: import("@codemirror/state").Compartment;
   let langC: import("@codemirror/state").Compartment;
   let wrapC: import("@codemirror/state").Compartment;
+  let prefsC: import("@codemirror/state").Compartment;
+  // Editor preferences: applied to every open editor as they change.
+  let editorPrefs = $derived({
+    lineNumbers: prefs.value.lineNumbers,
+    activeLine: prefs.value.highlightActiveLine,
+    closeBrackets: prefs.value.autoCloseBrackets,
+    tabWidth: prefs.value.tabWidth,
+  });
 
   onMount(() => {
     let gone = false;
@@ -62,6 +70,7 @@
     keysC = new Compartment();
     langC = new Compartment();
     wrapC = new Compartment();
+    prefsC = new Compartment();
     view = new EditorView({
       parent: host,
       state: EditorState.create({
@@ -74,6 +83,8 @@
           keys,
           keysCompartment: keysC,
           languageCompartment: langC,
+          prefsCompartment: prefsC,
+          editor: editorPrefs,
           context: () => context,
           onrun: onrun ? (r) => onrun?.(r) : undefined,
           onenter: onenter ? () => onenter?.() : undefined,
@@ -119,6 +130,11 @@
     const v = view;
     if (!v || !cm) return;
     void cm.keysExtension(k).then((ext) => v.dispatch({ effects: keysC.reconfigure(ext) }));
+  });
+
+  $effect(() => {
+    const e = editorPrefs;
+    if (view && cm) view.dispatch({ effects: prefsC.reconfigure(cm.prefExtensions(e, !!singleLine)) });
   });
 
   $effect(() => {

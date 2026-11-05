@@ -1,7 +1,8 @@
 <script lang="ts">
   import { untrack, type Snippet } from "svelte";
   import type { Cell, Column, Page } from "../api/types";
-  import { columnDecimals, exactCell, formatCell, formatCount, isNumericType, typeLabel } from "../format";
+  import { columnDecimals, exactCell, formatCell, formatCount, isNumericType, missingLabel, typeLabel } from "../format";
+  import { prefs, ROW_HEIGHTS } from "../prefs.svelte";
 
   let {
     fetchPage,
@@ -15,7 +16,8 @@
     empty?: Snippet;
   } = $props();
 
-  const ROW_H = 26;
+  // Row height follows the density preference.
+  let ROW_H = $derived(ROW_HEIGHTS[prefs.value.rowDensity]);
   const PAGE = 200;
   // Browsers cap element heights well below 50M rows × 26 px, so very long
   // results scroll through a scaled spacer.
@@ -150,7 +152,7 @@
                   class:missing={cell.t === "null"}
                   title={cell.t === "null" ? "Missing" : exactCell(cell)}
                 >
-                  {cell.t === "null" ? "missing" : formatCell(cell, decimals[ci])}
+                  {cell.t === "null" ? missingLabel() : formatCell(cell, decimals[ci])}
                 </span>
               {/each}
             {:else}
@@ -169,7 +171,7 @@
 <style>
   .row {
     display: grid;
-    height: 26px;
+    height: var(--row-height, 26px);
     align-items: center;
     border-bottom: 1px solid color-mix(in srgb, var(--color-rule) 60%, transparent);
     font-variant-numeric: tabular-nums;

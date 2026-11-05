@@ -13,6 +13,49 @@ describe("preferences", () => {
     expect(normalize(null)).toEqual({ ...DEFAULTS, author: undefined });
   });
 
+  it("accepts the new settings and drops values that do not fit", () => {
+    const p = normalize({
+      rowDensity: "roomy",
+      missingText: "dash",
+      dateFormat: "long",
+      missingMarkers: ["n/a", "-"],
+      editorFontSize: 16,
+      tabWidth: 4,
+      lineNumbers: false,
+      stepTimeoutSeconds: 300,
+      codeMemoryMb: 0,
+      versionsKept: 100,
+      exportFormat: "parquet",
+      reopenLastProject: true,
+      lastProject: "/projects/q3",
+      exportsFolder: "/exports",
+    });
+    expect(p).toMatchObject({ rowDensity: "roomy", missingText: "dash", dateFormat: "long", editorFontSize: 16, tabWidth: 4, lineNumbers: false, stepTimeoutSeconds: 300, codeMemoryMb: 0, versionsKept: 100, exportFormat: "parquet", reopenLastProject: true, lastProject: "/projects/q3", exportsFolder: "/exports" });
+    expect(p.missingMarkers).toEqual(["n/a", "-"]);
+    expect(p.projectsFolder).toBeUndefined();
+
+    const bad = normalize({
+      rowDensity: "huge",
+      missingText: 1,
+      dateFormat: "iso8601",
+      missingMarkers: ["ok", 3],
+      editorFontSize: 3,
+      tabWidth: 3,
+      stepTimeoutSeconds: 0,
+      codeMemoryMb: -5,
+      versionsKept: 5,
+      exportFormat: "pdf",
+      lastProject: "",
+      exportsFolder: "  ",
+    });
+    expect(bad).toEqual({ ...DEFAULTS, author: undefined });
+    expect(bad.codeMemoryMb).toBeUndefined();
+  });
+
+  it("starts with the behavior the app had before these settings existed", () => {
+    expect(DEFAULTS).toMatchObject({ rowDensity: "normal", missingText: "missing", dateFormat: "iso", missingMarkers: ["N/A", "NA"], tabWidth: 2, stepTimeoutSeconds: 60, versionsKept: 500, runOnOpen: false, reopenLastProject: false });
+  });
+
   it("keeps only well-formed custom themes", () => {
     const good = { id: "custom-1", name: "Mine", base: "night", colors: { paper: "#000000" } };
     const p = normalize({ customThemes: [good, { id: "x", name: "Bad", base: "night", colors: {} }, { ...good, id: "custom-2", colors: { paper: "red" } }] });

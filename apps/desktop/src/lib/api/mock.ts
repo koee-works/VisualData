@@ -5,6 +5,7 @@
 
 import type { Backend, RunHandlers } from "./backend";
 import type {
+  AboutView,
   AnalysisView,
   Cell,
   Column,
@@ -796,6 +797,15 @@ export class MockBackend implements Backend {
       const s = this.steps.find((x) => x.id === id);
       if (s && isCode(s.op)) this.approved.add(s.op.code);
     }
+    return this.view();
+  }
+
+  async about(): Promise<AboutView> {
+    return { version: "demo", settings_path: "~/.config/vda/settings.json", approvals_path: "~/.config/vda/approvals.json", approvals: this.approved.size };
+  }
+
+  async forgetApprovals(): Promise<AnalysisView | null> {
+    this.approved.clear();
     return this.view();
   }
 
