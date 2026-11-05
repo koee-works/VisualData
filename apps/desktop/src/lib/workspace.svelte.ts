@@ -9,6 +9,8 @@ import { SOURCE_ID } from "./api/types";
 import { stepTitle } from "./format";
 
 export type CenterTab = "step" | "notebook" | "settings";
+/** A button shown beside a passing message. */
+export type NoticeAction = { label: string; run: () => void | Promise<void> };
 
 export class Workspace {
   view = $state<AnalysisView | null>(null);
@@ -41,6 +43,16 @@ export class Workspace {
   /** A short confirmation to show (an export finished, say). */
   #notice = $state<string | null>(null);
   #noticeTimer: ReturnType<typeof setTimeout> | null = null;
+  #noticeAction = $state<NoticeAction | null>(null);
+  /** The button beside the passing message, if it has one (Undo, Go to step). */
+  get noticeAction(): NoticeAction | null {
+    return this.#noticeAction;
+  }
+  /** Show a passing message with a button that does something about it. */
+  announce(text: string, action: NoticeAction) {
+    this.notice = text;
+    this.#noticeAction = action;
+  }
   /** A passing message: it hides by itself after long enough to read it
    *  (errors stay until dismissed). */
   get notice(): string | null {
@@ -48,6 +60,7 @@ export class Workspace {
   }
   set notice(text: string | null) {
     this.#notice = text;
+    this.#noticeAction = null;
     if (this.#noticeTimer) clearTimeout(this.#noticeTimer);
     this.#noticeTimer = null;
     if (text && prefs.value.autoHideMessages) {
@@ -247,14 +260,14 @@ export class Workspace {
     const what = this.view?.undo;
     const v = await this.act("Undo", () => this.backend.undo());
     this.apply(v);
-    if (v && what) this.notice = `Undid: ${what}`;
+    if (v && what) this.announce(`Undid: ${what}`, { label: "Redo", run: () => this.redo() });
   }
 
   async redo() {
     const what = this.view?.redo;
     const v = await this.act("Redo", () => this.backend.redo());
     this.apply(v);
-    if (v && what) this.notice = `Redid: ${what}`;
+    if (v && what) this.announce(`Redid: ${what}`, { label: "Undo", run: () => this.undo() });
   }
 
   /** Make a saved version current again; undo goes back. */
@@ -398,7 +411,35 @@ export class Workspace {
     const step = this.view?.steps.find((s) => s.id === id);
     const v = await this.act("Delete step", () => this.backend.removeStep(id));
     this.apply(v);
-    if (v && step) this.selected = step.inputs[0]!;
+    if (v && step) {
+      this.selected = step.inputs[0]!;
+      this.announce(`Deleted ${stepTitle(step)}.`, { label: "Undo", run: () => this.undo() });
+    }
+  }
+
+  /** The steps that read this one. A step with readers cannot be deleted. */
+  stepReaders(id: string): StepView[] {
+    return this.view?.steps.filter((x) => x.inputs.includes(id)) ?? [];
+  }
+
+  /** Select a step and show its editor. */
+  goToStep(id: string) {
+    this.selected = id;
+    this.centerTab = "step";
+  }
+
+  /** Try to delete a step. One that another step reads is not deleted; the
+   *  message says which step reads it and offers to go there. */
+  deleteStepOrExplain(id: string) {
+    const readers = this.stepReaders(id);
+    const step = this.view?.steps.find((s) => s.id === id);
+    if (!readers.length || !step) return this.removeStep(id);
+    const first = readers[0]!;
+    const more = readers.length > 1 ? ` and ${readers.length - 1} more` : "";
+    this.announce(`Can't delete ${stepTitle(step)}: ${stepTitle(first)}${more} reads it. Delete or repoint ${readers.length > 1 ? "those steps" : "that step"} first.`, {
+      label: `Go to ${stepTitle(first)}`,
+      run: () => this.goToStep(first.id),
+    });
   }
 
   /** Ask for a CSV file and add it to the project as another source. */

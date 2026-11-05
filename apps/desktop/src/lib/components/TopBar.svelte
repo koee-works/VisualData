@@ -116,7 +116,7 @@
       <Redo2 size={16} />
     </button>
     <DropdownMenu.Root>
-      <DropdownMenu.Trigger class="btn btn-quiet !px-2" aria-label="More">
+      <DropdownMenu.Trigger class="btn btn-quiet !px-2" aria-label="More" title={`More: all commands (${mac ? "⇧⌘P" : "Ctrl+Shift+P"}), settings, history`}>
         <Ellipsis size={16} />
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { DropdownMenu, Tabs } from "bits-ui";
   import { Download } from "@lucide/svelte";
+  import { formatCount, stepTitle } from "../format";
   import type { Workspace } from "../workspace.svelte";
   import { errorMessage } from "../api/backend";
   import DataGrid from "./DataGrid.svelte";
@@ -15,6 +16,24 @@
   let isChart = $derived(step?.mode === "chart");
   let hasResult = $derived(isSource || (step !== null && (step.rows !== null || (isChart && step.state !== "not run"))));
   let stale = $derived(!!step && step.state === "stale");
+
+  /** Why a table is empty, when the app can tell: what this step took in and
+   *  where the rows went. */
+  let emptyCause = $derived.by(() => {
+    if (!step || step.rows !== 0) return null;
+    const inputId = step.inputs[0];
+    if (!inputId) return null;
+    const src = ws.view?.sources.find((x) => x.id === inputId);
+    const up = ws.view?.steps.find((x) => x.id === inputId);
+    const inputRows = src ? src.rows : up?.rows;
+    const inputName = ws.nameOf(inputId);
+    if (inputRows === 0) return { text: `${inputName} has no rows, so there is nothing to work on.`, button: `Go to ${inputName}`, go: inputId };
+    if (inputRows === null || inputRows === undefined) return null;
+    const rows = `${formatCount(inputRows)} ${inputRows === 1 ? "row" : "rows"}`;
+    if (step.op.type === "filter")
+      return { text: `No row matches this filter. It read ${rows} from ${inputName}.`, button: "Change the filter", go: step.id };
+    return { text: `${stepTitle(step)} returned no rows from the ${rows} in ${inputName}.`, button: "Edit this step", go: step.id };
+  });
 
   let tab = $state("data");
   $effect.pre(() => {
@@ -126,7 +145,7 @@
       </Tabs.List>
       {#if !isChart}
         <Tabs.Content value="data" class="min-h-0 flex-1">
-          <DataGrid {fetchPage} {resetKey} />
+          <DataGrid {fetchPage} {resetKey} {empty} />
         </Tabs.Content>
         <Tabs.Content value="columns" class="min-h-0 flex-1 overflow-auto">
           <ProfileTable details={details} columns={step?.columns ?? []} loading={details === null && tab === "columns"} />
@@ -149,3 +168,13 @@
     </Tabs.Root>
   {/if}
 </section>
+
+{#snippet empty()}
+  <div class="flex flex-wrap items-center gap-3 p-4 text-sm text-ink-soft">
+    <p>{emptyCause ? emptyCause.text : isSource ? "This table has no rows." : "No rows."}</p>
+    {#if emptyCause}
+      {@const cause = emptyCause}
+      <button class="btn !min-h-7" onclick={() => ws.goToStep(cause.go)}>{cause.button}</button>
+    {/if}
+  </div>
+{/snippet}
